@@ -130,6 +130,44 @@ fn new_exposes_all_entities() {
     assert_eq!(assembly.entities().len(), 2);
 }
 
+#[test]
+fn from_arcs_matches_new_over_same_entities() {
+    // `from_arcs` is the Arc-preserving sibling of `new`: over the same
+    // entity set it must produce identical observable and derived state.
+    // Build both dipeptides once, then compare an Assembly built from
+    // pre-`Arc`ed clones against one built from the owned values.
+    let mut alloc = EntityIdAllocator::new();
+    let a = make_dipeptide(&mut alloc, b'A', Vec3::ZERO);
+    let b = make_dipeptide(&mut alloc, b'B', Vec3::new(20.0, 0.0, 0.0));
+    let a_id = a.id();
+    let b_id = b.id();
+
+    let from_arcs =
+        Assembly::from_arcs(vec![Arc::new(a.clone()), Arc::new(b.clone())]);
+    let fresh = Assembly::new(vec![a, b]);
+
+    // Same entity count and ids, in order.
+    assert_eq!(from_arcs.entities().len(), fresh.entities().len());
+    let from_arcs_ids: Vec<EntityId> =
+        from_arcs.entities().iter().map(|e| e.id()).collect();
+    let fresh_ids: Vec<EntityId> =
+        fresh.entities().iter().map(|e| e.id()).collect();
+    assert_eq!(from_arcs_ids, fresh_ids);
+
+    // Generation starts at 0, same as `new`.
+    assert_eq!(from_arcs.generation(), 0);
+    assert_eq!(from_arcs.generation(), fresh.generation());
+
+    // Same derived outputs.
+    assert_eq!(from_arcs.hbonds().len(), fresh.hbonds().len());
+    assert_eq!(
+        from_arcs.cross_entity_bonds().len(),
+        fresh.cross_entity_bonds().len(),
+    );
+    assert_eq!(from_arcs.ss_types(a_id).len(), fresh.ss_types(a_id).len());
+    assert_eq!(from_arcs.ss_types(b_id).len(), fresh.ss_types(b_id).len());
+}
+
 // -- Mutation generation + recompute --
 
 #[test]

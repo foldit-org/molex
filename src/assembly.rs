@@ -110,6 +110,30 @@ impl Assembly {
         this
     }
 
+    /// Build an `Assembly` from entities a host already holds behind
+    /// `Arc`s, preserving that sharing.
+    ///
+    /// The `Arc`-preserving sibling of [`Assembly::new`]: hosts that
+    /// already keep `Arc<MoleculeEntity>` snapshots (e.g. foldit's
+    /// `EntityStore`) can hand them straight in instead of deep-cloning
+    /// each payload only to have `new` re-`Arc` it. Runs the same
+    /// `recompute_derived` as `new`, so all derived data (disulfides,
+    /// DSSP, H-bonds) is populated identically. `generation` is
+    /// initialized to 0; stamp it via [`Assembly::set_generation`] if the
+    /// host tracks its own version counter.
+    #[must_use]
+    pub fn from_arcs(entities: Vec<Arc<MoleculeEntity>>) -> Self {
+        let mut this = Self {
+            entities,
+            cross_entity_bonds: Vec::new(),
+            ss_types: HashMap::new(),
+            hbonds: Arc::new(Vec::new()),
+            generation: 0,
+        };
+        this.recompute_derived();
+        this
+    }
+
     // -- Read accessors ----------------------------------------------
 
     /// All entities in declaration order.

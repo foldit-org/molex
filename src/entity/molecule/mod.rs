@@ -7,6 +7,8 @@ pub(crate) mod builder;
 pub mod bulk;
 pub(crate) mod chain;
 pub(crate) mod classify;
+/// Structural diff between two views of one entity.
+pub mod diff;
 /// Opaque entity ID with controlled allocation.
 pub mod id;
 /// Nucleic acid entity (DNA, RNA).
@@ -29,6 +31,7 @@ pub(crate) use builder::{
     AtomRow, BuildError, EntityBuilder, ExpectedEntityType,
 };
 pub use classify::classify_residue;
+pub use diff::EntityDiffError;
 use glam::Vec3;
 pub use id::{EntityId, EntityIdAllocator};
 pub use nucleic_acid::NucleotideRing;

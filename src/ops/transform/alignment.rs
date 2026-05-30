@@ -367,7 +367,7 @@ fn orthonormalize(m: &mut [[f32; 3]; 3]) {
 
     let mut dot: f32 = m.iter().map(|row| row[1] * row[0]).sum();
     for row in m.iter_mut() {
-        row[1] -= dot * row[0];
+        row[1] = dot.mul_add(-row[0], row[1]);
     }
     norm = m.iter().map(|row| row[1] * row[1]).sum();
     norm = norm.sqrt();
@@ -379,11 +379,11 @@ fn orthonormalize(m: &mut [[f32; 3]; 3]) {
 
     dot = m.iter().map(|row| row[2] * row[0]).sum();
     for row in m.iter_mut() {
-        row[2] -= dot * row[0];
+        row[2] = dot.mul_add(-row[0], row[2]);
     }
     dot = m.iter().map(|row| row[2] * row[1]).sum();
     for row in m.iter_mut() {
-        row[2] -= dot * row[1];
+        row[2] = dot.mul_add(-row[1], row[2]);
     }
     norm = m.iter().map(|row| row[2] * row[2]).sum();
     norm = norm.sqrt();

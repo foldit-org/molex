@@ -124,8 +124,10 @@ fn splat_gaussian(
                 let dz = (iz as f32).mul_add(spacing[2], origin[2]) - pos.z;
                 let r2 = dz.mul_add(dz, dxy2);
                 if r2 <= cutoff2 {
-                    grid[spec.lin(ix, iy, iz)] +=
-                        amplitude * (-r2 * inv_2sigma2).exp();
+                    grid[spec.lin(ix, iy, iz)] = amplitude.mul_add(
+                        (-r2 * inv_2sigma2).exp(),
+                        grid[spec.lin(ix, iy, iz)],
+                    );
                 }
             }
         }

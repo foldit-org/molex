@@ -18,6 +18,16 @@ impl EntityId {
     pub fn raw(self) -> u32 {
         self.0
     }
+
+    /// Rebuild a host-assigned id from its raw value, for wire decode.
+    ///
+    /// Unlike [`EntityIdAllocator::from_raw`], this touches no allocator
+    /// and advances no counter: the wire only ever carries ids the host
+    /// already minted, so no uniqueness bookkeeping is needed here.
+    #[must_use]
+    pub fn from_raw(raw: u32) -> EntityId {
+        EntityId(raw)
+    }
 }
 
 impl std::ops::Deref for EntityId {

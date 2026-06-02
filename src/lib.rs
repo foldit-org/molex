@@ -42,6 +42,7 @@ pub use atom_id::AtomId;
 pub use bond::CovalentBond;
 pub use element::Element;
 pub use entity::molecule::atom::Atom;
+pub use entity::molecule::id::EntityId;
 pub use entity::molecule::protein::{ResidueBackbone, Sidechain};
 pub use entity::molecule::{
     EntityKind, MoleculeEntity, MoleculeType, NucleotideRing,

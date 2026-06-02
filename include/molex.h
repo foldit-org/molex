@@ -29,9 +29,9 @@
  * Variant tag kind discriminant on the C boundary.
  */
 enum molex_VariantKind
-#ifdef __cplusplus
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
   : int32_t
-#endif // __cplusplus
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
  {
   /**
    * Chain N-terminus patch.
@@ -57,7 +57,11 @@ enum molex_VariantKind
   MOLEX_VARIANT_KIND_OTHER = 254,
 };
 #ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum molex_VariantKind molex_VariantKind;
+#else
 typedef int32_t molex_VariantKind;
+#endif // __STDC_VERSION__ >= 202311L
 #endif // __cplusplus
 
 /**
@@ -66,9 +70,9 @@ typedef int32_t molex_VariantKind;
  * `molex_Variant::{str_ptr, str_len}` carries the variant name.
  */
 enum molex_ProtonationKind
-#ifdef __cplusplus
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
   : int32_t
-#endif // __cplusplus
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
  {
   /**
    * `HID` — delta-protonated histidine.
@@ -94,7 +98,11 @@ enum molex_ProtonationKind
   MOLEX_PROTONATION_KIND_UNUSED = 0,
 };
 #ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum molex_ProtonationKind molex_ProtonationKind;
+#else
 typedef int32_t molex_ProtonationKind;
+#endif // __STDC_VERSION__ >= 202311L
 #endif // __cplusplus
 
 /**
@@ -107,9 +115,9 @@ typedef int32_t molex_ProtonationKind;
  * serializer rejects topology edits up front).
  */
 enum molex_EditKind
-#ifdef __cplusplus
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
   : int32_t
-#endif // __cplusplus
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
  {
   /**
    * Sentinel returned when the list pointer is null or the index is
@@ -149,7 +157,11 @@ enum molex_EditKind
   MOLEX_EDIT_KIND_REMOVE_ENTITY = 6,
 };
 #ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum molex_EditKind molex_EditKind;
+#else
 typedef int32_t molex_EditKind;
+#endif // __STDC_VERSION__ >= 202311L
 #endif // __cplusplus
 
 /**
@@ -158,9 +170,9 @@ typedef int32_t molex_EditKind;
  * without depending on Rust's enum layout.
  */
 enum molex_MoleculeType
-#ifdef __cplusplus
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
   : int32_t
-#endif // __cplusplus
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
  {
   /**
    * Amino acid polymer.
@@ -200,7 +212,11 @@ enum molex_MoleculeType
   MOLEX_MOLECULE_TYPE_SOLVENT = 8,
 };
 #ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum molex_MoleculeType molex_MoleculeType;
+#else
 typedef int32_t molex_MoleculeType;
+#endif // __STDC_VERSION__ >= 202311L
 #endif // __cplusplus
 
 /**

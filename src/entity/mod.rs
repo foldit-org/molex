@@ -8,7 +8,7 @@ pub use molecule::atom::Atom;
 pub use molecule::id::{EntityId, EntityIdAllocator};
 pub use molecule::protein::{ResidueBackbone, Sidechain};
 pub use molecule::{
-    classify_residue, MoleculeEntity, MoleculeType, NucleotideRing,
+    classify_residue, EntityKind, MoleculeEntity, MoleculeType, NucleotideRing,
 };
 // Re-export surface types.
 pub use surface::{Density, DensityError, VoxelGrid};

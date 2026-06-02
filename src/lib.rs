@@ -43,7 +43,9 @@ pub use bond::CovalentBond;
 pub use element::Element;
 pub use entity::molecule::atom::Atom;
 pub use entity::molecule::protein::{ResidueBackbone, Sidechain};
-pub use entity::molecule::{MoleculeEntity, MoleculeType, NucleotideRing};
+pub use entity::molecule::{
+    EntityKind, MoleculeEntity, MoleculeType, NucleotideRing,
+};
 pub use ops::codec::AdapterError;
 #[cfg(feature = "python")]
 use pyo3::prelude::*;

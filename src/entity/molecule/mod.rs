@@ -70,6 +70,21 @@ pub enum MoleculeType {
 // MoleculeEntity enum
 // ---------------------------------------------------------------------------
 
+/// Structural discriminant of a [`MoleculeEntity`]: the four-way
+/// taxonomy of the variant itself. Distinct from the finer
+/// [`MoleculeType`] classification.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum EntityKind {
+    /// A single protein chain.
+    Protein,
+    /// A single DNA or RNA chain.
+    NucleicAcid,
+    /// A single non-polymer molecule.
+    SmallMolecule,
+    /// A group of identical small molecules.
+    Bulk,
+}
+
 /// A single entity: one logical molecule (a protein chain, a ligand, waters,
 /// etc.).
 ///
@@ -110,6 +125,17 @@ impl MoleculeEntity {
             MoleculeEntity::NucleicAcid(e) => e.molecule_type(),
             MoleculeEntity::SmallMolecule(e) => e.molecule_type(),
             MoleculeEntity::Bulk(e) => e.molecule_type(),
+        }
+    }
+
+    /// The structural discriminant of this entity, 1:1 with the variant.
+    #[must_use]
+    pub fn entity_kind(&self) -> EntityKind {
+        match self {
+            Self::Protein(_) => EntityKind::Protein,
+            Self::NucleicAcid(_) => EntityKind::NucleicAcid,
+            Self::SmallMolecule(_) => EntityKind::SmallMolecule,
+            Self::Bulk(_) => EntityKind::Bulk,
         }
     }
 

@@ -1,3 +1,5 @@
+[workspace]
+
 [package]
 name = "molex"
 version = "0.4.4"
@@ -18,7 +20,7 @@ crate-type = ["rlib", "staticlib"]
 pyo3 = { version = "0.27", features = ["extension-module"], optional = true }
 numpy = { version = "0.27", optional = true }
 ndarray = "0.15"
-thiserror = "1.0"
+thiserror = "2"
 glam = "0.30"
 rmp = "0.8"
 flate2 = "1"

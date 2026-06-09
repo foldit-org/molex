@@ -104,6 +104,21 @@ pub enum MoleculeEntity {
 }
 
 impl MoleculeEntity {
+    /// Return a copy with protein chains rebuilt as a single continuous
+    /// segment (see [`ProteinEntity::to_continuous`]); non-protein
+    /// entities are cloned unchanged. For synthetic / noisy design
+    /// outputs (ML diffusion intermediates) that should render as one
+    /// connected chain regardless of the current coordinate geometry.
+    #[must_use]
+    pub fn to_continuous(&self) -> Self {
+        match self {
+            MoleculeEntity::Protein(p) => {
+                MoleculeEntity::Protein(p.to_continuous())
+            }
+            other => other.clone(),
+        }
+    }
+
     // -- Entity trait delegation --
 
     /// Unique entity identifier.

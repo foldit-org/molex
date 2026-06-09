@@ -198,6 +198,25 @@ impl ProteinEntity {
         }
     }
 
+    /// Rebuild this entity as a single continuous chain, dropping the
+    /// distance-based segment breaks [`Self::new`] computed. Identity,
+    /// atoms, and residues are preserved.
+    ///
+    /// For synthetic or noisy backbones (ML diffusion intermediates):
+    /// `new`'s C(i)->N(i+1) distance check fragments such a chain into a
+    /// segment per residue, so it renders as disconnected pieces. This
+    /// reconnects it. Caller asserts the residues form one chain.
+    #[must_use]
+    pub fn to_continuous(&self) -> Self {
+        Self::new_continuous(
+            self.id,
+            self.atoms.clone(),
+            self.residues.clone(),
+            self.pdb_chain_id,
+            self.auth_asym_id,
+        )
+    }
+
     /// Iterate covalent bonds whose endpoints lie in any residue's
     /// canonical backbone region (indices `atom_range.start..+4`).
     ///

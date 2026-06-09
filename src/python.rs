@@ -87,10 +87,6 @@ pub fn deserialize_assembly_bytes(bytes: Vec<u8>) -> PyResult<Vec<u8>> {
         })
 }
 
-// ---------------------------------------------------------------------------
-// Pyclass: Assembly
-// ---------------------------------------------------------------------------
-
 fn value_err<E: std::fmt::Display>(e: E) -> PyErr {
     PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
 }
@@ -161,10 +157,6 @@ impl PyAssembly {
         self.inner.apply_edits(&edits).map_err(value_err)
     }
 }
-
-// ---------------------------------------------------------------------------
-// Pyclass: EditList
-// ---------------------------------------------------------------------------
 
 /// Python handle for an ordered list of typed Assembly edits.
 /// Parallels `molex_EditList` in C and `molex::EditList` in C++.
@@ -302,14 +294,11 @@ impl PyEditList {
         Ok(Self { inner })
     }
 
-    // ---------------------------------------------------------------
     // Read accessors (parallels `molex_edits_*_at` C entry points and
-    // `molex::EditList::view_at` in C++).
-    //
-    // Python doesn't have the borrowed-pointer / sibling-free
-    // lifecycle the C side does -- pyo3 copies edit fields into
-    // freshly-allocated Python objects, which the Python GC owns.
-    // ---------------------------------------------------------------
+    // `molex::EditList::view_at` in C++). Python doesn't have the
+    // borrowed-pointer / sibling-free lifecycle the C side does -- pyo3
+    // copies edit fields into freshly-allocated Python objects, which the
+    // Python GC owns.
 
     /// Kind of the edit at `index`. Returns one of the
     /// `EditKind.*` integer constants exposed at module scope.
@@ -477,9 +466,7 @@ fn edit_kind_int(edit: &AssemblyEdit) -> i32 {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Edit view pyclasses (parallel `molex::SetEntityCoordsView` et al. in C++)
-// ---------------------------------------------------------------------------
+// Edit view pyclasses (parallel `molex::SetEntityCoordsView` et al. in C++).
 
 /// Python view of a `SetEntityCoords` edit. Returned by
 /// `EditList.set_entity_coords_at`.
@@ -545,10 +532,6 @@ pub struct PySetVariantsView {
     #[pyo3(get)]
     pub variants: Vec<PyVariant>,
 }
-
-// ---------------------------------------------------------------------------
-// Pyclass: Variant
-// ---------------------------------------------------------------------------
 
 /// Python handle wrapping a single `VariantTag`.
 #[pyclass(name = "Variant", module = "molex")]
@@ -631,10 +614,6 @@ impl PyVariant {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Pyclass: AtomRow
-// ---------------------------------------------------------------------------
 
 /// Python handle wrapping a single atom row (position + name +
 /// element). Parallels `molex_AtomRow` in C.

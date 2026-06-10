@@ -695,8 +695,9 @@ impl PyAtomRow {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::float_cmp)]
 mod tests {
-    use super::{coords_to_vec3, make_entity_id, PyEditList};
     use glam::Vec3;
+
+    use super::{coords_to_vec3, make_entity_id, PyEditList};
 
     // `coords_to_vec3` takes already-extracted tuples; well-formed mapping
     // is testable without the interpreter.

@@ -16,9 +16,18 @@ fmt:
 clippy:
     cargo clippy --all-targets --all-features -- -D warnings
 
-# Run tests
+# Run tests (pure-Rust + non-Python features). Portable: needs no Python.
+# NOT --all-features, because `extension-module` cannot link a standalone test
+# binary. The Python bindings are tested separately by `test-python`.
 test:
-    cargo test --all-features
+    cargo test --features serde,specta,c-api
+
+# Run the Python-binding tests. Requires a shared, embeddable CPython; pin it
+# explicitly so pyo3 doesn't auto-grab an inconsistent interpreter (e.g. a
+# pixi/uv env) whose libpython isn't on the runtime path. `auto-initialize`
+# gives the in-process tests an interpreter to attach to.
+test-python python="python3":
+    PYO3_PYTHON=`which {{python}}` cargo test --features python,serde,specta,c-api,pyo3/auto-initialize
 
 # Build docs and check for warnings
 doc $RUSTDOCFLAGS="-D warnings":

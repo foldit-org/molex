@@ -726,8 +726,8 @@ mod tests {
             let peptide = (w[0].c - w[1].n).length();
             assert!(
                 (1.0..1.6).contains(&peptide),
-                "peptide bond {peptide:.2} A is not bond-length; \
-                 geometry is wrong"
+                "peptide bond {peptide:.2} A is not bond-length; geometry is \
+                 wrong"
             );
         }
 
@@ -787,9 +787,8 @@ mod tests {
 
         // Interior residues (1..=N-2) must be Helix; the two ends may fray
         // to Coil. No residue may be classified Sheet.
-        let interior_all_helix = ss[1..N_RES - 1]
-            .iter()
-            .all(|&s| s == SSType::Helix);
+        let interior_all_helix =
+            ss[1..N_RES - 1].iter().all(|&s| s == SSType::Helix);
         assert!(
             interior_all_helix,
             "interior of ideal alpha-helix not all Helix; SS = {ss_str}"

@@ -411,7 +411,9 @@ mod tests {
     use glam::Vec3;
 
     use super::*;
-    use crate::c_api::{molex_Assembly, molex_assembly_free, molex_MoleculeType};
+    use crate::c_api::{
+        molex_Assembly, molex_MoleculeType, molex_assembly_free,
+    };
     use crate::entity::molecule::atom::Atom;
     use crate::entity::molecule::id::EntityIdAllocator;
     use crate::entity::molecule::protein::ProteinEntity;
@@ -564,10 +566,7 @@ mod tests {
 
     #[test]
     fn entity_residue_num_atoms_handles_null_and_out_of_range() {
-        assert_eq!(
-            molex_entity_residue_num_atoms(std::ptr::null(), 0),
-            0
-        );
+        assert_eq!(molex_entity_residue_num_atoms(std::ptr::null(), 0), 0);
 
         let asm = make_assembly_handle();
         let entity = molex_assembly_entity(asm, 0);
@@ -579,9 +578,7 @@ mod tests {
 
     #[test]
     fn entity_residue_atom_handles_null_and_out_of_range() {
-        assert!(
-            molex_entity_residue_atom(std::ptr::null(), 0, 0).is_null()
-        );
+        assert!(molex_entity_residue_atom(std::ptr::null(), 0, 0).is_null());
 
         let asm = make_assembly_handle();
         let entity = molex_assembly_entity(asm, 0);
@@ -593,9 +590,7 @@ mod tests {
         // spans flat atoms 0..5, so local index 5 walks past the range
         // even though that flat slot still exists in the entity.
         assert!(molex_entity_residue_atom(entity, 0, 5).is_null());
-        assert!(
-            molex_entity_residue_atom(entity, 0, usize::MAX).is_null()
-        );
+        assert!(molex_entity_residue_atom(entity, 0, usize::MAX).is_null());
         molex_assembly_free(asm);
     }
 
@@ -614,8 +609,7 @@ mod tests {
         // Polymer entity has no single residue name.
         let protein = molex_assembly_entity(asm, 0);
         out_len = 99;
-        let p =
-            molex_entity_residue_name_single(protein, &raw mut out_len);
+        let p = molex_entity_residue_name_single(protein, &raw mut out_len);
         assert!(p.is_null());
         assert_eq!(out_len, 0);
 

@@ -16,11 +16,11 @@ use std::path::Path;
 
 pub use dom::{Block, ColumnIter, Columns, Document, Loop, RowIter, Value};
 pub use parse::{parse, CifParseError};
+use refuse::too_many_chains_error;
 
 use crate::element::Element;
 use crate::entity::molecule::{BuildError, MoleculeEntity};
 use crate::ops::codec::AdapterError;
-use refuse::too_many_chains_error;
 
 // ---------------------------------------------------------------------------
 // Helpers shared by the fast (`fast_row`) and DOM (`dom_build`) decode paths.

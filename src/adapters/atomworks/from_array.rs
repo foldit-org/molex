@@ -699,8 +699,11 @@ mod tests {
 
         let water_rows =
             vec![mk_row(*b"O   ", Element::O, Vec3::ZERO, b'C', *b"HOH", 1)];
-        let water =
-            build_entity(EntityId::from_raw(2), MoleculeType::Water, water_rows);
+        let water = build_entity(
+            EntityId::from_raw(2),
+            MoleculeType::Water,
+            water_rows,
+        );
         assert!(matches!(water, MoleculeEntity::Bulk(_)));
     }
 
@@ -719,7 +722,8 @@ mod tests {
             let expected = probe.allocate();
             assert_eq!(EntityId::from_raw(output_idx), expected);
         }
-        // Sanity: a fresh allocator still mints 0,1,2,... in step with from_raw.
+        // Sanity: a fresh allocator still mints 0,1,2,... in step with
+        // from_raw.
         for n in 0u32..4 {
             assert_eq!(alloc.allocate(), EntityId::from_raw(n));
         }
@@ -775,8 +779,7 @@ mod tests {
         assert_eq!(residues[0].atom_range, 0..3);
         assert_eq!(residues[1].atom_range, 3..5);
         assert_eq!(
-            residues[0].atom_range.end,
-            residues[1].atom_range.start,
+            residues[0].atom_range.end, residues[1].atom_range.start,
             "residue ranges must be contiguous"
         );
         assert_eq!(residues.last().unwrap().atom_range.end, atoms.len());

@@ -748,8 +748,7 @@ fn delta_integer_packing_reconstructs_seq_ids_exactly() {
         }
     }
     // Per-atom seq_id column matching the transposed row order.
-    let seq_ids: Vec<i32> =
-        rows.iter().map(|r| r.label_seq_id).collect();
+    let seq_ids: Vec<i32> = rows.iter().map(|r| r.label_seq_id).collect();
 
     let seq_col = delta_packed_column("label_seq_id", &seq_ids, 5, 1);
     let cat = atom_site_with_replaced(&rows, seq_col);
@@ -788,14 +787,18 @@ fn delta_integer_packing_reconstructs_coords_exactly() {
     let atoms = first_protein(&entities).atom_set();
     let got: Vec<f32> = atoms.iter().map(|a| a.position.x).collect();
     let want: Vec<f32> = xs.iter().map(|&v| v as f32).collect();
-    assert_eq!(got, want, "Delta+IntegerPacking coords must round-trip exactly");
+    assert_eq!(
+        got, want,
+        "Delta+IntegerPacking coords must round-trip exactly"
+    );
 }
 
 #[test]
 fn fixed_point_reconstructs_coords_within_quantization() {
-    // RCSB stores Cartesian coords as FixedPoint with factor 1000 (mill-angstrom
-    // precision). The decoder recovers int/factor; the reconstructed value must
-    // match the original to within one quantization step plus f32 storage error.
+    // RCSB stores Cartesian coords as FixedPoint with factor 1000
+    // (mill-angstrom precision). The decoder recovers int/factor; the
+    // reconstructed value must match the original to within one
+    // quantization step plus f32 storage error.
     let factor = 1000.0_f64;
     let xs: [f64; 4] = [12.345, -7.891, 0.0, 99.999];
     let rows = ala_rows("A", 0.0);

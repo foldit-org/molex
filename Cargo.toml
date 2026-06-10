@@ -2,7 +2,7 @@
 
 [package]
 name = "molex"
-version = "0.4.4"
+version = "0.5.0"
 edition = "2021"
 authors = ["Andreas Petrides"]
 description = "Parse, analyze, and transform molecular structure data (PDB, mmCIF, BinaryCIF, MRC)"
@@ -17,7 +17,7 @@ name = "molex"
 crate-type = ["rlib", "staticlib"]
 
 [dependencies]
-pyo3 = { version = "0.27", features = ["extension-module"], optional = true }
+pyo3 = { version = "0.27", optional = true }
 numpy = { version = "0.27", optional = true }
 ndarray = "0.15"
 thiserror = "2"
@@ -34,6 +34,10 @@ cbindgen = { version = "0.29", optional = true }
 [features]
 default = []
 python = ["dep:pyo3", "dep:numpy"]
+# Only for building the importable Python extension (via maturin). Enabling
+# this tells the linker NOT to link libpython, so it CANNOT be active during
+# `cargo test` (a standalone test binary would fail to resolve Py* symbols).
+extension-module = ["pyo3/extension-module"]
 serde = ["dep:serde"]
 specta = ["dep:specta"]
 c-api = ["dep:cbindgen"]

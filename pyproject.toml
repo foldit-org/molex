@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "molex"
-version = "0.4.4"
+version = "0.5.0"
 description = "Parse, analyze, and transform molecular structure data (PDB, mmCIF, BinaryCIF, MRC)"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -30,6 +30,6 @@ Repository = "https://github.com/petridecus/molex"
 Documentation = "https://petridecus.github.io/molex/"
 
 [tool.maturin]
-features = ["pyo3/extension-module", "python"]
+features = ["python", "extension-module"]
 bindings = "pyo3"
 module-name = "molex"

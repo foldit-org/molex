@@ -469,8 +469,7 @@ mod tests {
         let reference: Vec<Vec3> =
             target.iter().map(|p| rotation * *p + translation).collect();
 
-        let (r_rec, t_rec) =
-            kabsch_alignment(&reference, &target).unwrap();
+        let (r_rec, t_rec) = kabsch_alignment(&reference, &target).unwrap();
 
         // Recovered transform equals the planted one.
         assert!(
@@ -550,8 +549,7 @@ mod tests {
             .map(|p| rotation * *p + translation)
             .collect();
 
-        let (r_rec, t_rec) =
-            kabsch_alignment(&reference, &target).unwrap();
+        let (r_rec, t_rec) = kabsch_alignment(&reference, &target).unwrap();
 
         for c in 0..3 {
             let col = r_rec.col(c);

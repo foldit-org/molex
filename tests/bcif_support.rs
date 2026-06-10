@@ -371,7 +371,9 @@ fn packed_ints_to_bytes(tokens: &[i32], byte_count: i32) -> Vec<u8> {
             1 => out.push((t as i8).to_le_bytes()[0]),
             2 => out.extend_from_slice(&(t as i16).to_le_bytes()),
             4 => out.extend_from_slice(&t.to_le_bytes()),
-            other => panic!("packed_ints_to_bytes: unsupported byteCount={other}"),
+            other => {
+                panic!("packed_ints_to_bytes: unsupported byteCount={other}")
+            }
         }
     }
     out
@@ -384,7 +386,9 @@ fn signed_byte_array_step(byte_count: i32) -> EncStep {
         1 => EncStep::ByteArrayInt8,
         2 => EncStep::ByteArrayInt16,
         4 => EncStep::ByteArrayInt32,
-        other => panic!("signed_byte_array_step: unsupported byteCount={other}"),
+        other => {
+            panic!("signed_byte_array_step: unsupported byteCount={other}")
+        }
     }
 }
 
@@ -434,8 +438,10 @@ pub(crate) fn fixed_point_column(
     values: &[f64],
     factor: f64,
 ) -> Column {
-    let ints: Vec<i32> =
-        values.iter().map(|&v| (v * factor).round() as i32).collect();
+    let ints: Vec<i32> = values
+        .iter()
+        .map(|&v| (v * factor).round() as i32)
+        .collect();
     let bytes = ints_to_bytes_int32_le(&ints);
     Column {
         name: name.into(),

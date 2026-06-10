@@ -242,13 +242,12 @@ fn parse_entity_headers(
                     "Truncated entity header (expected atom count)".to_owned(),
                 )
             })?;
-        let atom_count = u32::from_be_bytes(
-            atom_count_bytes.try_into().map_err(|_| {
+        let atom_count =
+            u32::from_be_bytes(atom_count_bytes.try_into().map_err(|_| {
                 AdapterError::InvalidFormat(
                     "Invalid atom count in entity header".to_owned(),
                 )
-            })?,
-        ) as usize;
+            })?) as usize;
         offset += 4;
 
         let entity_id_raw = if has_entity_ids {
@@ -257,11 +256,12 @@ fn parse_entity_headers(
                     "Truncated entity header (expected entity id)".to_owned(),
                 )
             })?;
-            let raw = u32::from_be_bytes(id_bytes.try_into().map_err(|_| {
-                AdapterError::InvalidFormat(
-                    "Invalid entity id in entity header".to_owned(),
-                )
-            })?);
+            let raw =
+                u32::from_be_bytes(id_bytes.try_into().map_err(|_| {
+                    AdapterError::InvalidFormat(
+                        "Invalid entity id in entity header".to_owned(),
+                    )
+                })?);
             offset += 4;
             Some(raw)
         } else {

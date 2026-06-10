@@ -425,4 +425,178 @@ mod tests {
         assert!((rotation.determinant() - 1.0).abs() < 0.01);
         assert!(translation.length() < 0.01);
     }
+
+    // ------------------------------------------------------------------
+    // Rigorous correctness tests for the hand-rolled 3x3 SVD / Kabsch.
+    // ------------------------------------------------------------------
+
+    /// Compare two matrices element-by-element to a tolerance.
+    fn mat_close(a: Mat3, b: Mat3, tol: f32) -> bool {
+        (0..3).all(|c| (a.col(c) - b.col(c)).length() < tol)
+    }
+
+    /// A non-symmetric, non-degenerate point cloud (no three points
+    /// collinear, no special symmetry) so that the optimal alignment is
+    /// uniquely determined.
+    fn asymmetric_cloud() -> Vec<Vec3> {
+        vec![
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(1.3, 0.2, -0.4),
+            Vec3::new(-0.7, 1.1, 0.9),
+            Vec3::new(2.1, -0.6, 1.7),
+            Vec3::new(0.4, 2.3, -1.2),
+            Vec3::new(-1.5, -0.9, 2.0),
+        ]
+    }
+
+    /// A proper rotation about an arbitrary, non-axis-aligned axis.
+    fn known_rotation() -> Mat3 {
+        let axis = Vec3::new(1.0, -2.0, 3.0).normalize();
+        Mat3::from_axis_angle(axis, 0.97) // ~55.6 degrees
+    }
+
+    /// KNOWN-ROTATION RECOVERY: kabsch must recover the exact rotation and
+    /// translation that map the target cloud onto the reference cloud.
+    /// This is the test that catches a transposed or otherwise wrong R.
+    #[test]
+    fn test_kabsch_recovers_known_rotation_and_translation() {
+        let rotation = known_rotation();
+        let translation = Vec3::new(3.5, -1.2, 0.8);
+
+        // reference = R * target + t, so kabsch(reference, target) must
+        // return (R, t). Build target freely, derive reference.
+        let target = asymmetric_cloud();
+        let reference: Vec<Vec3> =
+            target.iter().map(|p| rotation * *p + translation).collect();
+
+        let (r_rec, t_rec) =
+            kabsch_alignment(&reference, &target).unwrap();
+
+        // Recovered transform equals the planted one.
+        assert!(
+            mat_close(r_rec, rotation, 1e-5),
+            "recovered rotation differs: {r_rec:?} vs {rotation:?}"
+        );
+        assert!(
+            (t_rec - translation).length() < 1e-4,
+            "recovered translation differs: {t_rec:?} vs {translation:?}"
+        );
+
+        // And it must actually map every target point onto its reference.
+        for (tgt, refp) in target.iter().zip(reference.iter()) {
+            let mapped = r_rec * *tgt + t_rec;
+            assert!(
+                (mapped - *refp).length() < 1e-4,
+                "point not aligned: {mapped:?} vs {refp:?}"
+            );
+        }
+    }
+
+    /// REFLECTION / DETERMINANT FIX: when the target is a mirror image of
+    /// the reference, a naive SVD yields a det = -1 reflection. The
+    /// determinant-correction branch must instead return a proper rotation
+    /// (det ~= +1) while still minimising RMSD.
+    #[test]
+    fn test_kabsch_rejects_reflection() {
+        let reference = asymmetric_cloud();
+        // Mirror across the x=0 plane -> a pure reflection (det = -1).
+        let target: Vec<Vec3> = reference
+            .iter()
+            .map(|p| Vec3::new(-p.x, p.y, p.z))
+            .collect();
+
+        let (rotation, translation) =
+            kabsch_alignment(&reference, &target).unwrap();
+
+        // Result is a PROPER rotation, not a reflection.
+        assert!(
+            (rotation.determinant() - 1.0).abs() < 1e-4,
+            "expected det ~= +1, got {}",
+            rotation.determinant()
+        );
+
+        // The proper-rotation fit cannot match a mirror perfectly, but it
+        // must achieve the minimal-RMSD fit: residual must be finite and the
+        // rotation must be orthonormal (R^T R = I).
+        let should_be_identity = rotation.transpose() * rotation;
+        assert!(
+            mat_close(should_be_identity, Mat3::IDENTITY, 1e-4),
+            "rotation not orthonormal: {should_be_identity:?}"
+        );
+
+        let mut rmsd_sq = 0.0f32;
+        for (tgt, refp) in target.iter().zip(reference.iter()) {
+            let mapped = rotation * *tgt + translation;
+            rmsd_sq += (mapped - *refp).length_squared();
+            assert!(mapped.is_finite(), "non-finite mapped point: {mapped:?}");
+        }
+        assert!(rmsd_sq.is_finite());
+    }
+
+    /// DEGENERATE INPUT: collinear points make H rank-deficient, which can
+    /// stress the SVD's small-singular-value handling. The output rotation
+    /// must contain no NaN/inf even though the alignment is under-determined.
+    #[test]
+    fn test_kabsch_collinear_no_nan() {
+        // All points on the x-axis -> rank-1 covariance.
+        let reference: Vec<Vec3> = [0.0f32, 1.0, 2.0, 3.0, 4.0, 5.0]
+            .into_iter()
+            .map(|x| Vec3::new(x, 0.0, 0.0))
+            .collect();
+        let rotation = known_rotation();
+        let translation = Vec3::new(-2.0, 4.0, 1.5);
+        let target: Vec<Vec3> = reference
+            .iter()
+            .map(|p| rotation * *p + translation)
+            .collect();
+
+        let (r_rec, t_rec) =
+            kabsch_alignment(&reference, &target).unwrap();
+
+        for c in 0..3 {
+            let col = r_rec.col(c);
+            assert!(
+                col.is_finite(),
+                "rotation column {c} has NaN/inf: {col:?}"
+            );
+        }
+        assert!(t_rec.is_finite(), "translation has NaN/inf: {t_rec:?}");
+    }
+
+    /// SCALE: the Kabsch-Umeyama variant must recover a planted uniform
+    /// scale factor together with the rotation and translation.
+    #[test]
+    fn test_kabsch_with_scale_recovers_scale() {
+        let rotation = known_rotation();
+        let translation = Vec3::new(0.5, -3.0, 2.2);
+        let scale = 2.5f32;
+
+        let target = asymmetric_cloud();
+        // reference = scale * (R * target) + t.
+        let reference: Vec<Vec3> = target
+            .iter()
+            .map(|p| scale * (rotation * *p) + translation)
+            .collect();
+
+        let (r_rec, t_rec, s_rec) =
+            kabsch_alignment_with_scale(&reference, &target).unwrap();
+
+        assert!(
+            (s_rec - scale).abs() < 1e-4,
+            "recovered scale differs: {s_rec} vs {scale}"
+        );
+        assert!(
+            mat_close(r_rec, rotation, 1e-5),
+            "recovered rotation differs under scale: {r_rec:?} vs {rotation:?}"
+        );
+
+        // Full transform reproduces the reference cloud.
+        for (tgt, refp) in target.iter().zip(reference.iter()) {
+            let mapped = s_rec * (r_rec * *tgt) + t_rec;
+            assert!(
+                (mapped - *refp).length() < 1e-3,
+                "scaled point not aligned: {mapped:?} vs {refp:?}"
+            );
+        }
+    }
 }

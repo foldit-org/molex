@@ -19,9 +19,10 @@
 mod bcif_support;
 
 use bcif_support::{
-    atom_site_category, build_bcif, entity_poly_protein_category,
-    entity_poly_rna_category, entity_polymer_category, AtomSite, AtomSiteOpts,
-    Block, Category, Column, ColumnData, EncStep,
+    atom_site_category, build_bcif, delta_packed_column,
+    entity_poly_protein_category, entity_poly_rna_category,
+    entity_polymer_category, fixed_point_column, interval_quantized_column,
+    AtomSite, AtomSiteOpts, Block, Category, Column, ColumnData, EncStep,
 };
 use molex::adapters::bcif::{
     bcif_file_to_entities, bcif_to_all_models, bcif_to_entities,
@@ -708,6 +709,151 @@ fn element_falls_back_to_atom_name_when_type_symbol_missing() {
     assert_eq!(atoms[0].element, Element::N);
     assert_eq!(atoms[1].element, Element::C);
     assert_eq!(atoms[3].element, Element::O);
+}
+
+// ---------------------------------------------------------------------------
+// Value-level decode of the production encoding chains (Delta, FixedPoint,
+// IntervalQuantization). These are the codec paths real RCSB coordinate
+// columns use; the rest of this file only exercises ByteArray / StringArray /
+// RunLength / IntegerPacking.
+// ---------------------------------------------------------------------------
+
+/// Replace one named column in a freshly built `_atom_site` category.
+fn atom_site_with_replaced(rows: &[AtomSite], replacement: Column) -> Category {
+    let mut cat = atom_site_category(rows, &AtomSiteOpts::default());
+    cat.columns.retain(|c| c.name != replacement.name);
+    cat.columns.push(replacement);
+    cat
+}
+
+#[test]
+fn delta_integer_packing_reconstructs_seq_ids_exactly() {
+    // Four full N/CA/C/O residues so the protein assembler keeps each one (it
+    // requires the N+CA+C backbone per residue). The residues sit at widely
+    // spaced, ascending seq ids; the per-atom seq_id column therefore holds
+    // zero deltas within a residue and large jumps (>127) between residues,
+    // exercising the signed multi-token integer-packing path (byteCount=1,
+    // range +-127) plus a non-zero Delta origin. A prefix-sum off-by-one would
+    // corrupt the recovered sequence. (Negative deltas and sign handling are
+    // covered by the coordinate test below, whose read-back is
+    // order-independent.)
+    let residue_seqs: [i32; 4] = [5, 130, 300, 400];
+    let mut rows = Vec::new();
+    for &seq in &residue_seqs {
+        for r in ala_rows("A", f64::from(seq)) {
+            rows.push(AtomSite {
+                label_seq_id: seq,
+                ..r
+            });
+        }
+    }
+    // Per-atom seq_id column matching the transposed row order.
+    let seq_ids: Vec<i32> =
+        rows.iter().map(|r| r.label_seq_id).collect();
+
+    let seq_col = delta_packed_column("label_seq_id", &seq_ids, 5, 1);
+    let cat = atom_site_with_replaced(&rows, seq_col);
+    let bcif = build_single(vec![
+        entity_polymer_category(),
+        entity_poly_protein_category(),
+        cat,
+    ]);
+
+    let entities = bcif_to_entities(&bcif).unwrap();
+    let protein = first_protein(&entities).as_protein().unwrap();
+    let mut got: Vec<i32> =
+        protein.residues.iter().map(|r| r.label_seq_id).collect();
+    got.sort_unstable();
+    let mut want = residue_seqs.to_vec();
+    want.sort_unstable();
+    assert_eq!(got, want, "Delta+IntegerPacking seq ids must round-trip");
+}
+
+#[test]
+fn delta_integer_packing_reconstructs_coords_exactly() {
+    // Integer-valued coordinates run through Delta+IntegerPacking decode to an
+    // int array, which the coordinate path widens to f64 then stores as f32.
+    // Small integers are exact in f32, so reconstruction must be bit-exact.
+    let xs: [i32; 4] = [0, 1000, 1002, -500];
+    let rows = ala_rows("A", 0.0);
+    let x_col = delta_packed_column("Cartn_x", &xs, 0, 2);
+    let cat = atom_site_with_replaced(&rows, x_col);
+    let bcif = build_single(vec![
+        entity_polymer_category(),
+        entity_poly_protein_category(),
+        cat,
+    ]);
+
+    let entities = bcif_to_entities(&bcif).unwrap();
+    let atoms = first_protein(&entities).atom_set();
+    let got: Vec<f32> = atoms.iter().map(|a| a.position.x).collect();
+    let want: Vec<f32> = xs.iter().map(|&v| v as f32).collect();
+    assert_eq!(got, want, "Delta+IntegerPacking coords must round-trip exactly");
+}
+
+#[test]
+fn fixed_point_reconstructs_coords_within_quantization() {
+    // RCSB stores Cartesian coords as FixedPoint with factor 1000 (mill-angstrom
+    // precision). The decoder recovers int/factor; the reconstructed value must
+    // match the original to within one quantization step plus f32 storage error.
+    let factor = 1000.0_f64;
+    let xs: [f64; 4] = [12.345, -7.891, 0.0, 99.999];
+    let rows = ala_rows("A", 0.0);
+    let x_col = fixed_point_column("Cartn_x", &xs, factor);
+    let cat = atom_site_with_replaced(&rows, x_col);
+    let bcif = build_single(vec![
+        entity_polymer_category(),
+        entity_poly_protein_category(),
+        cat,
+    ]);
+
+    let entities = bcif_to_entities(&bcif).unwrap();
+    let atoms = first_protein(&entities).atom_set();
+    // Tolerance: half a quantization step from rounding, plus f32 epsilon at
+    // the largest magnitude in the fixture.
+    let tol = (0.5 / factor) as f32 + 1e-3;
+    for (a, &want) in atoms.iter().zip(xs.iter()) {
+        let got = a.position.x;
+        assert!(
+            (got - want as f32).abs() <= tol,
+            "FixedPoint coord off: want {want}, got {got}, tol {tol}"
+        );
+    }
+}
+
+#[test]
+fn interval_quantization_lands_in_expected_buckets() {
+    // Quantize B-factor-like values onto a [0, 100] grid of 101 steps (step
+    // size 1.0). Each decoded value must equal its bucket centre
+    // (idx*step + min), proving decode_interval_quantization runs and uses the
+    // (max-min)/(numSteps-1) spacing.
+    let min = 0.0_f64;
+    let max = 100.0_f64;
+    let num_steps = 101_i32;
+    let step = (max - min) / f64::from(num_steps - 1); // 1.0
+    let raw: [f64; 4] = [10.4, 10.6, 55.0, 99.7];
+    let rows = ala_rows("A", 0.0);
+    let b_col =
+        interval_quantized_column("B_iso_or_equiv", &raw, min, max, num_steps);
+    let cat = atom_site_with_replaced(&rows, b_col);
+    let bcif = build_single(vec![
+        entity_polymer_category(),
+        entity_poly_protein_category(),
+        cat,
+    ]);
+
+    let entities = bcif_to_entities(&bcif).unwrap();
+    let atoms = first_protein(&entities).atom_set();
+    for (a, &v) in atoms.iter().zip(raw.iter()) {
+        let expected_idx = ((v - min) / step).round();
+        let expected = (expected_idx * step + min) as f32;
+        let got = a.b_factor;
+        assert!(
+            (got - expected).abs() <= 1e-3,
+            "IntervalQuantization bucket off: input {v}, expected {expected}, \
+             got {got}"
+        );
+    }
 }
 
 #[test]

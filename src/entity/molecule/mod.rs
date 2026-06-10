@@ -154,7 +154,7 @@ impl MoleculeEntity {
         }
     }
 
-    /// Reference to the underlying `Vec<Atom>`.
+    /// Slice over the underlying atoms.
     #[must_use]
     pub fn atom_set(&self) -> &[Atom] {
         match self {

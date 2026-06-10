@@ -477,3 +477,192 @@ pub fn entities_to_atom_array_parsed(
                                    * module */
     }
 }
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::float_cmp,
+    reason = "tests: coords are exact f32 copies, no arithmetic"
+)]
+mod tests {
+    use glam::Vec3;
+
+    use super::*;
+    use crate::element::Element;
+    use crate::entity::molecule::id::EntityIdAllocator;
+    use crate::entity::molecule::protein::ProteinEntity;
+    use crate::entity::molecule::small_molecule::SmallMoleculeEntity;
+
+    fn mk_atom(name: [u8; 4], el: Element, pos: Vec3) -> Atom {
+        Atom {
+            position: pos,
+            occupancy: 1.0,
+            b_factor: 0.0,
+            element: el,
+            name,
+            formal_charge: 0,
+        }
+    }
+
+    /// Two-residue protein (ALA-GLY) laid out in canonical atom order so
+    /// `ProteinEntity::new` does not reorder it.
+    fn dipeptide(id: crate::entity::molecule::id::EntityId) -> MoleculeEntity {
+        let atoms = vec![
+            mk_atom(*b"N   ", Element::N, Vec3::new(0.0, 0.0, 0.0)),
+            mk_atom(*b"CA  ", Element::C, Vec3::new(1.0, 0.0, 0.0)),
+            mk_atom(*b"C   ", Element::C, Vec3::new(2.0, 0.0, 0.0)),
+            mk_atom(*b"O   ", Element::O, Vec3::new(2.0, 1.0, 0.0)),
+            mk_atom(*b"CB  ", Element::C, Vec3::new(1.0, -1.0, 0.0)),
+            mk_atom(*b"N   ", Element::N, Vec3::new(3.2, 0.0, 0.0)),
+            mk_atom(*b"CA  ", Element::C, Vec3::new(4.2, 0.0, 0.0)),
+            mk_atom(*b"C   ", Element::C, Vec3::new(5.2, 0.0, 0.0)),
+            mk_atom(*b"O   ", Element::O, Vec3::new(5.2, 1.0, 0.0)),
+        ];
+        let residues = vec![
+            Residue {
+                name: *b"ALA",
+                label_seq_id: 1,
+                auth_seq_id: None,
+                auth_comp_id: None,
+                ins_code: None,
+                atom_range: 0..5,
+                variants: Vec::new(),
+            },
+            Residue {
+                name: *b"GLY",
+                label_seq_id: 2,
+                auth_seq_id: None,
+                auth_comp_id: None,
+                ins_code: None,
+                atom_range: 5..9,
+                variants: Vec::new(),
+            },
+        ];
+        MoleculeEntity::Protein(ProteinEntity::new(
+            id, atoms, residues, b'A', None,
+        ))
+    }
+
+    /// A three-atom ligand (no internal residue structure).
+    fn ligand(id: crate::entity::molecule::id::EntityId) -> MoleculeEntity {
+        let atoms = vec![
+            mk_atom(*b"C1  ", Element::C, Vec3::new(10.0, 0.0, 0.0)),
+            mk_atom(*b"O1  ", Element::O, Vec3::new(11.0, 0.0, 0.0)),
+            mk_atom(*b"N1  ", Element::N, Vec3::new(12.0, 0.0, 0.0)),
+        ];
+        MoleculeEntity::SmallMolecule(SmallMoleculeEntity::new(
+            id,
+            MoleculeType::Ligand,
+            atoms,
+            *b"LIG",
+        ))
+    }
+
+    #[test]
+    fn collect_atom_data_empty_entities() {
+        let entities: Vec<MoleculeEntity> = vec![];
+        let data = collect_atom_data(&entities, 0);
+        assert!(data.coords_flat.is_empty());
+        assert!(data.chain_ids.is_empty());
+        assert!(data.res_ids.is_empty());
+        assert!(data.aw_entity_ids.is_empty());
+        assert!(data.all_bonds.is_empty());
+    }
+
+    #[test]
+    fn collect_atom_data_flat_columns_match_entities() {
+        let mut alloc = EntityIdAllocator::new();
+        let p = dipeptide(alloc.allocate());
+        let l = ligand(alloc.allocate());
+        let p_id = p.id().raw().cast_signed();
+        let l_id = l.id().raw().cast_signed();
+        let total: usize = p.atom_count() + l.atom_count();
+        let entities = vec![p, l];
+
+        let data = collect_atom_data(&entities, total);
+
+        // Every parallel column has one entry per atom.
+        assert_eq!(data.coords_flat.len(), total * 3);
+        assert_eq!(data.chain_ids.len(), total);
+        assert_eq!(data.res_ids.len(), total);
+        assert_eq!(data.res_names.len(), total);
+        assert_eq!(data.atom_names.len(), total);
+        assert_eq!(data.elements.len(), total);
+        assert_eq!(data.occupancies.len(), total);
+        assert_eq!(data.b_factors.len(), total);
+        assert_eq!(data.aw_entity_ids.len(), total);
+        assert_eq!(data.aw_mol_types.len(), total);
+        assert_eq!(data.aw_chain_types.len(), total);
+
+        // Coords are stored row-major (x, y, z) per atom in entity order:
+        // protein atoms first, then ligand atoms. Walking the entities in
+        // order must reproduce coords_flat exactly (catches a transposed or
+        // column-major axis).
+        let mut flat = Vec::with_capacity(total * 3);
+        for e in &entities {
+            for a in e.atom_set() {
+                flat.push(a.position.x);
+                flat.push(a.position.y);
+                flat.push(a.position.z);
+            }
+        }
+        assert_eq!(data.coords_flat, flat);
+
+        // entity_id column is segmented by entity: first N atoms carry the
+        // protein id, the rest carry the ligand id.
+        let n_prot = entities[0].atom_count();
+        for &eid in &data.aw_entity_ids[..n_prot] {
+            assert_eq!(eid, p_id);
+        }
+        for &eid in &data.aw_entity_ids[n_prot..] {
+            assert_eq!(eid, l_id);
+        }
+
+        // res_id mapping: protein residues are 1 (ALA) then 2 (GLY); each
+        // value repeats once per atom in that residue. Ligand atoms all map
+        // to res_id 1.
+        let prot_res = entities[0].residues().unwrap();
+        let mut expected_res_ids = Vec::new();
+        for r in prot_res {
+            for _ in r.atom_range.clone() {
+                expected_res_ids.push(r.label_seq_id);
+            }
+        }
+        expected_res_ids
+            .extend(std::iter::repeat_n(1, entities[1].atom_count()));
+        assert_eq!(data.res_ids, expected_res_ids);
+
+        // res_name column: trimmed 3-char codes, segmented by residue.
+        assert_eq!(&data.res_names[..n_prot - 4], &["ALA"; 5]);
+        assert_eq!(&data.res_names[n_prot - 4..n_prot], &["GLY"; 4]);
+        assert_eq!(&data.res_names[n_prot..], &["LIG"; 3]);
+
+        // chain_id: alphanumeric pdb_chain_id renders to its char; the
+        // ligand has no chain so falls back to "A".
+        for c in &data.chain_ids[..n_prot] {
+            assert_eq!(c, "A");
+        }
+
+        // mol_type / chain_type annotations match the source classification.
+        assert!(data.aw_mol_types[..n_prot].iter().all(|s| s == "protein"));
+        assert!(data.aw_mol_types[n_prot..].iter().all(|s| s == "ligand"));
+        assert!(data.aw_chain_types[..n_prot].iter().all(|&c| c == 6));
+        assert!(data.aw_chain_types[n_prot..].iter().all(|&c| c == 8));
+    }
+
+    #[test]
+    fn collect_atom_data_preserves_atom_order_and_names() {
+        let mut alloc = EntityIdAllocator::new();
+        let l = ligand(alloc.allocate());
+        let total = l.atom_count();
+        let entities = vec![l];
+        let data = collect_atom_data(&entities, total);
+
+        // Atom names are trimmed and appear in stored order.
+        assert_eq!(data.atom_names, vec!["C1", "O1", "N1"]);
+        assert_eq!(data.elements, vec!["C", "O", "N"]);
+        // Default occupancy/b_factor flow through unchanged.
+        assert_eq!(data.occupancies, vec![1.0, 1.0, 1.0]);
+        assert_eq!(data.b_factors, vec![0.0, 0.0, 0.0]);
+    }
+}

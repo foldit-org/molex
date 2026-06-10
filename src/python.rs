@@ -1,5 +1,5 @@
-//! Python bindings for parsing structure files into ASSEM01 bytes and
-//! emitting PDB from ASSEM01 bytes. AtomArray interop lives in
+//! Python bindings for parsing structure files into ASSEM02 bytes and
+//! emitting PDB from ASSEM02 bytes. AtomArray interop lives in
 //! `adapters::atomworks`.
 //!
 //! Handle-based surface (`Assembly`, `EditList`, `Variant`, `AtomRow`,
@@ -23,7 +23,7 @@ use crate::ops::wire::{
     assembly_bytes, deserialize_assembly, serialize_assembly,
 };
 
-/// Parse a PDB string and emit ASSEM01 binary bytes.
+/// Parse a PDB string and emit ASSEM02 binary bytes.
 ///
 /// # Errors
 ///
@@ -39,7 +39,7 @@ pub fn pdb_to_assembly_bytes(pdb_str: String) -> PyResult<Vec<u8>> {
     })
 }
 
-/// Parse an mmCIF string and emit ASSEM01 binary bytes.
+/// Parse an mmCIF string and emit ASSEM02 binary bytes.
 ///
 /// # Errors
 ///
@@ -55,7 +55,8 @@ pub fn mmcif_to_assembly_bytes(cif_str: String) -> PyResult<Vec<u8>> {
     })
 }
 
-/// Decode ASSEM01 bytes and emit a PDB-format string.
+/// Decode ASSEM02 (or legacy ASSEM01) bytes and emit a PDB-format
+/// string.
 ///
 /// # Errors
 ///
@@ -688,5 +689,88 @@ impl PyAtomRow {
             name: a.name,
             element: a.element.symbol().to_owned(),
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::float_cmp)]
+mod tests {
+    use super::{coords_to_vec3, make_entity_id, PyEditList};
+    use glam::Vec3;
+
+    // `coords_to_vec3` takes already-extracted tuples; well-formed mapping
+    // is testable without the interpreter.
+    #[test]
+    fn coords_to_vec3_maps_tuples_in_order() {
+        let got = coords_to_vec3(vec![(1.0, 2.0, 3.0), (-4.0, 5.5, 6.25)]);
+        assert_eq!(
+            got,
+            vec![Vec3::new(1.0, 2.0, 3.0), Vec3::new(-4.0, 5.5, 6.25)]
+        );
+    }
+
+    // Edit-application path: `push_set_entity_coords` runs `coords_to_vec3`
+    // and stamps the `EntityId`; read back through the public accessor.
+    #[test]
+    fn push_set_entity_coords_records_edit() {
+        let mut list = PyEditList::new();
+        list.push_set_entity_coords(7, vec![(0.0, 0.0, 0.0), (1.0, 1.0, 1.0)]);
+
+        assert_eq!(list.__len__(), 1);
+        assert_eq!(list.kind_at(0).expect("kind at 0"), 1);
+
+        let view = list
+            .set_entity_coords_at(0)
+            .expect("edit at index 0 is a SetEntityCoords view");
+        assert_eq!(view.entity_id, make_entity_id(7).raw());
+        assert_eq!(view.coords, vec![(0.0, 0.0, 0.0), (1.0, 1.0, 1.0)]);
+    }
+
+    // Wrong view kind returns a PyErr, never a panic (no interpreter); the
+    // concrete `ValueError` type is asserted in `wrong_kind_is_value_error`.
+    #[test]
+    fn wrong_kind_errors_cleanly() {
+        let mut list = PyEditList::new();
+        list.push_set_variants(1, 0, Vec::new());
+        assert!(list.set_entity_coords_at(0).is_err(), "not SetEntityCoords");
+    }
+
+    // Reading past the end returns a PyErr, never a panic (no interpreter).
+    #[test]
+    fn out_of_range_errors_cleanly() {
+        let list = PyEditList::new();
+        assert!(list.set_entity_coords_at(0).is_err(), "no edit at index 0");
+    }
+
+    // GIL-dependent tests below need a live interpreter. The
+    // `extension-module` build links no libpython, so the test binary
+    // fails to link and no test here runs in that environment; they cover
+    // the boundary wherever libpython is linked.
+
+    // Malformed coords fail at pyo3's `FromPyObject` boundary: a wrong
+    // inner length fails extraction with a PyErr before `coords_to_vec3`.
+    #[test]
+    fn extract_malformed_coords_is_pyerr_not_panic() {
+        use pyo3::types::{PyAnyMethods, PyList};
+        pyo3::Python::attach(|py| {
+            let bad = PyList::new(py, [(1.0_f64, 2.0_f64)])
+                .expect("build py list of one 2-tuple");
+            let res: Result<Vec<(f32, f32, f32)>, pyo3::PyErr> = bad.extract();
+            assert!(res.is_err(), "wrong inner length must not extract");
+        });
+    }
+
+    // Confirm the wrong-kind read produces a ValueError specifically.
+    #[test]
+    fn wrong_kind_is_value_error() {
+        use pyo3::types::{PyStringMethods, PyTypeMethods};
+        let mut list = PyEditList::new();
+        list.push_set_variants(1, 0, Vec::new());
+        let err = list.set_entity_coords_at(0).err().expect("must error");
+        pyo3::Python::attach(|py| {
+            let bound = err.get_type(py).name().expect("read type name");
+            let name = bound.to_str().expect("utf-8 type name");
+            assert!(name.ends_with("ValueError"), "got {name}");
+        });
     }
 }

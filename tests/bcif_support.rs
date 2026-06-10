@@ -11,6 +11,7 @@
     clippy::cast_possible_wrap,
     clippy::unwrap_used,
     clippy::expect_used,
+    clippy::panic,
     clippy::too_many_lines,
     clippy::struct_excessive_bools,
     clippy::vec_init_then_push,
@@ -71,6 +72,20 @@ pub(crate) enum EncStep {
     StringArray {
         string_data: String,
         offsets: Vec<i32>,
+    },
+    Delta {
+        origin: i32,
+        src_type: i32,
+    },
+    FixedPoint {
+        factor: f64,
+        src_type: i32,
+    },
+    IntervalQuantization {
+        min: f64,
+        max: f64,
+        num_steps: i32,
+        src_type: i32,
     },
 }
 
@@ -225,6 +240,39 @@ fn write_enc_step(out: &mut Vec<u8>, step: &EncStep) {
             write_array_len(out, 1);
             write_byte_array(out, 3);
         }
+        EncStep::Delta { origin, src_type } => {
+            rmp_encode::write_map_len(out, 3).unwrap();
+            write_str_kv(out, "kind", "Delta");
+            rmp_encode::write_str(out, "origin").unwrap();
+            rmp_encode::write_sint(out, i64::from(*origin)).unwrap();
+            rmp_encode::write_str(out, "srcType").unwrap();
+            rmp_encode::write_sint(out, i64::from(*src_type)).unwrap();
+        }
+        EncStep::FixedPoint { factor, src_type } => {
+            rmp_encode::write_map_len(out, 3).unwrap();
+            write_str_kv(out, "kind", "FixedPoint");
+            rmp_encode::write_str(out, "factor").unwrap();
+            rmp_encode::write_f64(out, *factor).unwrap();
+            rmp_encode::write_str(out, "srcType").unwrap();
+            rmp_encode::write_sint(out, i64::from(*src_type)).unwrap();
+        }
+        EncStep::IntervalQuantization {
+            min,
+            max,
+            num_steps,
+            src_type,
+        } => {
+            rmp_encode::write_map_len(out, 5).unwrap();
+            write_str_kv(out, "kind", "IntervalQuantization");
+            rmp_encode::write_str(out, "min").unwrap();
+            rmp_encode::write_f64(out, *min).unwrap();
+            rmp_encode::write_str(out, "max").unwrap();
+            rmp_encode::write_f64(out, *max).unwrap();
+            rmp_encode::write_str(out, "numSteps").unwrap();
+            rmp_encode::write_sint(out, i64::from(*num_steps)).unwrap();
+            rmp_encode::write_str(out, "srcType").unwrap();
+            rmp_encode::write_sint(out, i64::from(*src_type)).unwrap();
+        }
     }
 }
 
@@ -262,6 +310,185 @@ fn floats_to_bytes_f64_le(floats: &[f64]) -> Vec<u8> {
         out.extend_from_slice(&f.to_le_bytes());
     }
     out
+}
+
+// ---------------------------------------------------------------------------
+// Non-default encoding transforms (Delta / FixedPoint / IntervalQuantization).
+//
+// Each mirrors the inverse of the matching `decode_*` in
+// `src/adapters/bcif/codec.rs`, so a column run through `build_*_column` and
+// then the real decoder reconstructs the original values.
+// ---------------------------------------------------------------------------
+
+/// Delta-encode a value sequence against `origin`: the first emitted token is
+/// `values[0] - origin`, each later token is the difference from its
+/// predecessor. The decoder reverses this with a prefix sum seeded by
+/// `origin`.
+fn delta_encode(values: &[i32], origin: i32) -> Vec<i32> {
+    let mut out = Vec::with_capacity(values.len());
+    let mut prev = origin;
+    for &v in values {
+        out.push(v - prev);
+        prev = v;
+    }
+    out
+}
+
+/// Integer-pack a token sequence the way the decoder unpacks it: while a
+/// value exceeds the signed range for `byte_count`, emit the saturating
+/// limit and carry the remainder; the residual closes the run. Mirrors the
+/// limits in `int_packing_params` (signed path).
+fn integer_pack(values: &[i32], byte_count: i32) -> Vec<i32> {
+    let (upper, lower) = match byte_count {
+        1 => (0x7F_i32, -0x7F_i32),
+        2 => (0x7FFF_i32, -0x7FFF_i32),
+        4 => (i32::MAX, -i32::MAX),
+        other => panic!("integer_pack: unsupported byteCount={other}"),
+    };
+    let mut out = Vec::with_capacity(values.len());
+    for &v in values {
+        let mut rem = v;
+        while rem >= upper {
+            out.push(upper);
+            rem -= upper;
+        }
+        while rem <= lower {
+            out.push(lower);
+            rem -= lower;
+        }
+        out.push(rem);
+    }
+    out
+}
+
+/// Turn packed `i32` tokens into the byte payload for `byte_count`,
+/// little-endian, matching the `ByteArray` type the decoder expects
+/// (signed types 1/2/3).
+fn packed_ints_to_bytes(tokens: &[i32], byte_count: i32) -> Vec<u8> {
+    let mut out = Vec::new();
+    for &t in tokens {
+        match byte_count {
+            1 => out.push((t as i8).to_le_bytes()[0]),
+            2 => out.extend_from_slice(&(t as i16).to_le_bytes()),
+            4 => out.extend_from_slice(&t.to_le_bytes()),
+            other => panic!("packed_ints_to_bytes: unsupported byteCount={other}"),
+        }
+    }
+    out
+}
+
+/// The `ByteArray` step matching a signed `byte_count` integer-packing
+/// payload (type 1 / 2 / 3).
+fn signed_byte_array_step(byte_count: i32) -> EncStep {
+    match byte_count {
+        1 => EncStep::ByteArrayInt8,
+        2 => EncStep::ByteArrayInt16,
+        4 => EncStep::ByteArrayInt32,
+        other => panic!("signed_byte_array_step: unsupported byteCount={other}"),
+    }
+}
+
+/// Build a `Delta` + `IntegerPacking` column over integer `values`, the chain
+/// real RCSB files use for coordinate-like columns. The encoding array is
+/// emitted in the order the decoder consumes in reverse: `[Delta,
+/// IntegerPacking, ByteArray]`.
+pub(crate) fn delta_packed_column(
+    name: &str,
+    values: &[i32],
+    origin: i32,
+    byte_count: i32,
+) -> Column {
+    let deltas = delta_encode(values, origin);
+    let tokens = integer_pack(&deltas, byte_count);
+    let bytes = packed_ints_to_bytes(&tokens, byte_count);
+    Column {
+        name: name.into(),
+        data: ColumnData::Raw {
+            bytes,
+            encoding: vec![
+                EncStep::Delta {
+                    origin,
+                    src_type: 3,
+                },
+                EncStep::IntegerPacking {
+                    // srcSize is the count of UNPACKED values (the decoder
+                    // stops once it has produced this many), not the token
+                    // count, which is larger whenever a value spans multiple
+                    // saturating limits.
+                    byte_count,
+                    src_size: values.len() as i32,
+                    is_unsigned: false,
+                },
+                signed_byte_array_step(byte_count),
+            ],
+        },
+        mask: None,
+    }
+}
+
+/// Build a `FixedPoint` column over float `values`: each is quantized to
+/// `round(value * factor)` and stored as int32, so the decoder recovers
+/// `int / factor`. Chain is `[FixedPoint, ByteArray(int32)]`.
+pub(crate) fn fixed_point_column(
+    name: &str,
+    values: &[f64],
+    factor: f64,
+) -> Column {
+    let ints: Vec<i32> =
+        values.iter().map(|&v| (v * factor).round() as i32).collect();
+    let bytes = ints_to_bytes_int32_le(&ints);
+    Column {
+        name: name.into(),
+        data: ColumnData::Raw {
+            bytes,
+            encoding: vec![
+                EncStep::FixedPoint {
+                    factor,
+                    src_type: 33,
+                },
+                EncStep::ByteArrayInt32,
+            ],
+        },
+        mask: None,
+    }
+}
+
+/// Build an `IntervalQuantization` column over float `values`: each maps to
+/// the nearest bucket index in `[0, num_steps-1]` over `[min, max]`, stored
+/// as int32. The decoder recovers `index * step + min`. Chain is
+/// `[IntervalQuantization, ByteArray(int32)]`.
+pub(crate) fn interval_quantized_column(
+    name: &str,
+    values: &[f64],
+    min: f64,
+    max: f64,
+    num_steps: i32,
+) -> Column {
+    let step = (max - min) / f64::from(num_steps - 1);
+    let ints: Vec<i32> = values
+        .iter()
+        .map(|&v| {
+            let idx = ((v - min) / step).round();
+            idx.clamp(0.0, f64::from(num_steps - 1)) as i32
+        })
+        .collect();
+    let bytes = ints_to_bytes_int32_le(&ints);
+    Column {
+        name: name.into(),
+        data: ColumnData::Raw {
+            bytes,
+            encoding: vec![
+                EncStep::IntervalQuantization {
+                    min,
+                    max,
+                    num_steps,
+                    src_type: 33,
+                },
+                EncStep::ByteArrayInt32,
+            ],
+        },
+        mask: None,
+    }
 }
 
 // ---------------------------------------------------------------------------

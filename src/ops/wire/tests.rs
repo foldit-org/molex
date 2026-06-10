@@ -263,6 +263,27 @@ fn deserialize_assembly_truncated_atom_data() {
 }
 
 #[test]
+fn deserialize_assembly_corrupt_buffers_error_not_panic() {
+    // Valid magic + entity count, but the per-entity header is cut off
+    // (claims one entity, then ends).
+    let mut truncated_header = Vec::new();
+    truncated_header.extend_from_slice(b"ASSEM02\0");
+    truncated_header.extend_from_slice(&1u32.to_be_bytes()); // 1 entity
+    truncated_header.push(0); // mol_type byte, nothing after it
+    assert!(deserialize_assembly(&truncated_header).is_err());
+
+    // Valid magic + an absurd entity count with no entity data following.
+    let mut overstated_count = Vec::new();
+    overstated_count.extend_from_slice(b"ASSEM02\0");
+    overstated_count.extend_from_slice(&0xFFFF_FFFFu32.to_be_bytes());
+    assert!(deserialize_assembly(&overstated_count).is_err());
+
+    // Arbitrary garbage of header length: bad magic, must error cleanly.
+    let garbage = [0xABu8; 32];
+    assert!(deserialize_assembly(&garbage).is_err());
+}
+
+#[test]
 fn assem01_back_compat_read_succeeds_with_empty_variants() {
     // Construct a minimal ASSEM01 byte stream by hand (5-byte
     // per-entity header, no entity_id, no variants trailer) and verify

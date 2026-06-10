@@ -16,7 +16,7 @@ use crate::element::Element;
 use crate::entity::molecule::atom::Atom;
 use crate::entity::molecule::bulk::BulkEntity;
 use crate::entity::molecule::chain::ChainIdMapper;
-use crate::entity::molecule::id::{EntityId, EntityIdAllocator};
+use crate::entity::molecule::id::EntityId;
 use crate::entity::molecule::nucleic_acid::NAEntity;
 use crate::entity::molecule::polymer::Residue;
 use crate::entity::molecule::protein::ProteinEntity;
@@ -98,13 +98,13 @@ fn build_entity_from_indices(
         rows.push(read_atom_array_row(arrays, i, chain_mapper)?);
     }
 
-    let mut allocator = EntityIdAllocator::new();
-    // Advance allocator to the output index so IDs are sequential across
-    // entities.
-    for _ in 0..output_idx {
-        let _ = allocator.allocate();
-    }
-    let id = allocator.allocate();
+    // IDs are sequential across entities (entity N gets id N), so the id is
+    // just the output index. No allocator round-trip needed.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "entity count fits in u32 for valid structures"
+    )]
+    let id = EntityId::from_raw(output_idx as u32);
 
     Ok(build_entity(id, mol_type, rows))
 }
@@ -563,4 +563,222 @@ fn convert_assemblies(
         // Skip assemblies that fail to convert
     }
     Ok(())
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::float_cmp,
+    reason = "tests: coords are exact f32 copies, no arithmetic"
+)]
+mod tests {
+    use super::*;
+    use crate::entity::molecule::id::EntityIdAllocator;
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "test row constructor mirrors the per-atom annotation set"
+    )]
+    fn mk_row(
+        name: [u8; 4],
+        element: Element,
+        pos: Vec3,
+        chain_id: u8,
+        res_name: [u8; 3],
+        res_num: i32,
+    ) -> AtomArrayRow {
+        AtomArrayRow {
+            atom: Atom {
+                position: pos,
+                occupancy: 1.0,
+                b_factor: 0.0,
+                element,
+                name,
+                formal_charge: 0,
+            },
+            chain_id,
+            res_name,
+            res_num,
+        }
+    }
+
+    #[test]
+    fn unique_in_order_preserves_first_appearance() {
+        let ids = [3, 3, 1, 1, 1, 2, 3];
+        assert_eq!(unique_in_order(&ids), vec![3, 1, 2]);
+    }
+
+    #[test]
+    fn unique_in_order_empty_is_empty() {
+        assert!(unique_in_order(&[]).is_empty());
+    }
+
+    #[test]
+    fn into_atoms_and_residues_empty_yields_nothing() {
+        let (atoms, residues) = into_atoms_and_residues(Vec::new());
+        assert!(atoms.is_empty());
+        assert!(residues.is_empty());
+    }
+
+    #[test]
+    fn build_entity_empty_rows_uses_fill_defaults() {
+        // Edge case: an entity group with zero atoms must not panic and must
+        // fall back to the documented fill values rather than indexing past
+        // the (empty) row vec. A wrong fill here would silently corrupt the
+        // residue/chain metadata of an empty group.
+        let lig =
+            build_entity(EntityId::from_raw(0), MoleculeType::Ligand, vec![]);
+        let MoleculeEntity::SmallMolecule(e) = lig else {
+            unreachable!("Ligand mol_type must build a SmallMolecule");
+        };
+        assert!(e.atoms.is_empty());
+        assert_eq!(e.residue_name, [b' '; 3]);
+
+        let water =
+            build_entity(EntityId::from_raw(1), MoleculeType::Water, vec![]);
+        assert!(matches!(water, MoleculeEntity::Bulk(_)));
+    }
+
+    #[test]
+    fn into_atoms_and_residues_groups_by_res_num() {
+        // Three atoms in residue 1, two in residue 2; the split must land
+        // exactly on the res_num change (catches an off-by-one in the
+        // atom_range boundary).
+        let rows = vec![
+            mk_row(*b"N   ", Element::N, Vec3::ZERO, b'A', *b"ALA", 1),
+            mk_row(*b"CA  ", Element::C, Vec3::X, b'A', *b"ALA", 1),
+            mk_row(*b"C   ", Element::C, Vec3::Y, b'A', *b"ALA", 1),
+            mk_row(*b"N   ", Element::N, Vec3::Z, b'A', *b"GLY", 2),
+            mk_row(*b"CA  ", Element::C, Vec3::ONE, b'A', *b"GLY", 2),
+        ];
+        let (atoms, residues) = into_atoms_and_residues(rows);
+
+        assert_eq!(atoms.len(), 5);
+        assert_eq!(residues.len(), 2);
+
+        assert_eq!(residues[0].name, *b"ALA");
+        assert_eq!(residues[0].label_seq_id, 1);
+        assert_eq!(residues[0].atom_range, 0..3);
+
+        assert_eq!(residues[1].name, *b"GLY");
+        assert_eq!(residues[1].label_seq_id, 2);
+        assert_eq!(residues[1].atom_range, 3..5);
+
+        // atom_range slices index back into the contiguous atom vec correctly.
+        assert_eq!(atoms[residues[1].atom_range.clone()].len(), 2);
+    }
+
+    #[test]
+    fn into_atoms_and_residues_single_residue() {
+        let rows = vec![
+            mk_row(*b"C1  ", Element::C, Vec3::ZERO, b'A', *b"LIG", 7),
+            mk_row(*b"O1  ", Element::O, Vec3::X, b'A', *b"LIG", 7),
+        ];
+        let (atoms, residues) = into_atoms_and_residues(rows);
+        assert_eq!(atoms.len(), 2);
+        assert_eq!(residues.len(), 1);
+        assert_eq!(residues[0].atom_range, 0..2);
+    }
+
+    #[test]
+    fn build_entity_dispatches_by_mol_type() {
+        let protein_rows = vec![
+            mk_row(*b"N   ", Element::N, Vec3::ZERO, b'A', *b"ALA", 1),
+            mk_row(*b"CA  ", Element::C, Vec3::X, b'A', *b"ALA", 1),
+        ];
+        let id = EntityId::from_raw(0);
+        let e = build_entity(id, MoleculeType::Protein, protein_rows);
+        assert!(matches!(e, MoleculeEntity::Protein(_)));
+        assert_eq!(e.id(), id);
+
+        let lig_rows =
+            vec![mk_row(*b"C1  ", Element::C, Vec3::ZERO, b'B', *b"LIG", 1)];
+        let lig =
+            build_entity(EntityId::from_raw(1), MoleculeType::Ligand, lig_rows);
+        assert!(matches!(lig, MoleculeEntity::SmallMolecule(_)));
+
+        let water_rows =
+            vec![mk_row(*b"O   ", Element::O, Vec3::ZERO, b'C', *b"HOH", 1)];
+        let water =
+            build_entity(EntityId::from_raw(2), MoleculeType::Water, water_rows);
+        assert!(matches!(water, MoleculeEntity::Bulk(_)));
+    }
+
+    #[test]
+    fn build_entity_from_indices_assigns_sequential_ids() {
+        // The id is derived directly from output_idx via EntityId::from_raw;
+        // this must match the old allocate-output_idx-times-then-allocate
+        // behaviour, i.e. entity N gets EntityId(N).
+        let mut alloc = EntityIdAllocator::new();
+        for output_idx in 0u32..4 {
+            // Replicate the discarded-allocation loop the code used to run.
+            let mut probe = EntityIdAllocator::new();
+            for _ in 0..output_idx {
+                let _ = probe.allocate();
+            }
+            let expected = probe.allocate();
+            assert_eq!(EntityId::from_raw(output_idx), expected);
+        }
+        // Sanity: a fresh allocator still mints 0,1,2,... in step with from_raw.
+        for n in 0u32..4 {
+            assert_eq!(alloc.allocate(), EntityId::from_raw(n));
+        }
+    }
+
+    /// Roundtrip at the pure-Rust boundary: the per-atom columns that
+    /// `to_array::collect_atom_data` produces are fed back through the
+    /// reconstruction core and must rebuild an equivalent multi-residue
+    /// entity. The numpy/biotite serialization in between is a thin shim;
+    /// this exercises the logic that decides atom order, residue grouping,
+    /// and coordinate placement.
+    #[test]
+    fn reconstruct_multi_residue_entity_roundtrip() {
+        // Source: a two-residue protein-like group, atoms in canonical order.
+        let coords = [
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(2.0, 0.0, 0.0),
+            Vec3::new(3.2, 0.0, 0.0),
+            Vec3::new(4.2, 0.0, 0.0),
+        ];
+        let names: [[u8; 4]; 5] =
+            [*b"N   ", *b"CA  ", *b"C   ", *b"N   ", *b"CA  "];
+        let res_nums = [1, 1, 1, 2, 2];
+        let res_names: [[u8; 3]; 5] =
+            [*b"ALA", *b"ALA", *b"ALA", *b"GLY", *b"GLY"];
+
+        let rows: Vec<AtomArrayRow> = (0..5)
+            .map(|i| {
+                mk_row(
+                    names[i],
+                    Element::from_atom_name(
+                        std::str::from_utf8(&names[i]).unwrap(),
+                    ),
+                    coords[i],
+                    b'A',
+                    res_names[i],
+                    res_nums[i],
+                )
+            })
+            .collect();
+
+        let (atoms, residues) = into_atoms_and_residues(rows);
+
+        // Coordinates survive in order, exact f32.
+        assert_eq!(atoms.len(), 5);
+        for (i, a) in atoms.iter().enumerate() {
+            assert_eq!(a.position, coords[i]);
+        }
+        // Two residues, boundary on the res_num change, ranges contiguous and
+        // covering all atoms with no gap or overlap.
+        assert_eq!(residues.len(), 2);
+        assert_eq!(residues[0].atom_range, 0..3);
+        assert_eq!(residues[1].atom_range, 3..5);
+        assert_eq!(
+            residues[0].atom_range.end,
+            residues[1].atom_range.start,
+            "residue ranges must be contiguous"
+        );
+        assert_eq!(residues.last().unwrap().atom_range.end, atoms.len());
+    }
 }

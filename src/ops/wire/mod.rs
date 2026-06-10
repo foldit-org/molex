@@ -28,7 +28,7 @@ pub const ASSEMBLY_MAGIC_V2: &[u8; 8] = b"ASSEM02\0";
 /// supported version.
 pub const ASSEMBLY_MAGIC: &[u8; 8] = ASSEMBLY_MAGIC_V2;
 
-/// Encode a `MoleculeType` to its ASSEM01 wire byte.
+/// Encode a `MoleculeType` to its ASSEM02 wire byte.
 pub(crate) fn molecule_type_to_wire(mol_type: MoleculeType) -> u8 {
     match mol_type {
         MoleculeType::Protein => 0,
@@ -43,7 +43,7 @@ pub(crate) fn molecule_type_to_wire(mol_type: MoleculeType) -> u8 {
     }
 }
 
-/// Decode an ASSEM01 wire byte to a `MoleculeType`.
+/// Decode an ASSEM02 wire byte to a `MoleculeType`.
 pub(crate) fn molecule_type_from_wire(b: u8) -> Option<MoleculeType> {
     match b {
         0 => Some(MoleculeType::Protein),
@@ -59,7 +59,7 @@ pub(crate) fn molecule_type_from_wire(b: u8) -> Option<MoleculeType> {
     }
 }
 
-/// ASSEM01-encode a raw entity slice (includes molecule type metadata).
+/// ASSEM02-encode a raw entity slice (includes molecule type metadata).
 ///
 /// # Errors
 ///

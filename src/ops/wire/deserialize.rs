@@ -225,16 +225,25 @@ fn parse_entity_headers(
     let mut headers = Vec::with_capacity(entity_count);
     let mut offset = 12;
     for _ in 0..entity_count {
-        let mol_type =
-            molecule_type_from_wire(bytes[offset]).ok_or_else(|| {
-                AdapterError::InvalidFormat(format!(
-                    "Unknown molecule type byte: {}",
-                    bytes[offset]
-                ))
-            })?;
+        let mol_byte = *bytes.get(offset).ok_or_else(|| {
+            AdapterError::InvalidFormat(
+                "Truncated entity header (expected molecule type)".to_owned(),
+            )
+        })?;
+        let mol_type = molecule_type_from_wire(mol_byte).ok_or_else(|| {
+            AdapterError::InvalidFormat(format!(
+                "Unknown molecule type byte: {mol_byte}",
+            ))
+        })?;
         offset += 1;
+        let atom_count_bytes =
+            bytes.get(offset..offset + 4).ok_or_else(|| {
+                AdapterError::InvalidFormat(
+                    "Truncated entity header (expected atom count)".to_owned(),
+                )
+            })?;
         let atom_count = u32::from_be_bytes(
-            bytes[offset..offset + 4].try_into().map_err(|_| {
+            atom_count_bytes.try_into().map_err(|_| {
                 AdapterError::InvalidFormat(
                     "Invalid atom count in entity header".to_owned(),
                 )
@@ -243,13 +252,16 @@ fn parse_entity_headers(
         offset += 4;
 
         let entity_id_raw = if has_entity_ids {
-            let raw = u32::from_be_bytes(
-                bytes[offset..offset + 4].try_into().map_err(|_| {
-                    AdapterError::InvalidFormat(
-                        "Invalid entity id in entity header".to_owned(),
-                    )
-                })?,
-            );
+            let id_bytes = bytes.get(offset..offset + 4).ok_or_else(|| {
+                AdapterError::InvalidFormat(
+                    "Truncated entity header (expected entity id)".to_owned(),
+                )
+            })?;
+            let raw = u32::from_be_bytes(id_bytes.try_into().map_err(|_| {
+                AdapterError::InvalidFormat(
+                    "Invalid entity id in entity header".to_owned(),
+                )
+            })?);
             offset += 4;
             Some(raw)
         } else {

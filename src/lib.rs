@@ -9,7 +9,7 @@
 //!
 //! let entities = structure_file_to_entities("1ubq.pdb")?;
 //! for e in &entities {
-//!     println!("{:?}: {} atoms", e.molecule_type, e.atom_count());
+//!     println!("{:?}: {} atoms", e.molecule_type(), e.atom_count());
 //! }
 //! ```
 

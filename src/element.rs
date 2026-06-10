@@ -85,9 +85,11 @@ impl Element {
     /// Infer element from a standard protein atom name (e.g., "CA" -> C, "OG"
     /// -> O, "SD" -> S).
     ///
-    /// For standard protein atoms, the first alphabetic character reliably
-    /// identifies the element. This is the same heuristic used by
-    /// `gpu.rs:atom_name_to_type_index`.
+    /// For standard protein atoms, the first alphabetic character of the
+    /// atom name reliably identifies the element (e.g. `CA`, `CB`, `CG` all
+    /// begin with `C` for carbon). Only the common biomolecular elements
+    /// (C, N, O, S, H, P) are recognized; anything else maps to
+    /// [`Element::Unknown`].
     #[must_use]
     pub fn from_atom_name(name: &str) -> Self {
         let name = name.trim();

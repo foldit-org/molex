@@ -400,3 +400,321 @@ pub extern "C" fn molex_atom_b_factor(atom: *const molex_Atom) -> f32 {
 pub extern "C" fn molex_atom_formal_charge(atom: *const molex_Atom) -> i8 {
     atom_inner(atom).map_or(0, |a| a.formal_charge)
 }
+
+#[cfg(test)]
+#[allow(
+    clippy::float_cmp,
+    reason = "tests assert against literal atom coordinates carried verbatim \
+              through the handle; bit-exact equality is the correct check."
+)]
+mod tests {
+    use glam::Vec3;
+
+    use super::*;
+    use crate::c_api::{molex_Assembly, molex_assembly_free, molex_MoleculeType};
+    use crate::entity::molecule::atom::Atom;
+    use crate::entity::molecule::id::EntityIdAllocator;
+    use crate::entity::molecule::protein::ProteinEntity;
+    use crate::entity::molecule::small_molecule::SmallMoleculeEntity;
+    use crate::entity::molecule::{MoleculeEntity, MoleculeType, Residue};
+
+    fn mk_atom(name: [u8; 4], el: Element, pos: Vec3) -> Atom {
+        Atom {
+            position: pos,
+            occupancy: 1.0,
+            b_factor: 0.0,
+            element: el,
+            name,
+            formal_charge: 0,
+        }
+    }
+
+    /// Build an owned assembly handle holding one two-residue protein
+    /// (ALA-GLY) and one small-molecule entity, mirroring the parser
+    /// entry points' `Box::into_raw` ownership. Free with
+    /// [`molex_assembly_free`].
+    fn make_assembly_handle() -> *mut molex_Assembly {
+        let mut alloc = EntityIdAllocator::new();
+
+        let protein_atoms = vec![
+            mk_atom(*b"N   ", Element::N, Vec3::ZERO),
+            mk_atom(*b"CA  ", Element::C, Vec3::new(1.0, 0.0, 0.0)),
+            mk_atom(*b"C   ", Element::C, Vec3::new(2.0, 0.0, 0.0)),
+            mk_atom(*b"O   ", Element::O, Vec3::new(2.0, 1.0, 0.0)),
+            mk_atom(*b"CB  ", Element::C, Vec3::new(1.0, -1.0, 0.0)),
+            mk_atom(*b"N   ", Element::N, Vec3::new(3.2, 0.0, 0.0)),
+            mk_atom(*b"CA  ", Element::C, Vec3::new(4.2, 0.0, 0.0)),
+            mk_atom(*b"C   ", Element::C, Vec3::new(5.2, 0.0, 0.0)),
+            mk_atom(*b"O   ", Element::O, Vec3::new(5.2, 1.0, 0.0)),
+        ];
+        let residues = vec![
+            Residue {
+                name: *b"ALA",
+                label_seq_id: 1,
+                auth_seq_id: None,
+                auth_comp_id: None,
+                ins_code: None,
+                atom_range: 0..5,
+                variants: Vec::new(),
+            },
+            Residue {
+                name: *b"GLY",
+                label_seq_id: 2,
+                auth_seq_id: None,
+                auth_comp_id: None,
+                ins_code: None,
+                atom_range: 5..9,
+                variants: Vec::new(),
+            },
+        ];
+        let protein = MoleculeEntity::Protein(ProteinEntity::new(
+            alloc.allocate(),
+            protein_atoms,
+            residues,
+            b'A',
+            None,
+        ));
+
+        let ligand = MoleculeEntity::SmallMolecule(SmallMoleculeEntity::new(
+            alloc.allocate(),
+            MoleculeType::Ligand,
+            vec![mk_atom(*b"C1  ", Element::C, Vec3::new(10.0, 0.0, 0.0))],
+            *b"LIG",
+        ));
+
+        let assembly = Assembly::new(vec![protein, ligand]);
+        Box::into_raw(Box::new(assembly)).cast::<molex_Assembly>()
+    }
+
+    // -- Assembly accessors: null + out-of-range --
+
+    #[test]
+    fn assembly_accessors_handle_null_and_out_of_range() {
+        let null = std::ptr::null::<molex_Assembly>();
+        assert_eq!(molex_assembly_generation(null), 0);
+        assert_eq!(molex_assembly_num_entities(null), 0);
+        assert!(molex_assembly_entity(null, 0).is_null());
+
+        let asm = make_assembly_handle();
+        assert_eq!(molex_assembly_num_entities(asm), 2);
+        assert!(!molex_assembly_entity(asm, 0).is_null());
+        // Index one past the last entity must not deref out of bounds.
+        assert!(molex_assembly_entity(asm, 2).is_null());
+        assert!(molex_assembly_entity(asm, usize::MAX).is_null());
+        molex_assembly_free(asm);
+    }
+
+    // -- Entity scalar accessors: null handle returns sentinel --
+
+    #[test]
+    fn entity_scalar_accessors_handle_null() {
+        let null = std::ptr::null::<molex_Entity>();
+        assert_eq!(molex_entity_id(null), 0);
+        // Documented null sentinel: Solvent's integer value (8).
+        assert_eq!(
+            molex_entity_molecule_type(null),
+            molex_MoleculeType::Solvent
+        );
+        assert_eq!(molex_entity_pdb_chain_id(null), -1);
+        assert_eq!(molex_entity_num_atoms(null), 0);
+        assert_eq!(molex_entity_molecule_count(null), 0);
+        assert_eq!(molex_entity_num_residues(null), 0);
+    }
+
+    #[test]
+    fn entity_scalar_accessors_valid_baseline() {
+        let asm = make_assembly_handle();
+        let protein = molex_assembly_entity(asm, 0);
+        assert!(!protein.is_null());
+        assert_eq!(
+            molex_entity_molecule_type(protein),
+            molex_MoleculeType::Protein
+        );
+        assert_eq!(molex_entity_pdb_chain_id(protein), i32::from(b'A'));
+        assert_eq!(molex_entity_num_atoms(protein), 9);
+        assert_eq!(molex_entity_num_residues(protein), 2);
+        molex_assembly_free(asm);
+    }
+
+    // -- Entity indexed accessors: null + out-of-range --
+
+    #[test]
+    fn entity_atom_handles_null_and_out_of_range() {
+        assert!(molex_entity_atom(std::ptr::null(), 0).is_null());
+
+        let asm = make_assembly_handle();
+        let entity = molex_assembly_entity(asm, 0);
+        assert!(!molex_entity_atom(entity, 0).is_null());
+        assert!(molex_entity_atom(entity, 9).is_null());
+        assert!(molex_entity_atom(entity, usize::MAX).is_null());
+        molex_assembly_free(asm);
+    }
+
+    #[test]
+    fn entity_residue_handles_null_and_out_of_range() {
+        assert!(molex_entity_residue(std::ptr::null(), 0).is_null());
+
+        let asm = make_assembly_handle();
+        let entity = molex_assembly_entity(asm, 0);
+        assert!(!molex_entity_residue(entity, 0).is_null());
+        assert!(molex_entity_residue(entity, 2).is_null());
+        assert!(molex_entity_residue(entity, usize::MAX).is_null());
+        molex_assembly_free(asm);
+    }
+
+    #[test]
+    fn entity_residue_num_atoms_handles_null_and_out_of_range() {
+        assert_eq!(
+            molex_entity_residue_num_atoms(std::ptr::null(), 0),
+            0
+        );
+
+        let asm = make_assembly_handle();
+        let entity = molex_assembly_entity(asm, 0);
+        assert_eq!(molex_entity_residue_num_atoms(entity, 0), 5);
+        assert_eq!(molex_entity_residue_num_atoms(entity, 2), 0);
+        assert_eq!(molex_entity_residue_num_atoms(entity, usize::MAX), 0);
+        molex_assembly_free(asm);
+    }
+
+    #[test]
+    fn entity_residue_atom_handles_null_and_out_of_range() {
+        assert!(
+            molex_entity_residue_atom(std::ptr::null(), 0, 0).is_null()
+        );
+
+        let asm = make_assembly_handle();
+        let entity = molex_assembly_entity(asm, 0);
+        // Valid (residue 0, atom 0) resolves.
+        assert!(!molex_entity_residue_atom(entity, 0, 0).is_null());
+        // Out-of-range residue index.
+        assert!(molex_entity_residue_atom(entity, 2, 0).is_null());
+        // In-range residue, out-of-range atom-within-residue. Residue 0
+        // spans flat atoms 0..5, so local index 5 walks past the range
+        // even though that flat slot still exists in the entity.
+        assert!(molex_entity_residue_atom(entity, 0, 5).is_null());
+        assert!(
+            molex_entity_residue_atom(entity, 0, usize::MAX).is_null()
+        );
+        molex_assembly_free(asm);
+    }
+
+    #[test]
+    fn entity_residue_name_single_handles_null_and_polymer() {
+        // Null entity: returns null and writes 0 to out_len.
+        let mut out_len: usize = 99;
+        let p = molex_entity_residue_name_single(
+            std::ptr::null(),
+            &raw mut out_len,
+        );
+        assert!(p.is_null());
+        assert_eq!(out_len, 0);
+
+        let asm = make_assembly_handle();
+        // Polymer entity has no single residue name.
+        let protein = molex_assembly_entity(asm, 0);
+        out_len = 99;
+        let p =
+            molex_entity_residue_name_single(protein, &raw mut out_len);
+        assert!(p.is_null());
+        assert_eq!(out_len, 0);
+
+        // Small-molecule entity exposes its 3-byte residue name.
+        let ligand = molex_assembly_entity(asm, 1);
+        out_len = 0;
+        let p = molex_entity_residue_name_single(ligand, &raw mut out_len);
+        assert!(!p.is_null());
+        assert_eq!(out_len, 3);
+        unsafe {
+            let name = std::slice::from_raw_parts(p, out_len);
+            assert_eq!(name, b"LIG");
+        }
+        molex_assembly_free(asm);
+    }
+
+    // -- Residue accessors: null handle returns sentinel --
+
+    #[test]
+    fn residue_accessors_handle_null() {
+        let null = std::ptr::null::<molex_Residue>();
+
+        let mut out_len: usize = 99;
+        let p = molex_residue_name(null, &raw mut out_len);
+        assert!(p.is_null());
+        assert_eq!(out_len, 0);
+
+        assert_eq!(molex_residue_seq_id(null), 0);
+        assert_eq!(molex_residue_label_seq_id(null), 0);
+        assert_eq!(molex_residue_ins_code(null), 0);
+    }
+
+    #[test]
+    fn residue_accessors_valid_baseline() {
+        let asm = make_assembly_handle();
+        let entity = molex_assembly_entity(asm, 0);
+        let residue = molex_entity_residue(entity, 0);
+        assert!(!residue.is_null());
+
+        let mut out_len: usize = 0;
+        let p = molex_residue_name(residue, &raw mut out_len);
+        assert!(!p.is_null());
+        assert_eq!(out_len, 3);
+        unsafe {
+            let name = std::slice::from_raw_parts(p, out_len);
+            assert_eq!(name, b"ALA");
+        }
+        assert_eq!(molex_residue_label_seq_id(residue), 1);
+        molex_assembly_free(asm);
+    }
+
+    // -- Atom accessors: null handle returns sentinel --
+
+    #[test]
+    fn atom_accessors_handle_null() {
+        let null = std::ptr::null::<molex_Atom>();
+
+        let mut out_len: usize = 99;
+        let p = molex_atom_name(null, &raw mut out_len);
+        assert!(p.is_null());
+        assert_eq!(out_len, 0);
+
+        assert_eq!(molex_atom_atomic_number(null), 0);
+        assert_eq!(molex_atom_occupancy(null), 0.0);
+        assert_eq!(molex_atom_b_factor(null), 0.0);
+        assert_eq!(molex_atom_formal_charge(null), 0);
+
+        // Null atom (and null out buffer) must be a no-op, not a write
+        // through a dangling pointer.
+        let mut xyz = [-1.0f32; 3];
+        molex_atom_position(null, xyz.as_mut_ptr());
+        assert_eq!(xyz, [-1.0, -1.0, -1.0]);
+        let valid_atom_unused = std::ptr::null::<molex_Atom>();
+        molex_atom_position(valid_atom_unused, std::ptr::null_mut());
+    }
+
+    #[test]
+    fn atom_accessors_valid_baseline() {
+        let asm = make_assembly_handle();
+        let entity = molex_assembly_entity(asm, 0);
+        let atom = molex_entity_atom(entity, 0);
+        assert!(!atom.is_null());
+
+        let mut out_len: usize = 0;
+        let p = molex_atom_name(atom, &raw mut out_len);
+        assert!(!p.is_null());
+        assert_eq!(out_len, 4);
+        unsafe {
+            let name = std::slice::from_raw_parts(p, out_len);
+            assert_eq!(name, b"N   ");
+        }
+        assert_eq!(
+            molex_atom_atomic_number(atom),
+            Element::atomic_number(Element::N)
+        );
+
+        let mut xyz = [0.0f32; 3];
+        molex_atom_position(atom, xyz.as_mut_ptr());
+        assert_eq!(xyz, [0.0, 0.0, 0.0]);
+        molex_assembly_free(asm);
+    }
+}

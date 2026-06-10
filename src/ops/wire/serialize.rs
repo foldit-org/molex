@@ -46,7 +46,7 @@ pub fn serialize_assembly(
     serialize_entities(assembly.entities())
 }
 
-/// Serialize a raw entity slice to ASSEM01 binary format.
+/// Serialize a raw entity slice to ASSEM02 binary format.
 ///
 /// Internal helper for in-crate paths that operate on owned entity
 /// slices and don't need an [`Assembly`] wrapper.

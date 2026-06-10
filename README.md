@@ -9,7 +9,7 @@ and serializing molecular structure data.
 - **Entity model** — proteins, nucleic acids, ligands, ions, waters, and cofactors as typed entities
 - **Analyze** — DSSP secondary structure, hydrogen bonds, covalent bonds, disulfide bridges
 - **Transform** — Kabsch alignment, CA extraction, backbone segments
-- **Serialize** — compact binary formats (COORDS01, ASSEM01) for FFI and IPC
+- **Serialize** — compact binary format (ASSEM02) for FFI and IPC
 - **Python bindings** — PyO3 module with AtomWorks/Biotite interop
 
 ## Quick start
@@ -32,8 +32,8 @@ pip install molex
 ```python
 import molex
 
-coords_bytes = molex.pdb_to_coords(open("1ubq.pdb").read())
-pdb_string = molex.coords_to_pdb(coords_bytes)
+assembly_bytes = molex.pdb_to_assembly_bytes(open("1ubq.pdb").read())
+pdb_string = molex.assembly_bytes_to_pdb(assembly_bytes)
 ```
 
 ## Optional features

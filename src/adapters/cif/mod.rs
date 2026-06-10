@@ -1,13 +1,11 @@
 //! mmCIF text-format adapter.
 //!
 //! Two parser paths feed `EntityBuilder`: a hand-rolled streaming fast
-//! scanner and a DOM-backed fallback. The DOM types remain exposed for
-//! typed extractors ([`extract::CoordinateData`],
-//! [`extract::ReflectionData`]).
+//! scanner and a DOM-backed fallback. The DOM types are exposed for
+//! untyped tag-based queries over a parsed [`Document`].
 
 pub mod dom;
 mod dom_build;
-pub mod extract;
 mod fast;
 mod fast_row;
 mod hint;
@@ -17,14 +15,54 @@ mod refuse;
 use std::path::Path;
 
 pub use dom::{Block, ColumnIter, Columns, Document, Loop, RowIter, Value};
-pub use extract::{
-    AtomSite, CifContent, CoordinateData, ExtractionError, ObsDataType,
-    Reflection, ReflectionData, UnitCell,
-};
 pub use parse::{parse, CifParseError};
 
-use crate::entity::molecule::MoleculeEntity;
+use crate::element::Element;
+use crate::entity::molecule::{BuildError, MoleculeEntity};
 use crate::ops::codec::AdapterError;
+use refuse::too_many_chains_error;
+
+// ---------------------------------------------------------------------------
+// Helpers shared by the fast (`fast_row`) and DOM (`dom_build`) decode paths.
+// ---------------------------------------------------------------------------
+
+/// Resolve an atom's [`Element`] from its CIF `type_symbol`, falling back
+/// to the atom name when the symbol is absent, blank, or unrecognised.
+fn resolve_element(type_symbol: Option<&str>, atom_name: &str) -> Element {
+    let trimmed = type_symbol.map(str::trim);
+    match trimmed {
+        Some(s) if !s.is_empty() && s != "." && s != "?" => {
+            let parsed = Element::from_symbol(s);
+            if matches!(parsed, Element::Unknown) {
+                Element::from_atom_name(atom_name)
+            } else {
+                parsed
+            }
+        }
+        _ => Element::from_atom_name(atom_name),
+    }
+}
+
+/// Pack a name into a fixed-width, space-padded byte buffer (truncating at
+/// `N` bytes).
+fn name_to_bytes<const N: usize>(name: &str) -> [u8; N] {
+    let mut buf = [b' '; N];
+    for (i, b) in name.bytes().take(N).enumerate() {
+        buf[i] = b;
+    }
+    buf
+}
+
+/// Map an [`EntityBuilder`](crate::entity::molecule::EntityBuilder)
+/// [`BuildError`] onto the adapter-facing [`AdapterError`].
+fn map_build_error(err: &BuildError) -> AdapterError {
+    match err {
+        BuildError::TooManyChains { limit } => too_many_chains_error(*limit),
+        BuildError::InvalidCoordinate { .. } => {
+            AdapterError::InvalidFormat(err.to_string())
+        }
+    }
+}
 
 /// Parse mmCIF format string to entity list.
 ///

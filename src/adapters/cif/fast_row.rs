@@ -1,11 +1,8 @@
 //! Atom-site column resolution and row -> `AtomRow` decoding used by
 //! the streaming fast path.
 
-use super::refuse::too_many_chains_error;
-use crate::element::Element;
-use crate::entity::molecule::{
-    AtomRow, BuildError, EntityBuilder, MoleculeEntity,
-};
+use super::{map_build_error, name_to_bytes, resolve_element};
+use crate::entity::molecule::{AtomRow, EntityBuilder, MoleculeEntity};
 use crate::ops::codec::AdapterError;
 
 pub(super) struct AtomSiteCols {
@@ -183,30 +180,6 @@ pub(super) fn finish(
     builder.finish().map_err(|e| map_build_error(&e))
 }
 
-pub(super) fn map_build_error(err: &BuildError) -> AdapterError {
-    match err {
-        BuildError::TooManyChains { limit } => too_many_chains_error(*limit),
-        BuildError::InvalidCoordinate { .. } => {
-            AdapterError::InvalidFormat(err.to_string())
-        }
-    }
-}
-
-fn resolve_element(type_symbol: Option<&str>, atom_name: &str) -> Element {
-    let trimmed = type_symbol.map(str::trim);
-    match trimmed {
-        Some(s) if !s.is_empty() && s != "." && s != "?" => {
-            let parsed = Element::from_symbol(s);
-            if matches!(parsed, Element::Unknown) {
-                Element::from_atom_name(atom_name)
-            } else {
-                parsed
-            }
-        }
-        _ => Element::from_atom_name(atom_name),
-    }
-}
-
 fn parse_cif_float(s: &str) -> Option<f64> {
     if is_unknown(s) {
         return None;
@@ -224,12 +197,4 @@ fn parse_int_strict(s: &str) -> Option<i32> {
 
 fn is_unknown(s: &str) -> bool {
     s == "." || s == "?" || s.is_empty()
-}
-
-fn name_to_bytes<const N: usize>(name: &str) -> [u8; N] {
-    let mut buf = [b' '; N];
-    for (i, b) in name.bytes().take(N).enumerate() {
-        buf[i] = b;
-    }
-    buf
 }

@@ -147,7 +147,8 @@ impl NAEntity {
         reason = "gap-splitting logic is inherently nested"
     )]
     pub fn extract_p_atom_segments(&self) -> Vec<Vec<Vec3>> {
-        const MAX_PHOSPHATE_BOND_DIST_SQ: f32 = 8.0 * 8.0;
+        const MAX_PHOSPHATE_BOND_DIST_SQ: f32 =
+            MAX_PHOSPHATE_BOND_DIST * MAX_PHOSPHATE_BOND_DIST;
 
         let mut p_positions = Vec::new();
         for residue in &self.residues {

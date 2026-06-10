@@ -343,6 +343,18 @@ pub(crate) fn deserialize_assembly_entities(
             AdapterError::InvalidFormat("Invalid entity count".to_owned())
         })?) as usize;
 
+    // Reject a count the remaining bytes cannot possibly hold *before*
+    // allocating for it. Each entity contributes at least a fixed-size header
+    // (mol_type + atom_count, plus entity_id under ASSEM02), so an overstated
+    // or corrupt count would otherwise drive a huge `Vec::with_capacity` and
+    // abort the process on allocation failure.
+    let min_entity_header = if has_variants { 9 } else { 5 };
+    if entity_count > (bytes.len() - 12) / min_entity_header {
+        return Err(AdapterError::InvalidFormat(
+            "Entity count exceeds available data".to_owned(),
+        ));
+    }
+
     let ParsedHeaders {
         headers,
         headers_end,

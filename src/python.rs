@@ -471,7 +471,7 @@ fn edit_kind_int(edit: &AssemblyEdit) -> i32 {
 
 /// Python view of a `SetEntityCoords` edit. Returned by
 /// `EditList.set_entity_coords_at`.
-#[pyclass(name = "SetEntityCoordsView", module = "molex")]
+#[pyclass(name = "SetEntityCoordsView", module = "molex", skip_from_py_object)]
 #[derive(Clone)]
 pub struct PySetEntityCoordsView {
     /// Entity whose atoms get repositioned.
@@ -484,7 +484,7 @@ pub struct PySetEntityCoordsView {
 }
 
 /// Python view of a `SetResidueCoords` edit.
-#[pyclass(name = "SetResidueCoordsView", module = "molex")]
+#[pyclass(name = "SetResidueCoordsView", module = "molex", skip_from_py_object)]
 #[derive(Clone)]
 pub struct PySetResidueCoordsView {
     /// Polymer entity that owns the target residue.
@@ -499,7 +499,7 @@ pub struct PySetResidueCoordsView {
 }
 
 /// Python view of a `MutateResidue` edit.
-#[pyclass(name = "MutateResidueView", module = "molex")]
+#[pyclass(name = "MutateResidueView", module = "molex", skip_from_py_object)]
 #[derive(Clone)]
 pub struct PyMutateResidueView {
     /// Polymer entity that owns the target residue.
@@ -520,7 +520,7 @@ pub struct PyMutateResidueView {
 }
 
 /// Python view of a `SetVariants` edit.
-#[pyclass(name = "SetVariantsView", module = "molex")]
+#[pyclass(name = "SetVariantsView", module = "molex", skip_from_py_object)]
 #[derive(Clone)]
 pub struct PySetVariantsView {
     /// Polymer entity that owns the target residue.
@@ -535,7 +535,7 @@ pub struct PySetVariantsView {
 }
 
 /// Python handle wrapping a single `VariantTag`.
-#[pyclass(name = "Variant", module = "molex")]
+#[pyclass(name = "Variant", module = "molex", from_py_object)]
 #[derive(Clone)]
 pub struct PyVariant {
     inner: VariantTag,
@@ -618,7 +618,7 @@ impl PyVariant {
 
 /// Python handle wrapping a single atom row (position + name +
 /// element). Parallels `molex_AtomRow` in C.
-#[pyclass(name = "AtomRow", module = "molex")]
+#[pyclass(name = "AtomRow", module = "molex", from_py_object)]
 #[derive(Clone)]
 pub struct PyAtomRow {
     /// X coordinate.

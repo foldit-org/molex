@@ -52,7 +52,7 @@ pub use ops::codec::AdapterError;
 use pyo3::prelude::*;
 
 #[cfg(feature = "python")]
-#[pymodule(name = "molex")]
+#[pymodule(name = "molex", gil_used = true)]
 fn molex(_py: Python, m: &Bound<PyModule>) -> PyResult<()> {
     // ASSEM01-based IO helpers (replaces the retired COORDS01 surface).
     m.add_function(wrap_pyfunction!(python::pdb_to_assembly_bytes, m)?)?;

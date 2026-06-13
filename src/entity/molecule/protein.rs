@@ -49,8 +49,6 @@ pub struct Sidechain {
     /// Intra-residue bonds as `(atom_idx_a, atom_idx_b)` pairs, local
     /// to this sidechain's `Vec<Atom>`.
     pub bonds: Vec<(usize, usize)>,
-    /// Whether this residue is hydrophobic (Kyte-Doolittle classification).
-    pub is_hydrophobic: bool,
 }
 
 impl Sidechain {
@@ -60,7 +58,6 @@ impl Sidechain {
         Self {
             atoms: Vec::new(),
             bonds: Vec::new(),
-            is_hydrophobic: false,
         }
     }
 

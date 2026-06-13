@@ -148,23 +148,34 @@ impl AminoAcid {
         }
     }
 
-    /// Whether this amino acid is classified as hydrophobic.
+    /// Whether this amino acid carries Rosetta's POLAR residue-type property.
     ///
-    /// Hydrophobic set: Ala, Val, Ile, Leu, Met, Phe, Trp, Pro, Gly.
+    /// Polar set (Rosetta `fa_standard` POLAR property): Arg, Asn, Asp, Gln,
+    /// Glu, His, Lys, Ser, Thr.
     #[must_use]
-    pub const fn is_hydrophobic(self) -> bool {
+    pub const fn is_polar(self) -> bool {
         matches!(
             self,
-            Self::Ala
-                | Self::Val
-                | Self::Ile
-                | Self::Leu
-                | Self::Met
-                | Self::Phe
-                | Self::Trp
-                | Self::Pro
-                | Self::Gly
+            Self::Arg
+                | Self::Asn
+                | Self::Asp
+                | Self::Gln
+                | Self::Glu
+                | Self::His
+                | Self::Lys
+                | Self::Ser
+                | Self::Thr
         )
+    }
+
+    /// Whether this amino acid is hydrophobic, i.e. not polar.
+    ///
+    /// Defined as the complement of [`Self::is_polar`], matching Rosetta's
+    /// binary polar/non-polar partition. Hydrophobic set: Ala, Cys, Gly,
+    /// Ile, Leu, Met, Phe, Pro, Trp, Tyr, Val.
+    #[must_use]
+    pub const fn is_hydrophobic(self) -> bool {
+        !self.is_polar()
     }
 }
 
@@ -390,14 +401,16 @@ mod tests {
     fn is_hydrophobic_matches_reference_table() {
         let hydrophobic = [
             AminoAcid::Ala,
-            AminoAcid::Val,
+            AminoAcid::Cys,
+            AminoAcid::Gly,
             AminoAcid::Ile,
             AminoAcid::Leu,
             AminoAcid::Met,
             AminoAcid::Phe,
-            AminoAcid::Trp,
             AminoAcid::Pro,
-            AminoAcid::Gly,
+            AminoAcid::Trp,
+            AminoAcid::Tyr,
+            AminoAcid::Val,
         ];
         for &aa in ALL {
             let expected = hydrophobic.contains(&aa);

@@ -72,7 +72,6 @@ fn sidechain_empty() {
     assert!(sc.is_empty());
     assert!(sc.atoms.is_empty());
     assert!(sc.bonds.is_empty());
-    assert!(!sc.is_hydrophobic);
 }
 
 #[test]
@@ -87,7 +86,6 @@ fn sidechain_is_empty_with_atoms() {
             formal_charge: 0,
         }],
         bonds: Vec::new(),
-        is_hydrophobic: false,
     };
     assert!(!sc.is_empty());
 }

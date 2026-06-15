@@ -284,8 +284,7 @@ fn parse_entity_headers(
 /// derived data populated.
 ///
 /// Runs [`Assembly::new`] over the decoded entities so callers see
-/// `ss_types`, `hbonds`, and `cross_entity_bonds` without a follow-up
-/// step.
+/// `ss_types` without a follow-up step.
 ///
 /// # Errors
 ///

@@ -70,11 +70,14 @@ For NMR ensembles or multi-model trajectories, the adapter-level
 use molex::{detect_disulfides, Assembly};
 use molex::analysis::{infer_bonds, DEFAULT_TOLERANCE};
 
-// Top-level pipeline: build an Assembly to get DSSP, H-bonds,
-// and cross-entity disulfides eagerly computed and kept in sync.
+// Top-level pipeline: build an Assembly to get DSSP secondary
+// structure eagerly computed and kept in sync.
 let assembly = Assembly::new(entities);
-let hbonds = assembly.hbonds();
 let ss     = assembly.ss_types(entity_id);
+
+// Disulfide + backbone-H-bond geometry is computed on demand for
+// rendering, not stored on the Assembly:
+let connections = assembly.detect_fallback_connections();
 
 // Or call the building blocks directly:
 let bonds      = infer_bonds(atoms, DEFAULT_TOLERANCE);   // distance-based

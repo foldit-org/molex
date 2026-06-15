@@ -54,15 +54,18 @@ for entity in &proteins {
 DSSP and backbone H-bond detection are run automatically when you build an `Assembly`:
 
 ```rust,ignore
-use molex::{Assembly, SSType};
+use molex::{Assembly, ConnectionType, SSType};
 
 let assembly = Assembly::new(entities);
 let protein_id = assembly.entities()[0].id();
 for (i, ss) in assembly.ss_types(protein_id).iter().enumerate() {
     println!("Residue {}: {:?}", i, ss); // Helix, Sheet, or Coil
 }
-for hb in assembly.hbonds() {
-    println!("donor {} -> acceptor {} (E = {} kcal/mol)", hb.donor, hb.acceptor, hb.energy);
+// Backbone H-bonds are computed on demand for rendering, not stored.
+if let Some(hbonds) = assembly.detect_fallback_connections().get(&ConnectionType::HBond) {
+    for link in hbonds {
+        println!("hbond {:?} -> {:?}", link.a, link.b);
+    }
 }
 ```
 

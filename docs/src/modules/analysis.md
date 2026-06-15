@@ -47,14 +47,16 @@ Distance-based inference using element covalent radii with a configurable tolera
 
 ### Hydrogen bonds
 
-Backbone H-bond detection is an internal pipeline step of `Assembly`; the function `analysis::bonds::hydrogen::detect_hbonds(&[ResidueBackbone])` is `pub(crate)`. Read H-bonds via `assembly.hbonds()`:
+Backbone H-bond detection is an in-crate helper; the function `analysis::bonds::hydrogen::detect_hbonds(&[ResidueBackbone])` is `pub(crate)`. `Assembly` does not store H-bonds; the viewer-facing geometry is computed on demand via `assembly.detect_fallback_connections()`, which returns backbone H-bonds (and disulfides) keyed by `ConnectionType`:
 
 ```rust,ignore
-use molex::Assembly;
+use molex::{Assembly, ConnectionType};
 
 let assembly = Assembly::new(entities);
-for hb in assembly.hbonds() {
-    println!("donor={} acceptor={} energy={}", hb.donor, hb.acceptor, hb.energy);
+if let Some(hbonds) = assembly.detect_fallback_connections().get(&ConnectionType::HBond) {
+    for link in hbonds {
+        println!("a={:?} b={:?}", link.a, link.b);
+    }
 }
 ```
 
@@ -68,7 +70,7 @@ use molex::{detect_disulfides, CovalentBond};
 let disulfides: Vec<CovalentBond> = detect_disulfides(&entities);
 ```
 
-Scans every protein entity for CYS SG atoms and emits one `CovalentBond` (with `AtomId` endpoints) per SG-SG pair within 1.5 to 2.5 angstroms. Also surfaced via `assembly.disulfides()`.
+Scans every protein entity for CYS SG atoms and emits one `CovalentBond` (with `AtomId` endpoints) per SG-SG pair within 1.5 to 2.5 angstroms. `Assembly` does not store disulfides; the same pairs surface for rendering via `assembly.detect_fallback_connections()` under `ConnectionType::Disulfide`.
 
 ## Bounding box (`analysis::aabb`)
 

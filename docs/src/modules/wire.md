@@ -82,6 +82,5 @@ residues emits a `variant_residue_count` of 0 (4 bytes).
 ```
 
 Occupancy and b_factor are **not** preserved on the wire; deserialize
-resets them to 1.0 and 0.0 respectively. Derived data (`ss_types`,
-`hbonds`, `cross_entity_bonds`) is recomputed by `Assembly::new` at
-deserialize time.
+resets them to 1.0 and 0.0 respectively. Derived data (`ss_types`) is
+recomputed by `Assembly::new` at deserialize time.

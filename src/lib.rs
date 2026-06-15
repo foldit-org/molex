@@ -23,6 +23,8 @@ pub mod atom_id;
 pub mod bond;
 /// Static chemistry tables: amino acids, nucleotides, atom names.
 pub mod chemistry;
+/// Inter-entity rendering connections (`ConnectionType`, `AtomEnd`).
+pub mod connection;
 pub mod element;
 pub mod entity;
 pub mod ops;
@@ -40,6 +42,7 @@ pub use analysis::{detect_disulfides, BondOrder, HBond, SSType};
 pub use assembly::{Assembly, CoordinateSnapshot};
 pub use atom_id::AtomId;
 pub use bond::CovalentBond;
+pub use connection::{AtomEnd, AtomLink, ConnectionType};
 pub use element::Element;
 pub use entity::molecule::atom::Atom;
 pub use entity::molecule::id::EntityId;

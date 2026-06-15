@@ -159,11 +159,6 @@ fn from_arcs_matches_new_over_same_entities() {
     assert_eq!(from_arcs.generation(), fresh.generation());
 
     // Same derived outputs.
-    assert_eq!(from_arcs.hbonds().len(), fresh.hbonds().len());
-    assert_eq!(
-        from_arcs.cross_entity_bonds().len(),
-        fresh.cross_entity_bonds().len(),
-    );
     assert_eq!(from_arcs.ss_types(a_id).len(), fresh.ss_types(a_id).len());
     assert_eq!(from_arcs.ss_types(b_id).len(), fresh.ss_types(b_id).len());
 }
@@ -218,72 +213,77 @@ fn mutation_result_matches_fresh_build() {
     // Fresh path: build from both at once.
     let fresh = Assembly::new(vec![a, b]);
 
-    assert_eq!(mutated.hbonds().len(), fresh.hbonds().len());
-    assert_eq!(
-        mutated.cross_entity_bonds().len(),
-        fresh.cross_entity_bonds().len(),
-    );
     assert_eq!(mutated.ss_types(a_id).len(), fresh.ss_types(a_id).len());
 }
 
-// -- Disulfide handling --
+// -- Connections (rendering metadata) --
 
 #[test]
-fn disulfides_filtered_and_cross_bonds_populated() {
+fn connections_default_empty() {
     let mut alloc = EntityIdAllocator::new();
-    // Two cysteine entities with SGs at ~2.03 A separation.
-    let sg_a = Vec3::new(0.0, 0.0, 0.0);
-    let sg_b = Vec3::new(2.03, 0.0, 0.0);
-    let ca = cys_residue_with_sg(&mut alloc, b'A', sg_a);
-    let cb = cys_residue_with_sg(&mut alloc, b'B', sg_b);
-
-    let assembly = Assembly::new(vec![ca, cb]);
-    assert_eq!(assembly.cross_entity_bonds().len(), 1);
-    assert_eq!(assembly.disulfides().count(), 1);
+    let dipep = make_dipeptide(&mut alloc, b'A', Vec3::ZERO);
+    let assembly = Assembly::new(vec![dipep]);
+    assert!(assembly.connections().is_empty());
 }
 
 #[test]
-fn remove_entity_purges_touching_cross_bonds() {
+fn set_connections_roundtrips() {
+    use crate::connection::{AtomEnd, AtomLink, ConnectionType};
+
     let mut alloc = EntityIdAllocator::new();
-    let sg_a = Vec3::new(0.0, 0.0, 0.0);
-    let sg_b = Vec3::new(2.03, 0.0, 0.0);
-    let ca = cys_residue_with_sg(&mut alloc, b'A', sg_a);
-    let cb = cys_residue_with_sg(&mut alloc, b'B', sg_b);
-    let cb_id = cb.id();
+    let dipep = make_dipeptide(&mut alloc, b'A', Vec3::ZERO);
+    let eid = dipep.id();
+    let mut assembly = Assembly::new(vec![dipep]);
 
-    let mut assembly = Assembly::new(vec![ca, cb]);
-    assert_eq!(assembly.cross_entity_bonds().len(), 1);
-
-    assembly.remove_entity(cb_id);
-    assert!(assembly.cross_entity_bonds().is_empty());
-    assert_eq!(assembly.disulfides().count(), 0);
-}
-
-// -- bonds_touching --
-
-#[test]
-fn bonds_touching_walks_both_intra_and_cross() {
-    let mut alloc = EntityIdAllocator::new();
-    let sg_a = Vec3::new(0.0, 0.0, 0.0);
-    let sg_b = Vec3::new(2.03, 0.0, 0.0);
-    let ca = cys_residue_with_sg(&mut alloc, b'A', sg_a);
-    let ca_id = ca.id();
-    let cb = cys_residue_with_sg(&mut alloc, b'B', sg_b);
-    let assembly = Assembly::new(vec![ca, cb]);
-
-    // SG in chain A sits at index 5 after canonical ordering
-    // (N, CA, C, O, CB, SG).
-    let sg_atom = AtomId {
-        entity: ca_id,
-        index: 5,
-    };
-    let neighbors: Vec<AtomId> = assembly.bonds_touching(sg_atom).collect();
-
-    // Must include the CB neighbor (intra) and the SG partner on
-    // chain B (cross). That is at least two.
-    assert!(
-        neighbors.len() >= 2,
-        "expected >=2 neighbors for SG, got {}: {neighbors:?}",
-        neighbors.len()
+    let mut map: HashMap<ConnectionType, Vec<AtomLink>> = HashMap::new();
+    let link = AtomLink::new(
+        AtomEnd::Atom(AtomId {
+            entity: eid,
+            index: 0,
+        }),
+        AtomEnd::Atom(AtomId {
+            entity: eid,
+            index: 2,
+        }),
     );
+    let _ = map.insert(ConnectionType::Clash, vec![link]);
+    assembly.set_connections(map);
+
+    let got = assembly.connections();
+    assert_eq!(got.len(), 1);
+    assert_eq!(got.get(&ConnectionType::Clash), Some(&vec![link]));
+}
+
+#[test]
+fn detect_fallback_connections_finds_disulfide() {
+    use crate::connection::{AtomEnd, ConnectionType};
+
+    let mut alloc = EntityIdAllocator::new();
+    let sg_a = Vec3::new(0.0, 0.0, 0.0);
+    let sg_b = Vec3::new(2.03, 0.0, 0.0);
+    let ca = cys_residue_with_sg(&mut alloc, b'A', sg_a);
+    let cb = cys_residue_with_sg(&mut alloc, b'B', sg_b);
+    let assembly = Assembly::new(vec![ca, cb]);
+
+    let fallback = assembly.detect_fallback_connections();
+    let disulfides = fallback.get(&ConnectionType::Disulfide).unwrap();
+    assert_eq!(disulfides.len(), 1);
+    let link = disulfides[0];
+    assert!(matches!(link.a, AtomEnd::Atom(_)));
+    assert!(matches!(link.b, AtomEnd::Atom(_)));
+    // Fallback geometry carries no intensity.
+    assert_eq!(link.magnitude, None);
+}
+
+#[test]
+fn with_magnitude_carries_scalar() {
+    use crate::connection::{AtomEnd, AtomLink};
+
+    let mut alloc = EntityIdAllocator::new();
+    let end = AtomEnd::Atom(AtomId {
+        entity: alloc.allocate(),
+        index: 0,
+    });
+    let link = AtomLink::with_magnitude(end, end, 0.75);
+    assert_eq!(link.magnitude, Some(0.75));
 }

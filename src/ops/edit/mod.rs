@@ -161,8 +161,7 @@ impl Assembly {
     /// Apply a single [`AssemblyEdit`] to this assembly.
     ///
     /// On success the generation counter is incremented and derived
-    /// data (`ss_types`, `hbonds`, `cross_entity_bonds`) is recomputed
-    /// exactly once.
+    /// data (`ss_types`) is recomputed exactly once.
     ///
     /// # Errors
     ///

@@ -1,10 +1,12 @@
-//! Top-level `Assembly` container: entities, cross-entity bonds, and
-//! eagerly-recomputed derived data (secondary structure + backbone H-bonds).
+//! Top-level `Assembly` container: entities plus eagerly-recomputed
+//! secondary structure.
 //!
 //! `Assembly` is the host-owned structural source of truth. Every
 //! `&mut Assembly` mutation bumps the generation counter and recomputes
-//! all derived data before returning, so readers of a given snapshot see
-//! consistent `ss_types`, `hbonds`, and `cross_entity_bonds`.
+//! per-entity secondary structure before returning, so readers of a given
+//! snapshot see consistent `ss_types`. Rendering connections (disulfides,
+//! backbone H-bonds, etc.) are owner-populated via `set_connections`, not
+//! derived here.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -16,25 +18,28 @@ use crate::analysis::bonds::hydrogen::{detect_hbonds, HBond};
 use crate::analysis::ss::dssp::classify;
 use crate::analysis::SSType;
 use crate::atom_id::AtomId;
-use crate::bond::CovalentBond;
+use crate::connection::{AtomEnd, AtomLink, ConnectionType};
 use crate::entity::molecule::id::EntityId;
 use crate::entity::molecule::MoleculeEntity;
 
-/// Top-level container of entities plus eagerly-computed derived data.
+/// Top-level container of entities plus eagerly-computed secondary
+/// structure.
 ///
 /// Each entity is stored behind an `Arc`, so cloning an `Assembly` is
 /// O(entities) of refcount bumps, independent of the total atom count.
 /// Mutations clone only the touched entity (`Arc::make_mut`) and leave
-/// the rest aliased with prior snapshots. Derived data (`ss_types`,
-/// `hbonds`) is also `Arc`-shared so snapshots that didn't trigger a
-/// rebuild stay aliased. The generation counter increments on every
-/// mutation so consumers can detect snapshots cheaply.
+/// the rest aliased with prior snapshots. Per-entity `ss_types` is also
+/// `Arc`-shared so snapshots that didn't trigger a rebuild stay aliased.
+/// The generation counter increments on every mutation so consumers can
+/// detect snapshots cheaply.
 #[derive(Debug, Clone)]
 pub struct Assembly {
     entities: Vec<Arc<MoleculeEntity>>,
-    cross_entity_bonds: Vec<CovalentBond>,
     ss_types: HashMap<EntityId, Arc<Vec<SSType>>>,
-    hbonds: Arc<Vec<HBond>>,
+    /// Owner-populated rendering connections, keyed by category. NOT
+    /// computed by `recompute_derived`; the assembly's owner selects a
+    /// provider and sets this. Empty until populated.
+    connections: HashMap<ConnectionType, Vec<AtomLink>>,
     generation: u64,
 }
 
@@ -94,16 +99,14 @@ impl CoordinateSnapshot {
 impl Assembly {
     /// Build an `Assembly` from a collection of entities.
     ///
-    /// Runs disulfide detection, per-entity DSSP classification, and
-    /// flat-backbone H-bond detection to populate all derived data.
+    /// Runs per-entity DSSP classification to populate `ss_types`.
     /// `generation` is initialized to 0.
     #[must_use]
     pub fn new(entities: Vec<MoleculeEntity>) -> Self {
         let mut this = Self {
             entities: entities.into_iter().map(Arc::new).collect(),
-            cross_entity_bonds: Vec::new(),
             ss_types: HashMap::new(),
-            hbonds: Arc::new(Vec::new()),
+            connections: HashMap::new(),
             generation: 0,
         };
         this.recompute_derived();
@@ -117,17 +120,16 @@ impl Assembly {
     /// already keep `Arc<MoleculeEntity>` snapshots (e.g. foldit's
     /// `EntityStore`) can hand them straight in instead of deep-cloning
     /// each payload only to have `new` re-`Arc` it. Runs the same
-    /// `recompute_derived` as `new`, so all derived data (disulfides,
-    /// DSSP, H-bonds) is populated identically. `generation` is
-    /// initialized to 0; stamp it via [`Assembly::set_generation`] if the
-    /// host tracks its own version counter.
+    /// `recompute_derived` as `new`, so per-entity DSSP classification is
+    /// populated identically. `generation` is initialized to 0; stamp it
+    /// via [`Assembly::set_generation`] if the host tracks its own version
+    /// counter.
     #[must_use]
     pub fn from_arcs(entities: Vec<Arc<MoleculeEntity>>) -> Self {
         let mut this = Self {
             entities,
-            cross_entity_bonds: Vec::new(),
             ss_types: HashMap::new(),
-            hbonds: Arc::new(Vec::new()),
+            connections: HashMap::new(),
             generation: 0,
         };
         this.recompute_derived();
@@ -170,15 +172,6 @@ impl Assembly {
         self.generation = generation;
     }
 
-    /// Backbone hydrogen bonds (Kabsch-Sander) across all protein
-    /// entities. Donor and acceptor indices refer to the flattened
-    /// per-protein-entity backbone sequence produced by concatenating
-    /// `ProteinEntity::to_backbone()` in entity order.
-    #[must_use]
-    pub fn hbonds(&self) -> &[HBond] {
-        &self.hbonds
-    }
-
     /// Secondary structure classification for an entity.
     ///
     /// Returns an empty slice for entities that don't have an SS
@@ -189,40 +182,94 @@ impl Assembly {
         self.ss_types.get(&id).map_or(&[], |ss| ss.as_slice())
     }
 
-    /// Cross-entity covalent bonds. In this migration this contains
-    /// disulfides only (decision #12); same-chain SG-SG bridges are
-    /// also collected here rather than on the owning `ProteinEntity`.
+    /// Current rendering connections, keyed by category.
     #[must_use]
-    pub fn cross_entity_bonds(&self) -> &[CovalentBond] {
-        &self.cross_entity_bonds
+    pub fn connections(&self) -> &HashMap<ConnectionType, Vec<AtomLink>> {
+        &self.connections
     }
 
-    /// All atoms bonded to `atom`, yielding the far endpoint of each
-    /// matching bond. Walks the owning entity's intra-entity bond list
-    /// and the assembly's `cross_entity_bonds`.
-    pub fn bonds_touching(
+    /// Replace the rendering connections wholesale. The owner re-applies
+    /// the selected provider's set on every publish.
+    pub fn set_connections(
+        &mut self,
+        connections: HashMap<ConnectionType, Vec<AtomLink>>,
+    ) {
+        self.connections = connections;
+    }
+
+    /// Compute the viewer-only fallback connections (disulfides and
+    /// backbone hydrogen bonds) from geometry. Used when no host provider
+    /// supplies connections. Pure: does not mutate `self`.
+    #[must_use]
+    pub fn detect_fallback_connections(
         &self,
-        atom: AtomId,
-    ) -> impl Iterator<Item = AtomId> + '_ {
-        let intra = self
-            .entity(atom.entity)
-            .and_then(entity_bonds)
-            .unwrap_or(&[])
+    ) -> HashMap<ConnectionType, Vec<AtomLink>> {
+        let mut out = HashMap::new();
+
+        let disulfides: Vec<AtomLink> = detect_disulfides(&self.entities)
             .iter()
-            .filter_map(move |b| other_endpoint(b, atom));
-        let cross = self
-            .cross_entity_bonds
-            .iter()
-            .filter_map(move |b| other_endpoint(b, atom));
-        intra.chain(cross)
+            .map(|b| AtomLink::new(AtomEnd::Atom(b.a), AtomEnd::Atom(b.b)))
+            .collect();
+        if !disulfides.is_empty() {
+            let _ = out.insert(ConnectionType::Disulfide, disulfides);
+        }
+
+        let hbonds = self.fallback_hbond_links();
+        if !hbonds.is_empty() {
+            let _ = out.insert(ConnectionType::HBond, hbonds);
+        }
+
+        out
     }
 
-    /// Cross-entity disulfide bonds: pairs where both endpoints
-    /// resolve to an SG atom inside a CYS residue.
-    pub fn disulfides(&self) -> impl Iterator<Item = &CovalentBond> + '_ {
-        self.cross_entity_bonds
+    /// Resolve the flat-backbone hbond list to per-entity atom-pair links,
+    /// mirroring the viewer's flat-to-atom resolution: donor N to acceptor
+    /// carbonyl C.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "atom indices are bounded by entity size (< u32::MAX)"
+    )]
+    fn fallback_hbond_links(&self) -> Vec<AtomLink> {
+        let mut flat_to_atoms: Vec<[AtomId; 4]> = Vec::new();
+        for entity in &self.entities {
+            let Some(protein) = entity.as_protein() else {
+                continue;
+            };
+            let eid = protein.id;
+            for residue in &protein.residues {
+                let start = residue.atom_range.start as u32;
+                flat_to_atoms.push([
+                    AtomId {
+                        entity: eid,
+                        index: start,
+                    },
+                    AtomId {
+                        entity: eid,
+                        index: start + 1,
+                    },
+                    AtomId {
+                        entity: eid,
+                        index: start + 2,
+                    },
+                    AtomId {
+                        entity: eid,
+                        index: start + 3,
+                    },
+                ]);
+            }
+        }
+
+        compute_flat_hbonds(&self.entities)
             .iter()
-            .filter(|b| self.is_cys_sg(b.a) && self.is_cys_sg(b.b))
+            .filter_map(|h| {
+                let donor = flat_to_atoms.get(h.donor)?;
+                let acceptor = flat_to_atoms.get(h.acceptor)?;
+                Some(AtomLink::new(
+                    AtomEnd::Atom(donor[0]),
+                    AtomEnd::Atom(acceptor[2]),
+                ))
+            })
+            .collect()
     }
 
     // -- Mutation methods --------------------------------------------
@@ -236,15 +283,14 @@ impl Assembly {
     // queue and leaves peer plugins one generation behind.
 
     /// Append an entity. Bumps the generation counter and recomputes
-    /// all derived data.
+    /// per-entity secondary structure.
     pub(crate) fn add_entity(&mut self, entity: MoleculeEntity) {
         self.entities.push(Arc::new(entity));
         self.after_mutation();
     }
 
-    /// Remove an entity by id. Any `cross_entity_bonds` touching the
-    /// removed entity are purged as part of the derived-data
-    /// recomputation.
+    /// Remove an entity by id. Bumps the generation counter and
+    /// recomputes per-entity secondary structure.
     pub(crate) fn remove_entity(&mut self, id: EntityId) {
         self.entities.retain(|e| e.id() != id);
         let _ = self.ss_types.remove(&id);
@@ -274,52 +320,7 @@ impl Assembly {
     }
 
     fn recompute_derived(&mut self) {
-        self.cross_entity_bonds = detect_disulfides(&self.entities);
         self.ss_types = compute_per_entity_ss(&self.entities);
-        self.hbonds = Arc::new(compute_flat_hbonds(&self.entities));
-    }
-
-    fn is_cys_sg(&self, atom: AtomId) -> bool {
-        let Some(entity) = self.entity(atom.entity) else {
-            return false;
-        };
-        let Some(protein) = entity.as_protein() else {
-            return false;
-        };
-        let idx = atom.index as usize;
-        let Some(residue) = protein
-            .residues
-            .iter()
-            .find(|r| r.atom_range.contains(&idx))
-        else {
-            return false;
-        };
-        if trimmed(&residue.name) != b"CYS" {
-            return false;
-        }
-        let Some(atom) = protein.atoms.get(idx) else {
-            return false;
-        };
-        trimmed_atom_name(&atom.name) == b"SG"
-    }
-}
-
-fn entity_bonds(entity: &MoleculeEntity) -> Option<&[CovalentBond]> {
-    match entity {
-        MoleculeEntity::Protein(e) => Some(&e.bonds),
-        MoleculeEntity::NucleicAcid(e) => Some(&e.bonds),
-        MoleculeEntity::SmallMolecule(e) => Some(&e.bonds),
-        MoleculeEntity::Bulk(_) => None,
-    }
-}
-
-fn other_endpoint(bond: &CovalentBond, atom: AtomId) -> Option<AtomId> {
-    if bond.a == atom {
-        Some(bond.b)
-    } else if bond.b == atom {
-        Some(bond.a)
-    } else {
-        None
     }
 }
 
@@ -353,26 +354,6 @@ fn compute_flat_hbonds<E: std::borrow::Borrow<MoleculeEntity>>(
         flat.extend(protein.to_backbone());
     }
     detect_hbonds(&flat)
-}
-
-fn trimmed(name: &[u8; 3]) -> &[u8] {
-    let mut end = name.len();
-    while end > 0 && (name[end - 1] == b' ' || name[end - 1] == 0) {
-        end -= 1;
-    }
-    &name[..end]
-}
-
-fn trimmed_atom_name(name: &[u8; 4]) -> &[u8] {
-    let mut end = name.len();
-    while end > 0 && (name[end - 1] == b' ' || name[end - 1] == 0) {
-        end -= 1;
-    }
-    let mut start = 0;
-    while start < end && (name[start] == b' ' || name[start] == 0) {
-        start += 1;
-    }
-    &name[start..end]
 }
 
 #[cfg(test)]

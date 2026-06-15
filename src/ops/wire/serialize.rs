@@ -10,8 +10,8 @@ use crate::ops::codec::AdapterError;
 
 /// Serialize an [`Assembly`] to ASSEM02 binary format.
 ///
-/// Writes the entity list only; derived fields (`ss_types`, `hbonds`,
-/// `cross_entity_bonds`, `generation`) are rebuilt by
+/// Writes the entity list only; derived data (`ss_types`, `generation`)
+/// is rebuilt by
 /// [`deserialize_assembly`](super::deserialize::deserialize_assembly) via
 /// [`Assembly::new`].
 ///

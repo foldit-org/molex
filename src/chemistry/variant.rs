@@ -29,9 +29,10 @@ pub enum VariantTag {
     NTerminus,
     /// Chain C-terminus patch.
     CTerminus,
-    /// Participates in a disulfide bond. Partner is resolved by
-    /// callers via `Assembly::cross_entity_bonds` / `disulfides` — the
-    /// tag is purely a flag.
+    /// Participates in a disulfide bond. The partner is not stored on
+    /// the tag; callers recover the SG-SG pairing on demand from geometry
+    /// via `detect_disulfides` (surfaced for rendering through
+    /// `Assembly::detect_fallback_connections`). The tag is purely a flag.
     Disulfide,
     /// Non-canonical protonation state.
     Protonation(ProtonationState),

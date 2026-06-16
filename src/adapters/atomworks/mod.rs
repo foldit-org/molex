@@ -41,10 +41,13 @@ pub use from_array::{
     parse_file_to_entities,
 };
 use pyo3::prelude::*;
+// The shared per-atom column collector. Used by the Biotite bridge in
+// `to_array.rs` and by the native numpy read path in `python::arrays`.
+pub(crate) use to_array::collect_atom_data;
 pub use to_array::{
-    assembly_bytes_to_arrays, assembly_bytes_to_atom_array,
-    assembly_bytes_to_atom_array_plus, entities_to_atom_array,
-    entities_to_atom_array_parsed, entities_to_atom_array_plus, AtomArrays,
+    assembly_bytes_to_atom_array, assembly_bytes_to_atom_array_plus,
+    entities_to_atom_array, entities_to_atom_array_parsed,
+    entities_to_atom_array_plus,
 };
 
 use crate::entity::molecule::MoleculeType;

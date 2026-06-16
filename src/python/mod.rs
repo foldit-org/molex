@@ -1,6 +1,16 @@
-//! Python bindings for parsing structure files into ASSEM02 bytes and
-//! emitting PDB from ASSEM02 bytes. AtomArray interop lives in
+//! Python bindings for the `Assembly` object graph and the edit / DELTA01
+//! handle surface.
+//!
+//! The documented default for a normal caller is the object API: parse a
+//! structure file with `Assembly.from_pdb` / `from_mmcif` / `from_bcif`, walk
+//! `entities()` -> `Entity` -> `residues()` -> `Residue`, and read atoms as
+//! numpy columns via `to_arrays()`. AtomArray (Biotite) interop lives in
 //! `adapters::atomworks`.
+//!
+//! The byte-blob free functions (`pdb_to_assembly_bytes` et al. in the `io`
+//! submodule, `assembly_bytes_to_arrays` in the `arrays` submodule) are
+//! transport/serialization helpers kept for the plugin wire protocol, not the
+//! front door.
 //!
 //! Handle-based surface (`Assembly`, `EditList`, `Variant`, `AtomRow`,
 //! `ProtonationState`) parallels the C API in `c_api::edit` per
@@ -9,7 +19,8 @@
 use glam::Vec3;
 use pyo3::prelude::*;
 
-use crate::adapters::{cif, pdb};
+use self::arrays::entities_to_arrays;
+use crate::adapters::{bcif, cif, pdb};
 use crate::assembly::Assembly;
 use crate::chemistry::variant::{ProtonationState, VariantTag};
 use crate::element::Element;
@@ -19,74 +30,24 @@ use crate::ops::edit::AssemblyEdit;
 use crate::ops::wire::delta::{
     deserialize_edits, serialize_edits, DeltaSerializeError,
 };
-use crate::ops::wire::{
-    assembly_bytes, deserialize_assembly, serialize_assembly,
+use crate::ops::wire::{deserialize_assembly, serialize_assembly};
+
+mod arrays;
+mod entity;
+mod io;
+mod views;
+mod walk;
+
+pub use self::arrays::{assembly_bytes_to_arrays, AtomArrays};
+pub use self::entity::{PyEntity, PyResidue};
+pub use self::io::{
+    assembly_bytes_to_pdb, bcif_to_assembly_bytes, deserialize_assembly_bytes,
+    mmcif_to_assembly_bytes, pdb_to_assembly_bytes,
 };
-
-/// Parse a PDB string and emit ASSEM02 binary bytes.
-///
-/// # Errors
-///
-/// Returns a `PyValueError` if the PDB string cannot be parsed.
-#[pyfunction]
-#[allow(clippy::needless_pass_by_value)]
-pub fn pdb_to_assembly_bytes(pdb_str: String) -> PyResult<Vec<u8>> {
-    let entities = pdb::pdb_str_to_entities(&pdb_str).map_err(|e| {
-        PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
-    })?;
-    assembly_bytes(&entities).map_err(|e| {
-        PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
-    })
-}
-
-/// Parse an mmCIF string and emit ASSEM02 binary bytes.
-///
-/// # Errors
-///
-/// Returns a `PyValueError` if the mmCIF string cannot be parsed.
-#[pyfunction]
-#[allow(clippy::needless_pass_by_value)]
-pub fn mmcif_to_assembly_bytes(cif_str: String) -> PyResult<Vec<u8>> {
-    let entities = cif::mmcif_str_to_entities(&cif_str).map_err(|e| {
-        PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
-    })?;
-    assembly_bytes(&entities).map_err(|e| {
-        PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
-    })
-}
-
-/// Decode ASSEM02 (or legacy ASSEM01) bytes and emit a PDB-format
-/// string.
-///
-/// # Errors
-///
-/// Returns a `PyValueError` if the bytes cannot be deserialized.
-#[pyfunction]
-#[allow(clippy::needless_pass_by_value)]
-pub fn assembly_bytes_to_pdb(bytes: Vec<u8>) -> PyResult<String> {
-    let assembly = deserialize_assembly(&bytes).map_err(|e| {
-        PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
-    })?;
-    pdb::assembly_to_pdb(&assembly).map_err(|e| {
-        PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
-    })
-}
-
-/// Round-trip ASSEM01 bytes through `Assembly` and back (validation).
-///
-/// # Errors
-///
-/// Returns a `PyValueError` if the bytes cannot be deserialized or
-/// re-serialized.
-#[pyfunction]
-#[allow(clippy::needless_pass_by_value)]
-pub fn deserialize_assembly_bytes(bytes: Vec<u8>) -> PyResult<Vec<u8>> {
-    deserialize_assembly(&bytes)
-        .and_then(|assembly| serialize_assembly(&assembly))
-        .map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
-        })
-}
+pub use self::views::{
+    PyMutateResidueView, PySetEntityCoordsView, PySetResidueCoordsView,
+    PySetVariantsView,
+};
 
 fn value_err<E: std::fmt::Display>(e: E) -> PyErr {
     PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
@@ -179,6 +140,94 @@ impl PyAssembly {
     pub fn apply_delta01(&mut self, bytes: Vec<u8>) -> PyResult<()> {
         let edits = deserialize_edits(&bytes).map_err(value_err)?;
         self.inner.apply_edits(&edits).map_err(value_err)
+    }
+
+    /// Recompute per-entity secondary structure in place. Construction and
+    /// the parse staticmethods leave SS empty (it is expensive); call this
+    /// when a downstream consumer needs SS populated.
+    pub fn recompute_ss(&mut self) {
+        self.inner.recompute_ss();
+    }
+
+    // Object navigation. The documented default for a normal caller: parse
+    // with `from_pdb` / `from_mmcif` / `from_bcif`, then walk `entities()`
+    // -> `Entity` -> `residues()` -> `Residue`, and read atoms as numpy
+    // columns via `to_arrays()`. Each `Entity` holds an `Arc<MoleculeEntity>`
+    // refcount clone of the assembly's own entity, so navigation is cheap and
+    // the flat per-atom arrays are built lazily through the shared
+    // entities -> arrays core.
+
+    /// Parse a PDB string into an `Assembly`. Raw ingest: atoms are
+    /// completed (missing heavy atoms filled) during classification.
+    /// Secondary structure is left empty; call `recompute_ss()` to populate.
+    ///
+    /// # Errors
+    ///
+    /// `PyValueError` if the PDB string cannot be parsed.
+    #[staticmethod]
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn from_pdb(text: String) -> PyResult<Self> {
+        let entities = pdb::pdb_str_to_entities(&text).map_err(value_err)?;
+        Ok(Self {
+            inner: Assembly::new(entities),
+        })
+    }
+
+    /// Parse an mmCIF string into an `Assembly`. Raw ingest (see `from_pdb`).
+    ///
+    /// # Errors
+    ///
+    /// `PyValueError` if the mmCIF string cannot be parsed.
+    #[staticmethod]
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn from_mmcif(text: String) -> PyResult<Self> {
+        let entities = cif::mmcif_str_to_entities(&text).map_err(value_err)?;
+        Ok(Self {
+            inner: Assembly::new(entities),
+        })
+    }
+
+    /// Parse BinaryCIF bytes into an `Assembly`. Raw ingest (see `from_pdb`).
+    ///
+    /// # Errors
+    ///
+    /// `PyValueError` if the BinaryCIF bytes cannot be parsed.
+    #[staticmethod]
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn from_bcif(bytes: Vec<u8>) -> PyResult<Self> {
+        let entities = bcif::bcif_to_entities(&bytes).map_err(value_err)?;
+        Ok(Self {
+            inner: Assembly::new(entities),
+        })
+    }
+
+    /// The assembly's entities as `Entity` objects, in order. Each holds an
+    /// `Arc` refcount clone of the underlying entity.
+    #[must_use]
+    pub fn entities(&self) -> Vec<PyEntity> {
+        self.inner
+            .entities()
+            .iter()
+            .map(|e| PyEntity {
+                inner: std::sync::Arc::clone(e),
+            })
+            .collect()
+    }
+
+    /// Number of entities in the assembly.
+    #[must_use]
+    pub fn __len__(&self) -> usize {
+        self.inner.entities().len()
+    }
+
+    /// Every atom in the assembly as per-atom numpy columns (an
+    /// `AtomArrays`), via the shared entities -> arrays core.
+    ///
+    /// # Errors
+    ///
+    /// `PyErr` if numpy is unavailable or a numpy operation fails.
+    pub fn to_arrays(&self, py: Python) -> PyResult<AtomArrays> {
+        entities_to_arrays(py, self.inner.entities())
     }
 }
 
@@ -490,73 +539,6 @@ fn edit_kind_int(edit: &AssemblyEdit) -> i32 {
     }
 }
 
-// Edit view pyclasses (parallel `molex::SetEntityCoordsView` et al. in C++).
-
-/// Python view of a `SetEntityCoords` edit. Returned by
-/// `EditList.set_entity_coords_at`.
-#[pyclass(name = "SetEntityCoordsView", module = "molex", skip_from_py_object)]
-#[derive(Clone)]
-pub struct PySetEntityCoordsView {
-    /// Entity whose atoms get repositioned.
-    #[pyo3(get)]
-    pub entity_id: u32,
-    /// Per-atom positions, one `(x, y, z)` tuple per atom in
-    /// declaration order. Length equals the entity's atom count.
-    #[pyo3(get)]
-    pub coords: Vec<(f32, f32, f32)>,
-}
-
-/// Python view of a `SetResidueCoords` edit.
-#[pyclass(name = "SetResidueCoordsView", module = "molex", skip_from_py_object)]
-#[derive(Clone)]
-pub struct PySetResidueCoordsView {
-    /// Polymer entity that owns the target residue.
-    #[pyo3(get)]
-    pub entity_id: u32,
-    /// Residue index within the entity's residue list.
-    #[pyo3(get)]
-    pub residue_idx: usize,
-    /// Per-atom positions for the residue, in atom-range order.
-    #[pyo3(get)]
-    pub coords: Vec<(f32, f32, f32)>,
-}
-
-/// Python view of a `MutateResidue` edit.
-#[pyclass(name = "MutateResidueView", module = "molex", skip_from_py_object)]
-#[derive(Clone)]
-pub struct PyMutateResidueView {
-    /// Polymer entity that owns the target residue.
-    #[pyo3(get)]
-    pub entity_id: u32,
-    /// Residue index within the entity's residue list.
-    #[pyo3(get)]
-    pub residue_idx: usize,
-    /// New 3-letter residue name (space-padded).
-    #[pyo3(get)]
-    pub new_name: [u8; 3],
-    /// New atom list for the residue.
-    #[pyo3(get)]
-    pub atoms: Vec<PyAtomRow>,
-    /// New variant tag list for the residue.
-    #[pyo3(get)]
-    pub variants: Vec<PyVariant>,
-}
-
-/// Python view of a `SetVariants` edit.
-#[pyclass(name = "SetVariantsView", module = "molex", skip_from_py_object)]
-#[derive(Clone)]
-pub struct PySetVariantsView {
-    /// Polymer entity that owns the target residue.
-    #[pyo3(get)]
-    pub entity_id: u32,
-    /// Residue index within the entity's residue list.
-    #[pyo3(get)]
-    pub residue_idx: usize,
-    /// New variant tag list for the residue.
-    #[pyo3(get)]
-    pub variants: Vec<PyVariant>,
-}
-
 /// Python handle wrapping a single `VariantTag`.
 #[pyclass(name = "Variant", module = "molex", from_py_object)]
 #[derive(Clone)]
@@ -716,85 +698,4 @@ impl PyAtomRow {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::float_cmp)]
-mod tests {
-    use glam::Vec3;
-
-    use super::{coords_to_vec3, make_entity_id, PyEditList};
-
-    // `coords_to_vec3` takes already-extracted tuples; well-formed mapping
-    // is testable without the interpreter.
-    #[test]
-    fn coords_to_vec3_maps_tuples_in_order() {
-        let got = coords_to_vec3(vec![(1.0, 2.0, 3.0), (-4.0, 5.5, 6.25)]);
-        assert_eq!(
-            got,
-            vec![Vec3::new(1.0, 2.0, 3.0), Vec3::new(-4.0, 5.5, 6.25)]
-        );
-    }
-
-    // Edit-application path: `push_set_entity_coords` runs `coords_to_vec3`
-    // and stamps the `EntityId`; read back through the public accessor.
-    #[test]
-    fn push_set_entity_coords_records_edit() {
-        let mut list = PyEditList::new();
-        list.push_set_entity_coords(7, vec![(0.0, 0.0, 0.0), (1.0, 1.0, 1.0)]);
-
-        assert_eq!(list.__len__(), 1);
-        assert_eq!(list.kind_at(0).expect("kind at 0"), 1);
-
-        let view = list
-            .set_entity_coords_at(0)
-            .expect("edit at index 0 is a SetEntityCoords view");
-        assert_eq!(view.entity_id, make_entity_id(7).raw());
-        assert_eq!(view.coords, vec![(0.0, 0.0, 0.0), (1.0, 1.0, 1.0)]);
-    }
-
-    // Wrong view kind returns a PyErr, never a panic (no interpreter); the
-    // concrete `ValueError` type is asserted in `wrong_kind_is_value_error`.
-    #[test]
-    fn wrong_kind_errors_cleanly() {
-        let mut list = PyEditList::new();
-        list.push_set_variants(1, 0, Vec::new());
-        assert!(list.set_entity_coords_at(0).is_err(), "not SetEntityCoords");
-    }
-
-    // Reading past the end returns a PyErr, never a panic (no interpreter).
-    #[test]
-    fn out_of_range_errors_cleanly() {
-        let list = PyEditList::new();
-        assert!(list.set_entity_coords_at(0).is_err(), "no edit at index 0");
-    }
-
-    // GIL-dependent tests below need a live interpreter. The
-    // `extension-module` build links no libpython, so the test binary
-    // fails to link and no test here runs in that environment; they cover
-    // the boundary wherever libpython is linked.
-
-    // Malformed coords fail at pyo3's `FromPyObject` boundary: a wrong
-    // inner length fails extraction with a PyErr before `coords_to_vec3`.
-    #[test]
-    fn extract_malformed_coords_is_pyerr_not_panic() {
-        use pyo3::types::{PyAnyMethods, PyList};
-        pyo3::Python::attach(|py| {
-            let bad = PyList::new(py, [(1.0_f64, 2.0_f64)])
-                .expect("build py list of one 2-tuple");
-            let res: Result<Vec<(f32, f32, f32)>, pyo3::PyErr> = bad.extract();
-            assert!(res.is_err(), "wrong inner length must not extract");
-        });
-    }
-
-    // Confirm the wrong-kind read produces a ValueError specifically.
-    #[test]
-    fn wrong_kind_is_value_error() {
-        use pyo3::types::{PyStringMethods, PyTypeMethods};
-        let mut list = PyEditList::new();
-        list.push_set_variants(1, 0, Vec::new());
-        let err = list.set_entity_coords_at(0).err().expect("must error");
-        pyo3::Python::attach(|py| {
-            let bound = err.get_type(py).name().expect("read type name");
-            let name = bound.to_str().expect("utf-8 type name");
-            assert!(name.ends_with("ValueError"), "got {name}");
-        });
-    }
-}
+mod tests;

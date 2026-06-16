@@ -36,3 +36,12 @@ pub struct Residue {
     /// re-derive what they need.
     pub variants: Vec<VariantTag>,
 }
+
+impl Residue {
+    /// Author-side sequence id, falling back to [`Self::label_seq_id`]
+    /// when the author id is absent.
+    #[must_use]
+    pub fn seq_id(&self) -> i32 {
+        self.auth_seq_id.unwrap_or(self.label_seq_id)
+    }
+}

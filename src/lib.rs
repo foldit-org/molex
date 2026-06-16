@@ -60,6 +60,7 @@ fn molex(_py: Python, m: &Bound<PyModule>) -> PyResult<()> {
     // ASSEM01-based IO helpers (replaces the retired COORDS01 surface).
     m.add_function(wrap_pyfunction!(python::pdb_to_assembly_bytes, m)?)?;
     m.add_function(wrap_pyfunction!(python::mmcif_to_assembly_bytes, m)?)?;
+    m.add_function(wrap_pyfunction!(python::bcif_to_assembly_bytes, m)?)?;
     m.add_function(wrap_pyfunction!(python::assembly_bytes_to_pdb, m)?)?;
     m.add_function(wrap_pyfunction!(python::deserialize_assembly_bytes, m)?)?;
     // AtomArray / AtomArrayPlus converters (entity-aware, preserves molecule
@@ -85,11 +86,8 @@ fn molex(_py: Python, m: &Bound<PyModule>) -> PyResult<()> {
         m
     )?)?;
     // Native, Biotite-free read: per-atom columns as numpy arrays.
-    m.add_function(wrap_pyfunction!(
-        adapters::atomworks::assembly_bytes_to_arrays,
-        m
-    )?)?;
-    m.add_class::<adapters::atomworks::AtomArrays>()?;
+    m.add_function(wrap_pyfunction!(python::assembly_bytes_to_arrays, m)?)?;
+    m.add_class::<python::AtomArrays>()?;
     m.add_function(wrap_pyfunction!(
         adapters::atomworks::entities_to_atom_array_parsed,
         m
@@ -100,8 +98,13 @@ fn molex(_py: Python, m: &Bound<PyModule>) -> PyResult<()> {
     )?)?;
     m.add_function(wrap_pyfunction!(adapters::atomworks::parse_file_full, m)?)?;
 
-    // Handle-based edit / DELTA01 surface (parallels c_api::edit).
+    // Object graph: Assembly -> Entity -> Residue (the default Python
+    // navigation surface; atoms via `to_arrays`).
     m.add_class::<python::PyAssembly>()?;
+    m.add_class::<python::PyEntity>()?;
+    m.add_class::<python::PyResidue>()?;
+
+    // Handle-based edit / DELTA01 surface (parallels c_api::edit).
     m.add_class::<python::PyEditList>()?;
     m.add_class::<python::PyVariant>()?;
     m.add_class::<python::PyAtomRow>()?;

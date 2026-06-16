@@ -300,8 +300,7 @@ pub extern "C" fn molex_residue_name(
 /// (`label_seq_id`) when the author id is absent.
 #[no_mangle]
 pub extern "C" fn molex_residue_seq_id(residue: *const molex_Residue) -> i32 {
-    residue_inner(residue)
-        .map_or(0, |r| r.auth_seq_id.unwrap_or(r.label_seq_id))
+    residue_inner(residue).map_or(0, Residue::seq_id)
 }
 
 /// Structural-side sequence id (`label_seq_id`). Use this for stable

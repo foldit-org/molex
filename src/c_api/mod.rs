@@ -289,7 +289,7 @@ pub(crate) fn assembly_inner_mut<'a>(
 }
 
 /// Project an assembly to a fresh heavy-complete handle: polymer entities
-/// gain their missing heavy atoms (see [`molex::Assembly::normalize`]). The
+/// gain their missing heavy atoms (see [`crate::Assembly::normalize`]). The
 /// source handle is left untouched.
 ///
 /// Completion runs on surviving residues only; residues dropped at
@@ -312,7 +312,7 @@ pub extern "C" fn molex_assembly_normalize(
 }
 
 /// Project an assembly to a fresh all-atom handle: polymer entities gain
-/// their template hydrogens (see [`molex::Assembly::to_all_atom`]). The
+/// their template hydrogens (see [`crate::Assembly::to_all_atom`]). The
 /// source handle is left untouched.
 ///
 /// Returns null on a null input with the error message available via

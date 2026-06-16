@@ -29,6 +29,31 @@ pub(crate) struct AtomData {
 }
 
 impl AtomData {
+    /// Restrict every parallel per-atom column to `range` (a half-open run of
+    /// flat atom indices), returning a fresh `AtomData`. `coords_flat` is keyed
+    /// by `3 * range` since it stores three floats per atom. Bonds are dropped:
+    /// they index into the full entity's atom space, so a sliced subset has no
+    /// well-defined bond list (and the native numpy read path never reads
+    /// them). Used by the per-residue array read to keep the single column
+    /// core.
+    pub(crate) fn slice_atoms(&self, range: std::ops::Range<usize>) -> Self {
+        let coords_range = (range.start * 3)..(range.end * 3);
+        Self {
+            coords_flat: self.coords_flat[coords_range].to_vec(),
+            chain_ids: self.chain_ids[range.clone()].to_vec(),
+            res_ids: self.res_ids[range.clone()].to_vec(),
+            res_names: self.res_names[range.clone()].to_vec(),
+            atom_names: self.atom_names[range.clone()].to_vec(),
+            elements: self.elements[range.clone()].to_vec(),
+            occupancies: self.occupancies[range.clone()].to_vec(),
+            b_factors: self.b_factors[range.clone()].to_vec(),
+            aw_entity_ids: self.aw_entity_ids[range.clone()].to_vec(),
+            aw_mol_types: self.aw_mol_types[range.clone()].to_vec(),
+            aw_chain_types: self.aw_chain_types[range].to_vec(),
+            all_bonds: Vec::new(),
+        }
+    }
+
     fn with_capacity(total_atoms: usize) -> Self {
         Self {
             coords_flat: Vec::with_capacity(total_atoms * 3),
@@ -650,6 +675,32 @@ mod tests {
         assert!(data.aw_mol_types[n_prot..].iter().all(|s| s == "ligand"));
         assert!(data.aw_chain_types[..n_prot].iter().all(|&c| c == 6));
         assert!(data.aw_chain_types[n_prot..].iter().all(|&c| c == 8));
+    }
+
+    #[test]
+    fn slice_atoms_extracts_one_residue_run() {
+        // The dipeptide lays out ALA (atoms 0..5) then GLY (atoms 5..9). The
+        // per-residue read path collects the whole entity, then slices the flat
+        // columns to the residue's contiguous run at offset = sum of prior
+        // residues' atom counts. Slicing to GLY's run (offset 5, count 4) must
+        // reproduce exactly the GLY atoms and only those.
+        let mut alloc = EntityIdAllocator::new();
+        let p = dipeptide(alloc.allocate());
+        let total = p.atom_count();
+        let entities = vec![p];
+        let data = collect_atom_data(&entities, total);
+
+        // GLY is residue index 1: offset = ALA's 5 atoms, count = GLY's 4.
+        let gly = data.slice_atoms(5..9);
+
+        assert_eq!(gly.coords_flat.len(), 4 * 3);
+        assert_eq!(gly.coords_flat, data.coords_flat[15..27]);
+        assert_eq!(gly.res_names, vec!["GLY"; 4]);
+        assert_eq!(gly.res_ids, vec![2, 2, 2, 2]);
+        assert_eq!(gly.atom_names, vec!["N", "CA", "C", "O"]);
+        assert_eq!(gly.elements, vec!["N", "C", "C", "O"]);
+        // Slicing drops bonds (they index the full entity's atom space).
+        assert!(gly.all_bonds.is_empty());
     }
 
     #[test]

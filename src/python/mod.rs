@@ -53,6 +53,32 @@ fn value_err<E: std::fmt::Display>(e: E) -> PyErr {
     PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
 }
 
+/// Resolve a Python `__getitem__` index against a container of length `len`,
+/// applying Python negative-index semantics (`index < 0` counts from the end).
+/// `kind` names the container in the error text (e.g. `"Assembly"`). Shared by
+/// the sequence-style pyclasses so the `PyIndexError` message stays uniform.
+///
+/// # Errors
+///
+/// `PyIndexError` when the resolved index falls outside `0..len`.
+pub(super) fn resolve_index(
+    index: isize,
+    len: usize,
+    kind: &str,
+) -> PyResult<usize> {
+    let resolved = if index < 0 {
+        index + isize::try_from(len).map_err(value_err)?
+    } else {
+        index
+    };
+    if resolved < 0 || resolved >= isize::try_from(len).map_err(value_err)? {
+        return Err(PyErr::new::<pyo3::exceptions::PyIndexError, _>(format!(
+            "{kind} index {index} out of range (len={len})"
+        )));
+    }
+    Ok(resolved.unsigned_abs())
+}
+
 /// Python handle wrapping a `molex::Assembly`. Parallels
 /// `molex_Assembly` in the C API and `molex::Assembly` in C++.
 #[pyclass(name = "Assembly", module = "molex")]
@@ -93,7 +119,7 @@ impl PyAssembly {
     }
 
     /// Project to a fresh heavy-complete `Assembly`: polymer entities gain
-    /// their missing heavy atoms (see [`molex::Assembly::normalize`]). Atom
+    /// their missing heavy atoms (see [`crate::Assembly::normalize`]). Atom
     /// indices shift, so any externally held atom indices into the source
     /// assembly do not carry over. Completion runs on surviving residues
     /// only; residues dropped at construction are not resurrected.
@@ -105,7 +131,7 @@ impl PyAssembly {
     }
 
     /// Project to a fresh all-atom `Assembly`: polymer entities gain their
-    /// template hydrogens (see [`molex::Assembly::to_all_atom`]). Atom
+    /// template hydrogens (see [`crate::Assembly::to_all_atom`]). Atom
     /// indices shift, so any externally held atom indices into the source
     /// assembly do not carry over.
     #[must_use]
@@ -217,6 +243,22 @@ impl PyAssembly {
     #[must_use]
     pub fn __len__(&self) -> usize {
         self.inner.entities().len()
+    }
+
+    /// The entity at `index` as an `Entity`, supporting Python negative
+    /// indexing (`-1` is the last entity). With `__len__` this makes
+    /// `for e in assembly:` iterate without re-allocating the whole
+    /// `entities()` list.
+    ///
+    /// # Errors
+    ///
+    /// `PyIndexError` when the resolved index is out of range.
+    pub fn __getitem__(&self, index: isize) -> PyResult<PyEntity> {
+        let entities = self.inner.entities();
+        let i = resolve_index(index, entities.len(), "Assembly")?;
+        Ok(PyEntity {
+            inner: std::sync::Arc::clone(&entities[i]),
+        })
     }
 
     /// Concise repr: `<Assembly: {n} entities, gen {g}>`.

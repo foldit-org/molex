@@ -2,7 +2,7 @@
 set windows-shell := ["powershell.exe", "-NoLogo", "-Command"]
 
 # Run all checks (what CI runs)
-check: fmt-check clippy test doc
+check: fmt-check clippy test doc doc-python
 
 # Format check (nightly)
 fmt-check:
@@ -32,6 +32,12 @@ test-python python="python3":
 # Build docs and check for warnings
 doc $RUSTDOCFLAGS="-D warnings":
     cargo doc --no-deps --document-private-items
+
+# Build docs for the Python/c-api surface and check for warnings. The
+# featureless `doc` recipe never compiles the pyo3 surface, so intra-doc
+# links in those modules go unchecked unless we build with the feature set.
+doc-python $RUSTDOCFLAGS="-D warnings":
+    cargo doc --no-deps --document-private-items --features python,serde,specta,c-api
 
 # Dependency audit
 deny:

@@ -9,7 +9,7 @@
 
 use pyo3::prelude::*;
 
-use crate::adapters::atomworks::collect_atom_data;
+use crate::adapters::atomworks::{collect_atom_data, AtomData};
 use crate::entity::molecule::MoleculeEntity;
 use crate::ops::wire::deserialize_assembly;
 
@@ -88,7 +88,26 @@ pub(crate) fn entities_to_arrays<E: std::borrow::Borrow<MoleculeEntity>>(
     let total_atoms: usize =
         entities.iter().map(|e| e.borrow().atom_count()).sum();
     let data = collect_atom_data(entities, total_atoms);
+    atom_data_to_arrays(py, &data, total_atoms)
+}
 
+/// Turn already-collected per-atom columns into numpy arrays.
+///
+/// Split out of [`entities_to_arrays`] so a sliced subset of the columns (a
+/// single residue's atoms, via [`AtomData::slice_atoms`]) can reach numpy
+/// without re-collecting: the per-residue read collects once over the parent
+/// entity, slices, and lands here. `total_atoms` is the atom count of `data`
+/// (the number of rows in each column), so coords reshapes to `(total_atoms,
+/// 3)`.
+///
+/// # Errors
+///
+/// Returns `PyErr` if any numpy operation fails.
+pub(crate) fn atom_data_to_arrays(
+    py: Python,
+    data: &AtomData,
+    total_atoms: usize,
+) -> PyResult<AtomArrays> {
     let numpy = py.import("numpy")?;
 
     let coords = numpy.call_method1("array", (&data.coords_flat,))?;
@@ -132,7 +151,7 @@ pub(crate) fn entities_to_arrays<E: std::borrow::Borrow<MoleculeEntity>>(
 /// Convert assembly wire bytes to per-atom numpy arrays without Biotite.
 ///
 /// Transport/serialization helper: decodes wire bytes, then defers to the
-/// shared [`entities_to_arrays`] core. The documented default for a normal
+/// shared `entities_to_arrays` core. The documented default for a normal
 /// caller is the object API (`Assembly.from_pdb` / `.entities` / `.to_arrays`
 /// and `Entity.to_arrays`), which reaches the same core without a bytes
 /// round-trip; this stays for the plugin transport protocol.

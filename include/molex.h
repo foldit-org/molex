@@ -261,9 +261,8 @@ typedef struct molex_Atom molex_Atom;
 /**
  * Owned, ordered list of typed Assembly edits.
  *
- * Free with [`molex_edits_free`]. Enumerate per-entry via
- * [`molex_edits_kind_at`] followed by the matching
- * `molex_edits_*_at` per-variant getter; or dump to wire bytes with
+ * Free with [`molex_edits_free`]. Push typed entries via the
+ * `molex_edits_push_*` constructors; or dump to wire bytes with
  * [`molex_edits_to_delta`].
  */
 typedef struct molex_EditList molex_EditList;
@@ -375,7 +374,7 @@ void molex_assembly_free(molex_Assembly *assembly)
 
 /**
  * Project an assembly to a fresh heavy-complete handle: polymer entities
- * gain their missing heavy atoms (see [`molex::Assembly::normalize`]). The
+ * gain their missing heavy atoms (see [`crate::Assembly::normalize`]). The
  * source handle is left untouched.
  *
  * Completion runs on surviving residues only; residues dropped at
@@ -392,7 +391,7 @@ molex_Assembly *molex_assembly_normalize(const molex_Assembly *assembly)
 
 /**
  * Project an assembly to a fresh all-atom handle: polymer entities gain
- * their template hydrogens (see [`molex::Assembly::to_all_atom`]). The
+ * their template hydrogens (see [`crate::Assembly::to_all_atom`]). The
  * source handle is left untouched.
  *
  * Returns null on a null input with the error message available via

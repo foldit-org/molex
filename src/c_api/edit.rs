@@ -41,9 +41,8 @@ pub mod read;
 
 /// Owned, ordered list of typed Assembly edits.
 ///
-/// Free with [`molex_edits_free`]. Enumerate per-entry via
-/// [`molex_edits_kind_at`] followed by the matching
-/// `molex_edits_*_at` per-variant getter; or dump to wire bytes with
+/// Free with [`molex_edits_free`]. Push typed entries via the
+/// `molex_edits_push_*` constructors; or dump to wire bytes with
 /// [`molex_edits_to_delta`].
 pub struct molex_EditList;
 

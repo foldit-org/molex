@@ -58,7 +58,7 @@ fn out_of_range_errors_cleanly() {
 // zinc ion. The object-graph getters (`Entity` / `Residue` `#[pymethods]`)
 // need a live interpreter to dispatch and are owed a runtime test; the tests
 // below exercise the same molex accessors and string renderers the objects
-// wrap, plus the GIL-free `PyResidue` copy-out, which run without libpython.
+// wrap, plus the `PyResidue` read-through getters, which run without libpython.
 const WALK_PDB: &str = "\
 ATOM      1  N   ALA A   1      0.000   0.000   0.000  1.00  0.00           N\n\
 ATOM      2  CA  ALA A   1      1.458   0.000   0.000  1.00  0.00           C\n\
@@ -96,25 +96,25 @@ fn parsed_entities_expose_object_accessors() {
     assert!(ion.residues().is_none());
 }
 
-// `PyResidue::from_residue` is the GIL-free copy-out the `residues()` getter
-// builds; it trims the name, applies the auth/label `seq_id` fallback, and
-// renders the (blank-here) insertion code.
+// The `Residue` handle reads through the parent entity's residue list: it
+// trims the name, applies the auth/label `seq_id` fallback, and renders the
+// (blank-here) insertion code.
 #[test]
-fn residue_copy_out_trims_name_and_keeps_seq_ids() {
+fn residue_reads_through_trims_name_and_keeps_seq_ids() {
     use super::entity::PyResidue;
 
     let entities = pdb_str_to_entities(WALK_PDB).expect("parse minimal PDB");
     let asm = Assembly::new(entities);
-    let prot = &asm.entities()[0];
-    let residues = prot.residues().expect("protein has residues");
+    let prot = std::sync::Arc::clone(&asm.entities()[0]);
 
-    let ala = PyResidue::from_residue(&residues[0]);
+    let ala =
+        PyResidue::new(std::sync::Arc::clone(&prot), 0).expect("residue 0");
     assert_eq!(ala.name(), "ALA");
     assert_eq!(ala.seq_id(), 1);
     assert_eq!(ala.label_seq_id(), 1);
     assert_eq!(ala.ins_code(), None);
 
-    let gly = PyResidue::from_residue(&residues[1]);
+    let gly = PyResidue::new(prot, 1).expect("residue 1");
     assert_eq!(gly.name(), "GLY");
     assert_eq!(gly.seq_id(), 2);
 }

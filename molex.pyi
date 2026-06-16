@@ -87,6 +87,11 @@ class Assembly:
     def __len__(self) -> int:
         """Number of entities in the assembly."""
         ...
+    def __getitem__(self, index: int) -> Entity:
+        """The entity at `index` (negative indexes from the end). With
+        `__len__`, makes `for e in assembly:` iterate. Raises `IndexError`
+        when out of range."""
+        ...
     def __repr__(self) -> str:
         """`<Assembly: {n} entities, gen {g}>`."""
         ...
@@ -137,14 +142,20 @@ class Entity:
     def __len__(self) -> int:
         """Residue count; mirrors `len(assembly)` so `len(entity)` works too."""
         ...
+    def __getitem__(self, index: int) -> Residue:
+        """The residue at `index` (negative indexes from the end). With
+        `__len__`, makes `for r in entity:` iterate. Raises `IndexError` for
+        an out-of-range index or a non-polymer entity (no residues)."""
+        ...
     def __repr__(self) -> str:
         """`<Entity {id} {kind} chain={chain_id} {atom_count} atoms>`."""
         ...
 
 class Residue:
-    """One residue in a polymer entity (copied-out scalars, no back-reference).
+    """One residue in a polymer entity (a cheap `Arc` refcount handle into the
+    parent entity plus a residue index).
 
-    Reached from `Entity.residues()`."""
+    Reached from `Entity.residues()` or `entity[i]`."""
 
     @property
     def name(self) -> str:
@@ -161,6 +172,9 @@ class Residue:
     @property
     def ins_code(self) -> str | None:
         """Insertion code as a one-char string, or `None` when blank."""
+        ...
+    def to_arrays(self) -> AtomArrays:
+        """This residue's atoms as per-atom numpy columns (Biotite-free)."""
         ...
     def __repr__(self) -> str:
         """`<Residue {name} {seq_id}{ins_code}>`."""

@@ -119,11 +119,20 @@ fn in_scope_heavy_template_names(aa: AminoAcid) -> BTreeSet<String> {
         .collect()
 }
 
-/// Build a single-residue protein from the given parsed atoms.
+/// Build a single-residue protein from the given parsed atoms, running
+/// heavy-atom completion (this module tests the completion pass, so it
+/// builds through the completing constructor).
 fn build_protein(name: &str, atoms: Vec<Atom>) -> ProteinEntity {
     let n = atoms.len();
     let id = EntityIdAllocator::new().allocate();
-    ProteinEntity::new(id, atoms, vec![residue(name, 0..n)], b'A', None)
+    ProteinEntity::new_normalized(
+        id,
+        atoms,
+        vec![residue(name, 0..n)],
+        b'A',
+        None,
+        CompletionMode::HeavyOnly,
+    )
 }
 
 #[test]
@@ -170,8 +179,11 @@ fn heavy_only_alanine_builds_cb_but_no_hydrogens() {
         placed_from_template(AminoAcid::Ala, "C", Element::C),
         placed_from_template(AminoAcid::Ala, "O", Element::O),
     ];
-    let (out_atoms, out_res) =
-        complete_protein_residues(&atoms, &[residue("ALA", 0..4)]);
+    let (out_atoms, out_res) = complete_protein_residues(
+        &atoms,
+        &[residue("ALA", 0..4)],
+        CompletionMode::HeavyOnly,
+    );
     let r = &out_res[0];
     let names: BTreeSet<String> =
         residue_atom_names(&out_atoms, r).into_iter().collect();
@@ -210,8 +222,11 @@ fn all_atom_alanine_builds_cb_and_hydrogens() {
         placed_from_template(AminoAcid::Ala, "C", Element::C),
         placed_from_template(AminoAcid::Ala, "O", Element::O),
     ];
-    let (out_atoms, out_res) =
-        complete_protein_residues_all_atom(&atoms, &[residue("ALA", 0..4)]);
+    let (out_atoms, out_res) = complete_protein_residues(
+        &atoms,
+        &[residue("ALA", 0..4)],
+        CompletionMode::AllAtom,
+    );
     let r = &out_res[0];
     let names: BTreeSet<String> =
         residue_atom_names(&out_atoms, r).into_iter().collect();
@@ -250,8 +265,11 @@ fn truncated_leucine_builds_to_full_in_scope_set() {
         placed_from_template(AminoAcid::Leu, "CB", Element::C),
         placed_from_template(AminoAcid::Leu, "CG", Element::C),
     ];
-    let (out_atoms, out_res) =
-        complete_protein_residues_all_atom(&atoms, &[residue("LEU", 0..6)]);
+    let (out_atoms, out_res) = complete_protein_residues(
+        &atoms,
+        &[residue("LEU", 0..6)],
+        CompletionMode::AllAtom,
+    );
     let r = &out_res[0];
     let got: BTreeSet<String> =
         residue_atom_names(&out_atoms, r).into_iter().collect();
@@ -317,8 +335,11 @@ fn sparse_residue_passes_through_unchanged() {
         atom_at("N", Element::N, Vec3::new(0.0, 0.0, 0.0)),
         atom_at("CA", Element::C, Vec3::new(1.46, 0.0, 0.0)),
     ];
-    let (out_atoms, out_res) =
-        complete_protein_residues(&atoms, &[residue("ALA", 0..2)]);
+    let (out_atoms, out_res) = complete_protein_residues(
+        &atoms,
+        &[residue("ALA", 0..2)],
+        CompletionMode::HeavyOnly,
+    );
     assert_eq!(out_atoms.len(), 2, "no atoms fabricated for sparse residue");
     assert_eq!(out_res[0].atom_range, 0..2);
     let names = residue_atom_names(&out_atoms, &out_res[0]);
@@ -359,13 +380,14 @@ fn na_completion_fills_dna_base_and_keeps_present_atoms() {
     ];
     let n = atoms.len();
     let id = EntityIdAllocator::new().allocate();
-    let na = NAEntity::new(
+    let na = NAEntity::new_normalized(
         id,
         MoleculeType::DNA,
         atoms,
         vec![residue("DA", 0..n)],
         b'A',
         None,
+        CompletionMode::HeavyOnly,
     );
     assert_eq!(na.residues.len(), 1, "DA must survive completion");
     let r = &na.residues[0];
@@ -397,8 +419,12 @@ fn na_all_atom_fills_dna_base_and_hydrogens() {
         atom_at("O4'", Element::O, Vec3::new(3.0, -0.5, 1.0)),
     ];
     let n = atoms.len();
-    let (out_atoms, out_res) =
-        complete_na_residues_all_atom(&atoms, &[residue("DA", 0..n)]);
+    let (out_atoms, out_res) = complete_na_residues(
+        &atoms,
+        &[residue("DA", 0..n)],
+        CompletionMode::AllAtom,
+        MoleculeType::DNA,
+    );
     let r = &out_res[0];
     let names: BTreeSet<String> =
         residue_atom_names(&out_atoms, r).into_iter().collect();
@@ -431,8 +457,11 @@ fn non_template_atom_is_preserved_with_original_coords() {
     atoms.push(atom_at("CB", Element::C, cb_pos));
     atoms.push(atom_at("ZZ", Element::C, zz_pos));
     let n = atoms.len();
-    let (out_atoms, out_res) =
-        complete_protein_residues(&atoms, &[residue("GLY", 0..n)]);
+    let (out_atoms, out_res) = complete_protein_residues(
+        &atoms,
+        &[residue("GLY", 0..n)],
+        CompletionMode::HeavyOnly,
+    );
     let r = &out_res[0];
     let names: BTreeSet<String> =
         residue_atom_names(&out_atoms, r).into_iter().collect();
@@ -470,8 +499,11 @@ fn all_atom_places_hydrogen_at_real_bond_length() {
         placed_from_template(AminoAcid::Ala, "C", Element::C),
         placed_from_template(AminoAcid::Ala, "O", Element::O),
     ];
-    let (out_atoms, out_res) =
-        complete_protein_residues_all_atom(&atoms, &[residue("ALA", 0..4)]);
+    let (out_atoms, out_res) = complete_protein_residues(
+        &atoms,
+        &[residue("ALA", 0..4)],
+        CompletionMode::AllAtom,
+    );
     let r = &out_res[0];
 
     let ca = position_by_name(&out_atoms, r, "CA");
@@ -504,8 +536,11 @@ fn collinear_anchors_fabricate_nothing() {
         atom_at("CA", Element::C, Vec3::new(1.5, 0.0, 0.0)),
         atom_at("C", Element::C, Vec3::new(3.0, 0.0, 0.0)),
     ];
-    let (out_atoms, out_res) =
-        complete_protein_residues(&atoms, &[residue("ALA", 0..3)]);
+    let (out_atoms, out_res) = complete_protein_residues(
+        &atoms,
+        &[residue("ALA", 0..3)],
+        CompletionMode::HeavyOnly,
+    );
     let r = &out_res[0];
     // Exactly the three input atoms remain; nothing fabricated.
     assert_eq!(

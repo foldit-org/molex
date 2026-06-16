@@ -17,18 +17,30 @@ The PDB Chemical Component Dictionary is released under CC0 1.0
 (Creative Commons Public Domain Dedication), so these files are freely
 redistributable. See <https://creativecommons.org/publicdomain/zero/1.0/>.
 
-## Components (24)
+## Components (28)
 
 20 standard amino acids:
 
     ALA ARG ASN ASP CYS GLN GLU GLY HIS ILE
     LEU LYS MET PHE PRO SER THR TRP TYR VAL
 
-4 DNA bases:
+4 DNA (deoxyribose) bases:
 
     DA DC DG DT
 
-RNA bases are not vendored yet; RNA uracil has no template.
+4 RNA (ribose) bases:
+
+    A C G U
+
+The RNA components carry the ribose 2'-OH (`O2'`/`HO2'`); the DNA
+components are deoxy and do not. Template resolution is strand-aware,
+so an RNA chain completes against ribose geometry and a DNA chain
+against deoxyribose. The same CC0 provenance applies to all four RNA
+files (HTTP 200 on fetch). Note the `C` and `U` ligand CIFs omit the
+`pdbx_backbone_atom_flag` / `pdbx_n_terminal_atom_flag` /
+`pdbx_c_terminal_atom_flag` columns; the generator treats an absent
+role-flag column as unflagged (false), which matches the all-`N` rows
+the components that do carry those columns emit.
 
 ## Regenerating the const table
 

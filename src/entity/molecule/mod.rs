@@ -33,6 +33,7 @@ pub(crate) use builder::{
     AtomRow, BuildError, EntityBuilder, ExpectedEntityType,
 };
 pub use classify::classify_residue;
+pub use complete::CompletionMode;
 pub use diff::EntityDiffError;
 use glam::Vec3;
 pub use id::{EntityId, EntityIdAllocator};
@@ -116,6 +117,44 @@ impl MoleculeEntity {
         match self {
             MoleculeEntity::Protein(p) => {
                 MoleculeEntity::Protein(p.to_continuous())
+            }
+            other => other.clone(),
+        }
+    }
+
+    /// Return a copy with polymer chains rebuilt heavy-complete: protein
+    /// and nucleic-acid entities gain their missing heavy atoms (see
+    /// [`ProteinEntity::normalize`] / [`NAEntity::normalize`]); non-polymer
+    /// entities are cloned unchanged. Atom indices shift, so `AtomId`s are
+    /// not stable across this projection. Completion runs on each chain's
+    /// surviving residues; residues dropped at construction are not
+    /// resurrected.
+    #[must_use]
+    pub fn normalize(&self) -> Self {
+        match self {
+            MoleculeEntity::Protein(p) => {
+                MoleculeEntity::Protein(p.normalize())
+            }
+            MoleculeEntity::NucleicAcid(n) => {
+                MoleculeEntity::NucleicAcid(n.normalize())
+            }
+            other => other.clone(),
+        }
+    }
+
+    /// Return a copy with polymer chains rebuilt all-atom: protein and
+    /// nucleic-acid entities gain their template hydrogens (see
+    /// [`ProteinEntity::to_all_atom`] / [`NAEntity::to_all_atom`]);
+    /// non-polymer entities are cloned unchanged. Atom indices shift, so
+    /// `AtomId`s are not stable across this projection.
+    #[must_use]
+    pub fn to_all_atom(&self) -> Self {
+        match self {
+            MoleculeEntity::Protein(p) => {
+                MoleculeEntity::Protein(p.to_all_atom())
+            }
+            MoleculeEntity::NucleicAcid(n) => {
+                MoleculeEntity::NucleicAcid(n.to_all_atom())
             }
             other => other.clone(),
         }

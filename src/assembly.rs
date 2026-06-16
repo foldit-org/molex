@@ -136,6 +136,61 @@ impl Assembly {
         this
     }
 
+    /// Project to a fresh heavy-complete `Assembly`: every protein and
+    /// nucleic-acid entity is rebuilt with its missing heavy atoms
+    /// fabricated (see [`MoleculeEntity::normalize`]); non-polymer entities
+    /// pass through unchanged. A caller-driven projection that runs
+    /// heavy-atom completion on already-built entities (the heavy-only
+    /// sibling of [`Assembly::to_all_atom`]). Completion runs on each
+    /// chain's surviving residues; residues dropped at construction are
+    /// not resurrected.
+    ///
+    /// The result is a brand-new assembly with re-indexed atoms (the
+    /// appended atoms shift every later atom), so atom indices and
+    /// `AtomId`s are NOT stable across this projection. Rendering
+    /// connections are therefore dropped rather than copied: their stored
+    /// `AtomLink` endpoints reference the pre-completion indices and would
+    /// mis-point after the shift. Owners re-populate them on the next
+    /// publish. The generation counter is carried forward for snapshot
+    /// continuity.
+    #[must_use]
+    pub fn normalize(&self) -> Assembly {
+        let entities: Vec<Arc<MoleculeEntity>> = self
+            .entities
+            .iter()
+            .map(|e| Arc::new(e.normalize()))
+            .collect();
+        let mut projected = Assembly::from_arcs(entities);
+        projected.set_generation(self.generation);
+        projected
+    }
+
+    /// Project to a fresh all-atom `Assembly`: every protein and
+    /// nucleic-acid entity is rebuilt with its template hydrogens
+    /// fabricated (see [`MoleculeEntity::to_all_atom`]); non-polymer
+    /// entities pass through unchanged. The file-ingest path stays
+    /// heavy-only; this is the opt-in to a fully protonated model.
+    ///
+    /// The result is a brand-new assembly with re-indexed atoms (the
+    /// appended hydrogens shift every later atom), so atom indices and
+    /// `AtomId`s are NOT stable across this projection. Rendering
+    /// connections are therefore dropped rather than copied: their stored
+    /// `AtomLink` endpoints reference the heavy-only indices and would
+    /// mis-point after the shift. Owners re-populate them on the next
+    /// publish. The generation counter is carried forward for snapshot
+    /// continuity.
+    #[must_use]
+    pub fn to_all_atom(&self) -> Assembly {
+        let entities: Vec<Arc<MoleculeEntity>> = self
+            .entities
+            .iter()
+            .map(|e| Arc::new(e.to_all_atom()))
+            .collect();
+        let mut projected = Assembly::from_arcs(entities);
+        projected.set_generation(self.generation);
+        projected
+    }
+
     // -- Read accessors ----------------------------------------------
 
     /// All entities in declaration order.

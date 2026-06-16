@@ -64,6 +64,163 @@ fn two_residue_protein_with_break() -> ProteinEntity {
     build_protein(atoms, residues)
 }
 
+// -- Construction completion vs pure-assembly contrast --
+
+/// Trimmed atom names referenced by a residue's range, in order.
+fn residue_atom_names(atoms: &[Atom], r: &Residue) -> Vec<String> {
+    r.atom_range
+        .clone()
+        .map(|i| {
+            std::str::from_utf8(trimmed_atom_name(&atoms[i].name))
+                .unwrap()
+                .to_owned()
+        })
+        .collect()
+}
+
+/// One backbone-only ALA residue (N, CA, C, O; CB absent). Positioned by
+/// a rigid transform of the ideal backbone so the completion rigid fit
+/// can place CB. Returns the atoms and the matching residue.
+fn backbone_only_alanine() -> (Vec<Atom>, Vec<Residue>) {
+    let atoms = vec![
+        atom_at("N", Element::N, 0.0, 0.0, 0.0),
+        atom_at("CA", Element::C, 1.46, 0.0, 0.0),
+        atom_at("C", Element::C, 2.0, 1.4, 0.0),
+        atom_at("O", Element::O, 1.4, 2.5, 0.0),
+    ];
+    let residues = vec![residue("ALA", 1, 0..4)];
+    (atoms, residues)
+}
+
+#[test]
+fn new_does_not_fabricate_missing_atoms() {
+    // Pure construction assembles the atoms exactly as given: a
+    // sidechain-incomplete residue gains nothing, so the atom count is
+    // unchanged.
+    let (atoms, residues) = backbone_only_alanine();
+    let input_count = atoms.len();
+    let id = EntityIdAllocator::new().allocate();
+    let protein = ProteinEntity::new(id, atoms, residues, b'A', None);
+    assert_eq!(
+        protein.residues.len(),
+        1,
+        "ALA must survive (backbone intact)"
+    );
+    assert_eq!(
+        protein.atoms.len(),
+        input_count,
+        "pure construction must fabricate no atoms"
+    );
+    let names = residue_atom_names(&protein.atoms, &protein.residues[0]);
+    assert!(
+        !names.iter().any(|n| n == "CB"),
+        "CB must not be fabricated on the pure path; got {names:?}"
+    );
+}
+
+#[test]
+fn new_normalized_completes_missing_sidechain_atoms() {
+    // The opt-in completing constructor runs heavy-atom completion at
+    // construction, so the same backbone-only ALA gains its CB.
+    let (atoms, residues) = backbone_only_alanine();
+    let id = EntityIdAllocator::new().allocate();
+    let protein = ProteinEntity::new_normalized(
+        id,
+        atoms,
+        residues,
+        b'A',
+        None,
+        CompletionMode::HeavyOnly,
+    );
+    assert_eq!(protein.residues.len(), 1, "ALA must survive completion");
+    let names = residue_atom_names(&protein.atoms, &protein.residues[0]);
+    assert!(
+        names.iter().any(|n| n == "CB"),
+        "CB must be fabricated by new_normalized; got {names:?}"
+    );
+}
+
+/// ALA with N, C, O present but the backbone CA absent. Backbone-
+/// incomplete (canonicalize needs N, CA, C, O, so it drops this on the
+/// pure path), yet anchorable: three matched atoms (N, C, O), and CA is
+/// in-scope for completion (not a terminus/leaving atom), so completion
+/// can fabricate CA and rescue the residue.
+fn backbone_incomplete_anchorable_alanine() -> (Vec<Atom>, Vec<Residue>) {
+    let atoms = vec![
+        atom_at("N", Element::N, 0.0, 0.0, 0.0),
+        atom_at("C", Element::C, 2.0, 1.4, 0.0),
+        atom_at("O", Element::O, 1.4, 2.5, 0.0),
+    ];
+    let residues = vec![residue("ALA", 1, 0..3)];
+    (atoms, residues)
+}
+
+#[test]
+fn new_drops_backbone_incomplete_residue() {
+    // Pure construction does not complete, so a residue missing a backbone
+    // atom (here CA) cannot be rescued and is dropped by canonicalize. The
+    // load-bearing drop stays intact on the pure path.
+    let (atoms, residues) = backbone_incomplete_anchorable_alanine();
+    let id = EntityIdAllocator::new().allocate();
+    let protein = ProteinEntity::new(id, atoms, residues, b'A', None);
+    assert_eq!(
+        protein.residues.len(),
+        0,
+        "backbone-incomplete residue must drop on the pure path"
+    );
+}
+
+#[test]
+fn new_normalized_rescues_backbone_incomplete_residue() {
+    // Completion runs before the canonicalize drop, so the same residue
+    // (N, C, O present; CA absent) has its backbone CA fabricated from the
+    // template and survives, whereas pure `new` would drop it.
+    let (atoms, residues) = backbone_incomplete_anchorable_alanine();
+    let id = EntityIdAllocator::new().allocate();
+    let protein = ProteinEntity::new_normalized(
+        id,
+        atoms,
+        residues,
+        b'A',
+        None,
+        CompletionMode::HeavyOnly,
+    );
+    assert_eq!(
+        protein.residues.len(),
+        1,
+        "completion must rescue the backbone-incomplete residue"
+    );
+    let names = residue_atom_names(&protein.atoms, &protein.residues[0]);
+    assert!(
+        names.iter().any(|n| n == "CA"),
+        "the missing backbone CA must be fabricated; got {names:?}"
+    );
+}
+
+#[test]
+fn normalize_completes_surviving_residue_sidechain() {
+    // A pure-built ALA whose backbone is intact but sidechain (CB) is
+    // absent survives construction. normalize() re-runs heavy completion
+    // on that survivor and fills in the CB.
+    let (atoms, residues) = backbone_only_alanine();
+    let id = EntityIdAllocator::new().allocate();
+    let pure = ProteinEntity::new(id, atoms, residues, b'A', None);
+    assert_eq!(pure.residues.len(), 1, "backbone-intact ALA must survive");
+    let pure_names = residue_atom_names(&pure.atoms, &pure.residues[0]);
+    assert!(
+        !pure_names.iter().any(|n| n == "CB"),
+        "pure construction must not fabricate CB; got {pure_names:?}"
+    );
+
+    let completed = pure.normalize();
+    let names = residue_atom_names(&completed.atoms, &completed.residues[0]);
+    assert!(
+        names.iter().any(|n| n == "CB"),
+        "normalize must fabricate the missing CB on the survivor; got \
+         {names:?}"
+    );
+}
+
 // -- Sidechain tests --
 
 #[test]

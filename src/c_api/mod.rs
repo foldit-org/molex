@@ -258,6 +258,49 @@ pub(crate) fn assembly_inner_mut<'a>(
     Some(unsafe { &mut *assembly.cast::<Assembly>() })
 }
 
+/// Project an assembly to a fresh heavy-complete handle: polymer entities
+/// gain their missing heavy atoms (see [`molex::Assembly::normalize`]). The
+/// source handle is left untouched.
+///
+/// Completion runs on surviving residues only; residues dropped at
+/// construction are not resurrected.
+///
+/// Returns null on a null input with the error message available via
+/// [`molex_last_error_message`]. The returned handle is caller-owned and
+/// must be freed with [`molex_assembly_free`]; freeing it is independent
+/// of the source handle.
+#[no_mangle]
+pub extern "C" fn molex_assembly_normalize(
+    assembly: *const molex_Assembly,
+) -> *mut molex_Assembly {
+    let Some(inner) = assembly_inner(assembly) else {
+        set_last_error(&"molex_assembly_normalize: null input pointer");
+        return std::ptr::null_mut();
+    };
+    clear_last_error();
+    Box::into_raw(Box::new(inner.normalize())).cast::<molex_Assembly>()
+}
+
+/// Project an assembly to a fresh all-atom handle: polymer entities gain
+/// their template hydrogens (see [`molex::Assembly::to_all_atom`]). The
+/// source handle is left untouched.
+///
+/// Returns null on a null input with the error message available via
+/// [`molex_last_error_message`]. The returned handle is caller-owned and
+/// must be freed with [`molex_assembly_free`]; freeing it is independent
+/// of the source handle.
+#[no_mangle]
+pub extern "C" fn molex_assembly_to_all_atom(
+    assembly: *const molex_Assembly,
+) -> *mut molex_Assembly {
+    let Some(inner) = assembly_inner(assembly) else {
+        set_last_error(&"molex_assembly_to_all_atom: null input pointer");
+        return std::ptr::null_mut();
+    };
+    clear_last_error();
+    Box::into_raw(Box::new(inner.to_all_atom())).cast::<molex_Assembly>()
+}
+
 fn slice_from_raw<'a, T>(ptr: *const T, len: usize) -> Option<&'a [T]> {
     if ptr.is_null() {
         return None;

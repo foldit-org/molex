@@ -514,6 +514,8 @@ fn resolve_auth_chain_byte(
 }
 
 #[cfg(test)]
+mod completion_tests;
+#[cfg(test)]
 mod roundtrip_tests;
 #[cfg(test)]
 mod tests;

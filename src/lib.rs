@@ -48,7 +48,7 @@ pub use entity::molecule::atom::Atom;
 pub use entity::molecule::id::EntityId;
 pub use entity::molecule::protein::{ResidueBackbone, Sidechain};
 pub use entity::molecule::{
-    EntityKind, MoleculeEntity, MoleculeType, NucleotideRing,
+    CompletionMode, EntityKind, MoleculeEntity, MoleculeType, NucleotideRing,
 };
 pub use ops::codec::AdapterError;
 #[cfg(feature = "python")]
@@ -84,6 +84,12 @@ fn molex(_py: Python, m: &Bound<PyModule>) -> PyResult<()> {
         adapters::atomworks::assembly_bytes_to_atom_array_plus,
         m
     )?)?;
+    // Native, Biotite-free read: per-atom columns as numpy arrays.
+    m.add_function(wrap_pyfunction!(
+        adapters::atomworks::assembly_bytes_to_arrays,
+        m
+    )?)?;
+    m.add_class::<adapters::atomworks::AtomArrays>()?;
     m.add_function(wrap_pyfunction!(
         adapters::atomworks::entities_to_atom_array_parsed,
         m

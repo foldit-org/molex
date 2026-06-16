@@ -335,6 +335,37 @@ void molex_assembly_free(molex_Assembly *assembly)
 ;
 
 /**
+ * Project an assembly to a fresh heavy-complete handle: polymer entities
+ * gain their missing heavy atoms (see [`molex::Assembly::normalize`]). The
+ * source handle is left untouched.
+ *
+ * Completion runs on surviving residues only; residues dropped at
+ * construction are not resurrected.
+ *
+ * Returns null on a null input with the error message available via
+ * [`molex_last_error_message`]. The returned handle is caller-owned and
+ * must be freed with [`molex_assembly_free`]; freeing it is independent
+ * of the source handle.
+ */
+
+molex_Assembly *molex_assembly_normalize(const molex_Assembly *assembly)
+;
+
+/**
+ * Project an assembly to a fresh all-atom handle: polymer entities gain
+ * their template hydrogens (see [`molex::Assembly::to_all_atom`]). The
+ * source handle is left untouched.
+ *
+ * Returns null on a null input with the error message available via
+ * [`molex_last_error_message`]. The returned handle is caller-owned and
+ * must be freed with [`molex_assembly_free`]; freeing it is independent
+ * of the source handle.
+ */
+
+molex_Assembly *molex_assembly_to_all_atom(const molex_Assembly *assembly)
+;
+
+/**
  * Parse a PDB-format string into an `Assembly`.
  *
  * Returns null on failure with the error message available via

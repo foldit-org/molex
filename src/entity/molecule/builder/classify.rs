@@ -8,6 +8,7 @@ use super::{
 use crate::entity::molecule::atom::Atom;
 use crate::entity::molecule::bulk::BulkEntity;
 use crate::entity::molecule::classify::classify_residue;
+use crate::entity::molecule::complete::CompletionMode;
 use crate::entity::molecule::nucleic_acid::NAEntity;
 use crate::entity::molecule::polymer::Residue;
 use crate::entity::molecule::protein::ProteinEntity;
@@ -58,23 +59,29 @@ fn emit_polymer_chain(
     let id = ctx.allocator.allocate();
     match mol_type {
         MoleculeType::Protein => {
-            ctx.out.push(MoleculeEntity::Protein(ProteinEntity::new(
-                id,
-                atoms,
-                res_vec,
-                chain.pdb_chain_id,
-                chain.auth_asym_id,
-            )));
+            ctx.out.push(MoleculeEntity::Protein(
+                ProteinEntity::new_normalized(
+                    id,
+                    atoms,
+                    res_vec,
+                    chain.pdb_chain_id,
+                    chain.auth_asym_id,
+                    CompletionMode::HeavyOnly,
+                ),
+            ));
         }
         MoleculeType::DNA | MoleculeType::RNA => {
-            ctx.out.push(MoleculeEntity::NucleicAcid(NAEntity::new(
-                id,
-                mol_type,
-                atoms,
-                res_vec,
-                chain.pdb_chain_id,
-                chain.auth_asym_id,
-            )));
+            ctx.out.push(MoleculeEntity::NucleicAcid(
+                NAEntity::new_normalized(
+                    id,
+                    mol_type,
+                    atoms,
+                    res_vec,
+                    chain.pdb_chain_id,
+                    chain.auth_asym_id,
+                    CompletionMode::HeavyOnly,
+                ),
+            ));
         }
         _ => unreachable!("emit_polymer_chain called with non-polymer type"),
     }
@@ -246,33 +253,42 @@ fn emit_unknown_polymer(
     let id = ctx.allocator.allocate();
     match target {
         UnknownBucket::Protein => {
-            ctx.out.push(MoleculeEntity::Protein(ProteinEntity::new(
-                id,
-                atoms,
-                res_vec,
-                chain.pdb_chain_id,
-                chain.auth_asym_id,
-            )));
+            ctx.out.push(MoleculeEntity::Protein(
+                ProteinEntity::new_normalized(
+                    id,
+                    atoms,
+                    res_vec,
+                    chain.pdb_chain_id,
+                    chain.auth_asym_id,
+                    CompletionMode::HeavyOnly,
+                ),
+            ));
         }
         UnknownBucket::DNA => {
-            ctx.out.push(MoleculeEntity::NucleicAcid(NAEntity::new(
-                id,
-                MoleculeType::DNA,
-                atoms,
-                res_vec,
-                chain.pdb_chain_id,
-                chain.auth_asym_id,
-            )));
+            ctx.out.push(MoleculeEntity::NucleicAcid(
+                NAEntity::new_normalized(
+                    id,
+                    MoleculeType::DNA,
+                    atoms,
+                    res_vec,
+                    chain.pdb_chain_id,
+                    chain.auth_asym_id,
+                    CompletionMode::HeavyOnly,
+                ),
+            ));
         }
         UnknownBucket::RNA => {
-            ctx.out.push(MoleculeEntity::NucleicAcid(NAEntity::new(
-                id,
-                MoleculeType::RNA,
-                atoms,
-                res_vec,
-                chain.pdb_chain_id,
-                chain.auth_asym_id,
-            )));
+            ctx.out.push(MoleculeEntity::NucleicAcid(
+                NAEntity::new_normalized(
+                    id,
+                    MoleculeType::RNA,
+                    atoms,
+                    res_vec,
+                    chain.pdb_chain_id,
+                    chain.auth_asym_id,
+                    CompletionMode::HeavyOnly,
+                ),
+            ));
         }
         UnknownBucket::Water
         | UnknownBucket::Solvent

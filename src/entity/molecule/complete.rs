@@ -14,9 +14,10 @@
 //! terminus-only hydrogens) are out of scope and never fabricated.
 //!
 //! Residues that do not resolve to a template, that resolve to a base
-//! with no template (RNA uracil), that have fewer than three matched
-//! atoms, or whose matched atoms are collinear (all on a single line)
-//! pass through unchanged: those are the only configurations too
+//! with no template in their strand (RNA thymine, DNA uridine), that
+//! have fewer than three matched atoms, or whose matched atoms are
+//! collinear (all on a single line) pass through unchanged: those are
+//! the only configurations too
 //! under-determined to anchor a unique rigid fit. Three or more matched
 //! atoms that are not collinear fix the fit completely (coplanar is
 //! enough; the reflection is resolved by the Kabsch determinant
@@ -29,6 +30,7 @@ use glam::{Mat3, Vec3};
 use super::atom::{pad_atom_name, Atom};
 use super::polymer::Residue;
 use super::protein::trimmed_atom_name;
+use super::MoleculeType;
 use crate::chemistry::amino_acids::AminoAcid;
 use crate::chemistry::atom_name::AtomName;
 use crate::chemistry::completion::{ResidueTemplate, TemplateAtom};
@@ -51,13 +53,26 @@ const COLLINEAR_TOLERANCE: f32 = 1e-3;
 
 /// Which template atoms a completion run is allowed to fabricate.
 ///
-/// The host and rosetta consume heavy atoms only and re-derive hydrogens
-/// downstream, so `HeavyOnly` is the default. `AllAtom` additionally
-/// places template hydrogens for callers that need a fully protonated
-/// model.
+/// `None` skips completion entirely: the residue's atom set is used
+/// exactly as given, fabricating nothing. It is the pure construction
+/// default (wire round-trip, array ingest, continuous rebuild), where
+/// inputs are already complete and re-running the rigid fit is pure
+/// waste. The host and rosetta consume heavy atoms only and re-derive
+/// hydrogens downstream, so `HeavyOnly` is the file-ingest mode.
+/// `AllAtom` additionally places template hydrogens for callers that
+/// need a fully protonated model.
+///
+/// Callers select a mode at construction through the opt-in completing
+/// constructors ([`super::protein::ProteinEntity::new_normalized`] /
+/// [`super::nucleic_acid::NAEntity::new_normalized`]); the plain `new`
+/// constructors are pure (`None`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum CompletionMode {
+pub enum CompletionMode {
+    /// Skip completion entirely; fabricate nothing.
+    None,
+    /// Fabricate only absent heavy template atoms (the file-ingest mode).
     HeavyOnly,
+    /// Fabricate absent heavy atoms and template hydrogens.
     AllAtom,
 }
 
@@ -69,63 +84,38 @@ enum CompletionMode {
 /// recomputed contiguously. Residues whose name does not resolve to a
 /// standard amino acid, or that are too sparse to fit, are emitted
 /// unchanged.
+///
+/// `mode` selects what is fabricated: [`CompletionMode::None`] skips
+/// the pass and returns the atoms unchanged; [`CompletionMode::HeavyOnly`]
+/// (the file-ingest path) places only heavy atoms; [`CompletionMode::AllAtom`]
+/// additionally places template hydrogens.
 pub(super) fn complete_protein_residues(
     atoms: &[Atom],
     residues: &[Residue],
+    mode: CompletionMode,
 ) -> (Vec<Atom>, Vec<Residue>) {
-    complete_residues(atoms, residues, CompletionMode::HeavyOnly, |name| {
+    complete_residues(atoms, residues, mode, |name| {
         AminoAcid::from_code(name).map(AminoAcid::template)
     })
 }
 
-/// All-atom variant of `complete_protein_residues`.
+/// Complete missing atoms in nucleic-acid residues against the strand's
+/// base templates.
 ///
-/// Also fabricates missing template hydrogens, for callers that need a
-/// fully protonated model. The standard host and rosetta paths use the
-/// heavy-only entry.
-#[allow(
-    dead_code,
-    reason = "all-atom completion capability; no consumer wired yet"
-)]
-pub(super) fn complete_protein_residues_all_atom(
-    atoms: &[Atom],
-    residues: &[Residue],
-) -> (Vec<Atom>, Vec<Residue>) {
-    complete_residues(atoms, residues, CompletionMode::AllAtom, |name| {
-        AminoAcid::from_code(name).map(AminoAcid::template)
-    })
-}
-
-/// Complete missing atoms in nucleic-acid residues against DNA-base
-/// templates.
-///
-/// Same contract as [`complete_protein_residues`]; resolution goes
-/// through [`Nucleotide`]. Bases with no template (RNA uracil) pass
+/// Same contract as [`complete_protein_residues`] (including the `mode`
+/// semantics); resolution goes through [`Nucleotide`] in the chemistry
+/// the entity's `na_type` selects, so an RNA chain completes against
+/// ribose (2'-OH) templates and a DNA chain against deoxyribose ones.
+/// Bases with no template in that strand (RNA thymine, DNA uridine) pass
 /// through unchanged.
 pub(super) fn complete_na_residues(
     atoms: &[Atom],
     residues: &[Residue],
+    mode: CompletionMode,
+    na_type: MoleculeType,
 ) -> (Vec<Atom>, Vec<Residue>) {
-    complete_residues(atoms, residues, CompletionMode::HeavyOnly, |name| {
-        Nucleotide::from_code(name).and_then(Nucleotide::template)
-    })
-}
-
-/// All-atom variant of `complete_na_residues`.
-///
-/// Also fabricates missing template hydrogens, for callers that need a
-/// fully protonated model. The standard host and rosetta paths use the
-/// heavy-only entry.
-#[allow(
-    dead_code,
-    reason = "all-atom completion capability; no consumer wired yet"
-)]
-pub(super) fn complete_na_residues_all_atom(
-    atoms: &[Atom],
-    residues: &[Residue],
-) -> (Vec<Atom>, Vec<Residue>) {
-    complete_residues(atoms, residues, CompletionMode::AllAtom, |name| {
-        Nucleotide::from_code(name).and_then(Nucleotide::template)
+    complete_residues(atoms, residues, mode, |name| {
+        Nucleotide::from_code(name).and_then(|n| n.template(na_type))
     })
 }
 
@@ -148,14 +138,16 @@ fn complete_residues(
             new_atoms.push(atoms[idx].clone());
         }
 
-        if let Some(template) = resolve(residue.name) {
-            append_missing_atoms(
-                atoms,
-                residue.atom_range.clone(),
-                template,
-                mode,
-                &mut new_atoms,
-            );
+        if mode != CompletionMode::None {
+            if let Some(template) = resolve(residue.name) {
+                append_missing_atoms(
+                    atoms,
+                    residue.atom_range.clone(),
+                    template,
+                    mode,
+                    &mut new_atoms,
+                );
+            }
         }
 
         let end = new_atoms.len();

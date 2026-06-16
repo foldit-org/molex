@@ -42,9 +42,9 @@ pub use from_array::{
 };
 use pyo3::prelude::*;
 pub use to_array::{
-    assembly_bytes_to_atom_array, assembly_bytes_to_atom_array_plus,
-    entities_to_atom_array, entities_to_atom_array_parsed,
-    entities_to_atom_array_plus,
+    assembly_bytes_to_arrays, assembly_bytes_to_atom_array,
+    assembly_bytes_to_atom_array_plus, entities_to_atom_array,
+    entities_to_atom_array_parsed, entities_to_atom_array_plus, AtomArrays,
 };
 
 use crate::entity::molecule::MoleculeType;

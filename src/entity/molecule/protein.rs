@@ -6,7 +6,7 @@
 use glam::Vec3;
 
 use super::atom::Atom;
-use super::complete::complete_protein_residues;
+use super::complete::{complete_protein_residues, CompletionMode};
 use super::id::EntityId;
 use super::traits::{Entity, Polymer};
 use super::{MoleculeType, Residue};
@@ -130,6 +130,15 @@ impl ProteinEntity {
     /// Also computes segment breaks from C(i)->N(i+1) distance and
     /// populates `bonds` from the `AminoAcid::bonds()` tables plus
     /// universal backbone + inter-residue peptide bonds.
+    ///
+    /// Construction is pure: the atom set is assembled exactly as given
+    /// and no missing-atom completion runs. A residue still missing any
+    /// backbone atom is dropped by canonicalize; sidechain-incomplete
+    /// residues are kept as-is with nothing fabricated. To fabricate
+    /// missing atoms at construction (and rescue backbone-incomplete
+    /// residues before the drop), use [`Self::new_normalized`]; to
+    /// complete an already-built entity's surviving residues, use
+    /// [`Self::normalize`].
     #[must_use]
     #[allow(
         clippy::needless_pass_by_value,
@@ -143,20 +152,54 @@ impl ProteinEntity {
         pdb_chain_id: u8,
         auth_asym_id: Option<u8>,
     ) -> Self {
-        let (atoms, residues) = complete_protein_residues(&atoms, &residues);
-        let (atoms, residues) =
-            canonicalize_protein_residues(&atoms, &residues, pdb_chain_id);
-        let segment_breaks = compute_segment_breaks(&residues, &atoms);
-        let bonds = build_protein_bonds(id, &atoms, &residues, &segment_breaks);
-        Self {
+        build_protein(
             id,
             atoms,
             residues,
-            segment_breaks,
-            bonds,
             pdb_chain_id,
             auth_asym_id,
-        }
+            CompletionMode::None,
+            false,
+        )
+    }
+
+    /// Construct a protein entity, fabricating missing atoms at
+    /// construction in the given completion `mode`.
+    ///
+    /// Same canonicalize / segment-break / bond-graph construction as
+    /// [`Self::new`], but the rigid-fit completion pass runs first (in
+    /// `mode`), before the canonicalize reorder. Because completion runs
+    /// before the drop, a residue that is backbone-incomplete in the
+    /// parse but anchorable can have its backbone fabricated and survive,
+    /// whereas the pure [`Self::new`] would drop it. The raw-ingest path
+    /// (file parses) uses this with [`CompletionMode::HeavyOnly`].
+    #[must_use]
+    #[allow(
+        clippy::needless_pass_by_value,
+        reason = "constructor owns the inputs; canonicalize borrows before \
+                  reassigning new owned vecs"
+    )]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "mirrors new's argument set plus the completion mode"
+    )]
+    pub fn new_normalized(
+        id: EntityId,
+        atoms: Vec<Atom>,
+        residues: Vec<Residue>,
+        pdb_chain_id: u8,
+        auth_asym_id: Option<u8>,
+        completion: CompletionMode,
+    ) -> Self {
+        build_protein(
+            id,
+            atoms,
+            residues,
+            pdb_chain_id,
+            auth_asym_id,
+            completion,
+            false,
+        )
     }
 
     /// Construct a protein entity assuming a single continuous chain
@@ -170,11 +213,6 @@ impl ProteinEntity {
     /// Caller is responsible for knowing that the residues form one
     /// chain.
     #[must_use]
-    #[allow(
-        clippy::needless_pass_by_value,
-        reason = "constructor owns the inputs; canonicalize borrows before \
-                  reassigning new owned vecs"
-    )]
     pub fn new_continuous(
         id: EntityId,
         atoms: Vec<Atom>,
@@ -182,20 +220,15 @@ impl ProteinEntity {
         pdb_chain_id: u8,
         auth_asym_id: Option<u8>,
     ) -> Self {
-        let (atoms, residues) = complete_protein_residues(&atoms, &residues);
-        let (atoms, residues) =
-            canonicalize_protein_residues(&atoms, &residues, pdb_chain_id);
-        let segment_breaks = Vec::new();
-        let bonds = build_protein_bonds(id, &atoms, &residues, &segment_breaks);
-        Self {
+        build_protein(
             id,
             atoms,
             residues,
-            segment_breaks,
-            bonds,
             pdb_chain_id,
             auth_asym_id,
-        }
+            CompletionMode::None,
+            true,
+        )
     }
 
     /// Rebuild this entity as a single continuous chain, dropping the
@@ -205,15 +238,63 @@ impl ProteinEntity {
     /// For synthetic or noisy backbones (ML diffusion intermediates):
     /// `new`'s C(i)->N(i+1) distance check fragments such a chain into a
     /// segment per residue, so it renders as disconnected pieces. This
-    /// reconnects it. Caller asserts the residues form one chain.
+    /// reconnects it. Caller asserts the residues form one chain. The
+    /// atoms are already complete, so no completion pass is run.
     #[must_use]
     pub fn to_continuous(&self) -> Self {
-        Self::new_continuous(
+        build_protein(
             self.id,
             self.atoms.clone(),
             self.residues.clone(),
             self.pdb_chain_id,
             self.auth_asym_id,
+            CompletionMode::None,
+            true,
+        )
+    }
+
+    /// Rebuild this entity with heavy-atom completion, fabricating the
+    /// missing heavy sidechain/base atoms a sparse parse omits. Identity,
+    /// segment-break detection, and existing atoms are preserved;
+    /// completion matches every present atom against its template by name
+    /// and places only the absent in-scope heavy atoms (idempotent: a
+    /// second projection adds nothing).
+    ///
+    /// This re-runs completion on the entity's already-surviving
+    /// residues; it cannot resurrect a residue that was dropped at
+    /// construction for missing backbone atoms (those atoms are no longer
+    /// referenced by any residue). To rescue backbone-incomplete residues,
+    /// fabricate at construction with [`Self::new_normalized`].
+    ///
+    /// Atom indices shift because fabricated atoms are appended per
+    /// residue and the atom set is re-canonicalized, so `AtomId`s are not
+    /// stable across this projection.
+    #[must_use]
+    pub fn normalize(&self) -> Self {
+        self.completed(CompletionMode::HeavyOnly)
+    }
+
+    /// Rebuild this entity with all-atom completion, additionally
+    /// fabricating the template hydrogens [`Self::normalize`] omits.
+    /// Same identity / index-shift / survivors-only caveats as
+    /// [`Self::normalize`].
+    #[must_use]
+    pub fn to_all_atom(&self) -> Self {
+        self.completed(CompletionMode::AllAtom)
+    }
+
+    /// Re-extract this entity's atoms and residues and rebuild them with
+    /// the given completion `mode`. Shared core of [`Self::normalize`] and
+    /// [`Self::to_all_atom`].
+    fn completed(&self, mode: CompletionMode) -> Self {
+        build_protein(
+            self.id,
+            self.atoms.clone(),
+            self.residues.clone(),
+            self.pdb_chain_id,
+            self.auth_asym_id,
+            mode,
+            false,
         )
     }
 
@@ -333,6 +414,49 @@ impl Polymer for ProteinEntity {
 }
 
 // -- Internal helpers --------------------------------------------------------
+
+/// Shared protein-entity construction: complete (in `mode`), canonicalize,
+/// derive segment breaks, and build the bond graph. `continuous` selects
+/// whether segment breaks are distance-detected from C(i)->N(i+1) geometry
+/// (`false`) or forced empty for a single continuous chain (`true`).
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "owns the inputs; canonicalize borrows before reassigning new \
+              owned vecs"
+)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "mirrors the two public constructors' argument set plus the \
+              completion mode and the continuous-chain selector"
+)]
+fn build_protein(
+    id: EntityId,
+    atoms: Vec<Atom>,
+    residues: Vec<Residue>,
+    pdb_chain_id: u8,
+    auth_asym_id: Option<u8>,
+    mode: CompletionMode,
+    continuous: bool,
+) -> ProteinEntity {
+    let (atoms, residues) = complete_protein_residues(&atoms, &residues, mode);
+    let (atoms, residues) =
+        canonicalize_protein_residues(&atoms, &residues, pdb_chain_id);
+    let segment_breaks = if continuous {
+        Vec::new()
+    } else {
+        compute_segment_breaks(&residues, &atoms)
+    };
+    let bonds = build_protein_bonds(id, &atoms, &residues, &segment_breaks);
+    ProteinEntity {
+        id,
+        atoms,
+        residues,
+        segment_breaks,
+        bonds,
+        pdb_chain_id,
+        auth_asym_id,
+    }
+}
 
 /// Reorganize atoms into canonical per-residue order and drop residues
 /// missing backbone atoms.

@@ -132,6 +132,29 @@ impl PyAssembly {
         self.inner.generation()
     }
 
+    /// Project to a fresh heavy-complete `Assembly`: polymer entities gain
+    /// their missing heavy atoms (see [`molex::Assembly::normalize`]). Atom
+    /// indices shift, so any externally held atom indices into the source
+    /// assembly do not carry over. Completion runs on surviving residues
+    /// only; residues dropped at construction are not resurrected.
+    #[must_use]
+    pub fn normalize(&self) -> Self {
+        Self {
+            inner: self.inner.normalize(),
+        }
+    }
+
+    /// Project to a fresh all-atom `Assembly`: polymer entities gain their
+    /// template hydrogens (see [`molex::Assembly::to_all_atom`]). Atom
+    /// indices shift, so any externally held atom indices into the source
+    /// assembly do not carry over.
+    #[must_use]
+    pub fn to_all_atom(&self) -> Self {
+        Self {
+            inner: self.inner.to_all_atom(),
+        }
+    }
+
     /// Apply every edit in `edits` to the assembly in order.
     ///
     /// # Errors

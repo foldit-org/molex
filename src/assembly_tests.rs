@@ -216,6 +216,91 @@ fn mutation_result_matches_fresh_build() {
     assert_eq!(mutated.ss_types(a_id).len(), fresh.ss_types(a_id).len());
 }
 
+// -- All-atom projection --
+
+/// Assert every source heavy atom survives the all-atom projection
+/// unchanged: per residue, the projected residue's non-hydrogen atoms
+/// match the source's by name and position, in order.
+fn assert_heavy_atoms_preserved(
+    heavy: &ProteinEntity,
+    all_atom: &ProteinEntity,
+) {
+    use crate::entity::molecule::protein::trimmed_atom_name;
+
+    for (h_res, a_res) in heavy.residues.iter().zip(&all_atom.residues) {
+        let heavy_atoms: Vec<_> =
+            h_res.atom_range.clone().map(|i| &heavy.atoms[i]).collect();
+        let aa_heavy: Vec<_> = a_res
+            .atom_range
+            .clone()
+            .map(|i| &all_atom.atoms[i])
+            .filter(|a| a.element != Element::H)
+            .collect();
+        assert_eq!(
+            heavy_atoms.len(),
+            aa_heavy.len(),
+            "heavy-atom count per residue must be unchanged by projection"
+        );
+        for (ha, aa) in heavy_atoms.iter().zip(&aa_heavy) {
+            assert_eq!(
+                trimmed_atom_name(&ha.name),
+                trimmed_atom_name(&aa.name),
+                "heavy atom name must be preserved"
+            );
+            assert_eq!(
+                ha.position, aa.position,
+                "heavy atom position must be preserved"
+            );
+        }
+    }
+}
+
+#[test]
+fn to_all_atom_adds_hydrogens_keeps_heavy_and_is_idempotent() {
+    let mut alloc = EntityIdAllocator::new();
+    // ALA-GLY dipeptide built heavy-only: both residues resolve to a
+    // standard template, so all-atom completion has hydrogens to add.
+    let dipep = make_dipeptide(&mut alloc, b'A', Vec3::ZERO);
+    let eid = dipep.id();
+    let heavy = Assembly::new(vec![dipep]);
+    let heavy_protein =
+        heavy.entity(eid).unwrap().as_protein().unwrap().clone();
+    assert!(
+        heavy_protein.atoms.iter().all(|a| a.element != Element::H),
+        "heavy-only build must carry no hydrogens"
+    );
+
+    // (a) Projection gains hydrogens: atom count rises and at least one
+    // H is present.
+    let all_atom = heavy.to_all_atom();
+    let aa_protein =
+        all_atom.entity(eid).unwrap().as_protein().unwrap().clone();
+    assert!(
+        aa_protein.atoms.len() > heavy_protein.atoms.len(),
+        "all-atom projection must add atoms (got {} vs {})",
+        aa_protein.atoms.len(),
+        heavy_protein.atoms.len()
+    );
+    assert!(
+        aa_protein.atoms.iter().any(|a| a.element == Element::H),
+        "all-atom projection must fabricate hydrogens"
+    );
+
+    // (b) Every source heavy atom survives unchanged.
+    assert_heavy_atoms_preserved(&heavy_protein, &aa_protein);
+
+    // (c) Idempotent: projecting twice equals projecting once (the second
+    // pass finds every template atom already present and adds nothing).
+    let twice = all_atom.to_all_atom();
+    let twice_protein =
+        twice.entity(eid).unwrap().as_protein().unwrap().clone();
+    assert_eq!(
+        twice_protein.atoms.len(),
+        aa_protein.atoms.len(),
+        "to_all_atom must be idempotent"
+    );
+}
+
 // -- Connections (rendering metadata) --
 
 #[test]

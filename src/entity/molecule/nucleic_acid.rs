@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use glam::Vec3;
 
 use super::atom::Atom;
-use super::complete::complete_na_residues;
+use super::complete::{complete_na_residues, CompletionMode};
 use super::id::EntityId;
 use super::protein::trimmed_atom_name;
 use super::traits::{Entity, Polymer};
@@ -103,12 +103,13 @@ impl NAEntity {
     /// Residues missing any of the six canonical backbone atoms are
     /// dropped from `residues` with a `log::warn!`; their atoms
     /// remain in `atoms` but are unreferenced.
+    ///
+    /// Construction is pure: the atom set is assembled exactly as given
+    /// and no missing-atom completion runs. To fabricate missing atoms at
+    /// construction (and rescue backbone-incomplete residues before the
+    /// drop), use [`Self::new_normalized`]; to complete an already-built
+    /// entity's surviving residues, use [`Self::normalize`].
     #[must_use]
-    #[allow(
-        clippy::needless_pass_by_value,
-        reason = "constructor owns the inputs; canonicalize borrows before \
-                  reassigning new owned vecs"
-    )]
     #[allow(
         clippy::too_many_arguments,
         reason = "id + atoms + residues + label/auth chain bytes are \
@@ -124,21 +125,95 @@ impl NAEntity {
         pdb_chain_id: u8,
         auth_asym_id: Option<u8>,
     ) -> Self {
-        let (atoms, residues) = complete_na_residues(&atoms, &residues);
-        let (atoms, residues) =
-            canonicalize_na_residues(&atoms, &residues, pdb_chain_id);
-        let segment_breaks = compute_na_segment_breaks(&atoms, &residues);
-        let bonds = build_na_bonds(id, &atoms, &residues, &segment_breaks);
-        Self {
+        build_na(
             id,
             na_type,
             atoms,
             residues,
-            segment_breaks,
-            bonds,
             pdb_chain_id,
             auth_asym_id,
-        }
+            CompletionMode::None,
+        )
+    }
+
+    /// Construct an NA entity, fabricating missing atoms at construction
+    /// in the given completion `mode`.
+    ///
+    /// Same canonicalize / segment-break / bond-graph construction as
+    /// [`Self::new`], but the rigid-fit completion pass runs first (in
+    /// `mode`), before the canonicalize reorder. Because completion runs
+    /// before the drop, a backbone-incomplete but anchorable residue can
+    /// have its backbone fabricated and survive, whereas the pure
+    /// [`Self::new`] would drop it. The raw-ingest path (file parses)
+    /// uses this with [`CompletionMode::HeavyOnly`].
+    #[must_use]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "mirrors NAEntity::new's argument set plus the completion \
+                  mode"
+    )]
+    pub fn new_normalized(
+        id: EntityId,
+        na_type: MoleculeType,
+        atoms: Vec<Atom>,
+        residues: Vec<Residue>,
+        pdb_chain_id: u8,
+        auth_asym_id: Option<u8>,
+        completion: CompletionMode,
+    ) -> Self {
+        build_na(
+            id,
+            na_type,
+            atoms,
+            residues,
+            pdb_chain_id,
+            auth_asym_id,
+            completion,
+        )
+    }
+
+    /// Rebuild this entity with heavy-atom completion, fabricating the
+    /// missing heavy base atoms a sparse parse omits. Identity, type,
+    /// segment breaks, and existing atoms are preserved; completion
+    /// matches every present atom against its template by name and places
+    /// only the absent in-scope heavy atoms (idempotent: a second
+    /// projection adds nothing).
+    ///
+    /// This re-runs completion on the entity's already-surviving
+    /// residues; it cannot resurrect a residue dropped at construction
+    /// for missing backbone atoms. To rescue backbone-incomplete
+    /// residues, fabricate at construction with [`Self::new_normalized`].
+    ///
+    /// Atom indices shift because fabricated atoms are appended per
+    /// residue and the atom set is re-canonicalized, so `AtomId`s are not
+    /// stable across this projection.
+    #[must_use]
+    pub fn normalize(&self) -> Self {
+        self.completed(CompletionMode::HeavyOnly)
+    }
+
+    /// Rebuild this entity with all-atom completion, additionally
+    /// fabricating the template hydrogens [`Self::normalize`] omits.
+    /// Same identity / index-shift / survivors-only caveats as
+    /// [`Self::normalize`].
+    #[must_use]
+    pub fn to_all_atom(&self) -> Self {
+        self.completed(CompletionMode::AllAtom)
+    }
+
+    /// Re-extract this entity's atoms and residues and rebuild them with
+    /// the given completion `mode`. Shared core of [`Self::normalize`] and
+    /// [`Self::to_all_atom`].
+    fn completed(&self, mode: CompletionMode) -> Self {
+        build_na(
+            self.id,
+            self.na_type,
+            self.atoms.clone(),
+            self.residues.clone(),
+            self.pdb_chain_id,
+            self.auth_asym_id,
+            mode,
+        )
     }
 
     /// Extract phosphorus (P) atom positions, split into segments at
@@ -246,6 +321,44 @@ impl NAEntity {
         }
 
         rings
+    }
+}
+
+/// Shared NA-entity construction: complete (in `mode`), canonicalize,
+/// derive segment breaks, and build the bond graph.
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "owns the inputs; canonicalize borrows before reassigning new \
+              owned vecs"
+)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "mirrors NAEntity::new's argument set plus the completion mode"
+)]
+fn build_na(
+    id: EntityId,
+    na_type: MoleculeType,
+    atoms: Vec<Atom>,
+    residues: Vec<Residue>,
+    pdb_chain_id: u8,
+    auth_asym_id: Option<u8>,
+    mode: CompletionMode,
+) -> NAEntity {
+    let (atoms, residues) =
+        complete_na_residues(&atoms, &residues, mode, na_type);
+    let (atoms, residues) =
+        canonicalize_na_residues(&atoms, &residues, pdb_chain_id);
+    let segment_breaks = compute_na_segment_breaks(&atoms, &residues);
+    let bonds = build_na_bonds(id, &atoms, &residues, &segment_breaks);
+    NAEntity {
+        id,
+        na_type,
+        atoms,
+        residues,
+        segment_breaks,
+        bonds,
+        pdb_chain_id,
+        auth_asym_id,
     }
 }
 
@@ -491,135 +604,5 @@ impl Polymer for NAEntity {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
-mod tests {
-    use super::*;
-    use crate::element::Element;
-    use crate::entity::molecule::id::EntityIdAllocator;
-
-    fn atom_with(name: &str, el: Element, x: f32) -> Atom {
-        let mut n = [b' '; 4];
-        for (i, b) in name.bytes().take(4).enumerate() {
-            n[i] = b;
-        }
-        Atom {
-            position: Vec3::new(x, 0.0, 0.0),
-            occupancy: 1.0,
-            b_factor: 0.0,
-            element: el,
-            name: n,
-            formal_charge: 0,
-        }
-    }
-
-    fn res_name_bytes(s: &str) -> [u8; 3] {
-        let mut n = [b' '; 3];
-        for (i, b) in s.bytes().take(3).enumerate() {
-            n[i] = b;
-        }
-        n
-    }
-
-    /// Build an NAEntity with a single canonical adenine (DA) residue
-    /// from a scrambled atom order.
-    fn scrambled_adenine_entity() -> NAEntity {
-        // Intended atoms for a single DA residue (DNA adenine):
-        // Backbone: P, O5', C5', C4', C3', O3'
-        // Sugar extras: O4', C1', C2'
-        // Base: N9, C8, N7, C5, C4, N3, C2, N1, C6, N6
-        // H: HA1' (non-existent but used for test)
-        // Let's scramble.
-        let atoms = vec![
-            atom_with("O3'", Element::O, 1.0), // backbone position 5
-            atom_with("C4'", Element::C, 2.0), // backbone position 3
-            atom_with("N9", Element::N, 3.0),  // base
-            atom_with("P", Element::P, 4.0),   // backbone position 0
-            atom_with("C5'", Element::C, 5.0), // backbone position 2
-            atom_with("O5'", Element::O, 6.0), // backbone position 1
-            atom_with("C3'", Element::C, 7.0), // backbone position 4
-            atom_with("H8", Element::H, 8.0),  // hydrogen
-            atom_with("O4'", Element::O, 9.0), /* base (but really sugar);
-                                                * treated as non-backbone */
-            atom_with("C1'", Element::C, 10.0), // non-backbone heavy
-        ];
-        let residues = vec![Residue {
-            name: res_name_bytes("DA "),
-            label_seq_id: 1,
-            auth_seq_id: None,
-            auth_comp_id: None,
-            ins_code: None,
-            atom_range: 0..atoms.len(),
-            variants: Vec::new(),
-        }];
-        let mut alloc = EntityIdAllocator::new();
-        let id = alloc.allocate();
-        NAEntity::new(id, MoleculeType::DNA, atoms, residues, b'A', None)
-    }
-
-    #[test]
-    fn na_canonical_ordering_places_backbone_first() {
-        let na = scrambled_adenine_entity();
-        assert_eq!(na.residues.len(), 1);
-        let r = &na.residues[0];
-        let names: Vec<&str> = r
-            .atom_range
-            .clone()
-            .map(|i| std::str::from_utf8(&na.atoms[i].name).unwrap().trim())
-            .collect();
-        // First six must be the canonical backbone.
-        assert_eq!(&names[..6], &["P", "O5'", "C5'", "C4'", "C3'", "O3'"]);
-    }
-
-    #[test]
-    fn na_bonds_include_sugar_phosphate_and_purine_anchor() {
-        let na = scrambled_adenine_entity();
-        // bonds are AtomId-endpoint. Reconstruct by name.
-        let name_of = |aid: AtomId| {
-            std::str::from_utf8(&na.atoms[aid.index as usize].name)
-                .unwrap()
-                .trim()
-                .to_owned()
-        };
-        let pairs: Vec<(String, String)> = na
-            .bonds
-            .iter()
-            .map(|b| (name_of(b.a), name_of(b.b)))
-            .collect();
-        // P-O5' should be present
-        assert!(pairs.iter().any(|(a, b)| {
-            (a == "P" && b == "O5'") || (a == "O5'" && b == "P")
-        }));
-        // C1'-N9 (sugar-base anchor for purine)
-        assert!(pairs.iter().any(|(a, b)| {
-            (a == "C1'" && b == "N9") || (a == "N9" && b == "C1'")
-        }));
-    }
-
-    #[test]
-    fn na_drops_residue_missing_backbone() {
-        // Residue with only P and O5': missing four backbone atoms, and
-        // with just two present atoms it falls below the three-atom
-        // anchor floor, so the completion pass cannot rebuild the
-        // backbone and the residue is still dropped.
-        let atoms = vec![
-            atom_with("P", Element::P, 0.0),
-            atom_with("O5'", Element::O, 1.0),
-        ];
-        let residues = vec![Residue {
-            name: res_name_bytes("DA "),
-            label_seq_id: 1,
-            auth_seq_id: None,
-            auth_comp_id: None,
-            ins_code: None,
-            atom_range: 0..atoms.len(),
-            variants: Vec::new(),
-        }];
-        let mut alloc = EntityIdAllocator::new();
-        let id = alloc.allocate();
-        let na =
-            NAEntity::new(id, MoleculeType::DNA, atoms, residues, b'A', None);
-        assert_eq!(na.residues.len(), 0);
-        // Atoms still present (carried through, unreferenced).
-        assert_eq!(na.atoms.len(), 2);
-    }
-}
+#[path = "nucleic_acid_tests.rs"]
+mod tests;

@@ -30,12 +30,13 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
 
-/// Component codes to vendor, in emit order: the 20 amino acids then the
-/// 4 DNA bases. Order here fixes the order of the generated consts.
+/// Component codes to vendor, in emit order: the 20 amino acids, the 4
+/// DNA bases, then the 4 RNA bases. Order here fixes the order of the
+/// generated consts.
 const COMPONENTS: &[&str] = &[
     "ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "ILE",
     "LEU", "LYS", "MET", "PHE", "PRO", "SER", "THR", "TRP", "TYR", "VAL", "DA",
-    "DC", "DG", "DT",
+    "DC", "DG", "DT", "A", "C", "G", "U",
 ];
 
 /// One parsed atom row from a `_chem_comp_atom` loop.
@@ -107,34 +108,42 @@ fn parse_chem_comp_atom(text: &str) -> Option<Vec<AtomRow>> {
 }
 
 /// Indices of the fields the template needs, resolved from header order.
+///
+/// The three per-atom role-flag columns (backbone, N-/C-terminal) are
+/// optional: some RCSB ligand CIFs (e.g. the `C` and `U` RNA bases) omit
+/// them entirely. An absent column reads as "no atom flagged," i.e.
+/// false everywhere, which matches the all-`N` rows the components that
+/// do carry the columns emit for these flags.
 struct ColumnMap {
     atom_id: usize,
     type_symbol: usize,
     leaving: usize,
-    backbone: usize,
-    n_terminal: usize,
-    c_terminal: usize,
+    backbone: Option<usize>,
+    n_terminal: Option<usize>,
+    c_terminal: Option<usize>,
     x_ideal: usize,
     y_ideal: usize,
     z_ideal: usize,
 }
 
 fn column_map(headers: &[&str]) -> ColumnMap {
-    let find = |suffix: &str| -> usize {
+    let position = |suffix: &str| -> Option<usize> {
         headers
             .iter()
             .position(|h| *h == format!("_chem_comp_atom.{suffix}"))
-            .unwrap_or_else(|| {
-                panic!("missing column _chem_comp_atom.{suffix}")
-            })
+    };
+    let find = |suffix: &str| -> usize {
+        position(suffix).unwrap_or_else(|| {
+            panic!("missing column _chem_comp_atom.{suffix}")
+        })
     };
     ColumnMap {
         atom_id: find("atom_id"),
         type_symbol: find("type_symbol"),
         leaving: find("pdbx_leaving_atom_flag"),
-        backbone: find("pdbx_backbone_atom_flag"),
-        n_terminal: find("pdbx_n_terminal_atom_flag"),
-        c_terminal: find("pdbx_c_terminal_atom_flag"),
+        backbone: position("pdbx_backbone_atom_flag"),
+        n_terminal: position("pdbx_n_terminal_atom_flag"),
+        c_terminal: position("pdbx_c_terminal_atom_flag"),
         x_ideal: find("pdbx_model_Cartn_x_ideal"),
         y_ideal: find("pdbx_model_Cartn_y_ideal"),
         z_ideal: find("pdbx_model_Cartn_z_ideal"),
@@ -158,13 +167,15 @@ fn read_rows(lines: &[&str], start: usize, cols: &ColumnMap) -> Vec<AtomRow> {
         }
         let toks = tokenize(line);
         let yes = |idx: usize| toks.get(idx).map(String::as_str) == Some("Y");
+        // An absent role-flag column reads as false (atom not flagged).
+        let opt_yes = |idx: Option<usize>| idx.is_some_and(yes);
         out.push(AtomRow {
             atom_id: toks[cols.atom_id].clone(),
             type_symbol: toks[cols.type_symbol].clone(),
             is_leaving: yes(cols.leaving),
-            is_backbone: yes(cols.backbone),
-            is_n_terminal: yes(cols.n_terminal),
-            is_c_terminal: yes(cols.c_terminal),
+            is_backbone: opt_yes(cols.backbone),
+            is_n_terminal: opt_yes(cols.n_terminal),
+            is_c_terminal: opt_yes(cols.c_terminal),
             x: parse_coord(&toks[cols.x_ideal]),
             y: parse_coord(&toks[cols.y_ideal]),
             z: parse_coord(&toks[cols.z_ideal]),
@@ -305,6 +316,11 @@ const HEADER: &str = "\
 //! Produced by `cargo run --example gen_completion_table` from the
 //! vendored PDB Chemical Component Dictionary files in `data/ccd/`.
 //! Re-run the generator to regenerate; edits here will be overwritten.
+
+// Ideal coordinates are verbatim dictionary values; a component occasionally
+// has a coordinate that lands near a math constant (e.g. 0.318 ~ 1/pi). These
+// are data, not constant uses, so the approx-constant lint does not apply.
+#![allow(clippy::approx_constant)]
 
 use glam::Vec3;
 

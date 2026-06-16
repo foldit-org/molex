@@ -97,9 +97,9 @@ fn assembly_bytes_roundtrip_mixed() {
 #[test]
 fn assembly_bytes_protein_only() {
     let id = EntityIdAllocator::new().allocate();
-    // Residue named UNK so the missing-atom completion pass is a no-op;
-    // this test fixes the serialized atom count and is about wire layout,
-    // not chemistry.
+    // This test fixes the serialized atom count and is about wire layout,
+    // not chemistry. Construction is pure, so the four backbone atoms
+    // round-trip unchanged regardless of residue name.
     let protein = MoleculeEntity::Protein(ProteinEntity::new(
         id,
         ala_residue_atoms(1.0),
@@ -117,6 +117,32 @@ fn assembly_bytes_protein_only() {
         MoleculeType::Protein
     );
     assert_eq!(roundtripped.entities()[0].atom_count(), 4);
+}
+
+#[test]
+fn deserialize_assembly_is_pure_adds_no_atoms() {
+    // The wire path constructs entities purely: a sidechain-incomplete
+    // residue (backbone-only ALA, CB absent) must survive serialization
+    // and deserialization with its atom count unchanged. Completion would
+    // fabricate CB; the wire path must not run it.
+    let id = EntityIdAllocator::new().allocate();
+    let protein = MoleculeEntity::Protein(ProteinEntity::new(
+        id,
+        ala_residue_atoms(1.0),
+        vec![residue("ALA", 1, 0..4)],
+        b'A',
+        None,
+    ));
+    let input_count = protein.atom_count();
+    assert_eq!(input_count, 4, "backbone-only ALA starts with 4 atoms");
+
+    let bytes = assembly_bytes(&[protein]).unwrap();
+    let roundtripped = deserialize_assembly(&bytes).unwrap();
+    assert_eq!(
+        roundtripped.entities()[0].atom_count(),
+        input_count,
+        "wire round-trip must fabricate no atoms (CB stays absent)"
+    );
 }
 
 #[test]

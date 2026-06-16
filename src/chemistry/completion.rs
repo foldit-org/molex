@@ -1,7 +1,8 @@
 //! Ideal-geometry reference templates for standard residues.
 //!
-//! Each standard amino acid and DNA nucleotide has a full all-atom
-//! (heavy + hydrogen) ideal conformation taken from the PDB Chemical
+//! Each standard amino acid and nucleotide (DNA deoxyribose and RNA
+//! ribose) has a full all-atom (heavy + hydrogen) ideal conformation
+//! taken from the PDB Chemical
 //! Component Dictionary. These templates are the source geometry for
 //! completing residues that are missing atoms: a rigid fit of the
 //! template's present atoms onto a parsed residue's present atoms
@@ -17,6 +18,7 @@ use super::amino_acids::AminoAcid;
 use super::atom_name::AtomName;
 use super::nucleotides::Nucleotide;
 use crate::element::Element;
+use crate::entity::molecule::MoleculeType;
 
 /// One atom of an ideal-geometry residue template.
 ///
@@ -108,20 +110,38 @@ impl AminoAcid {
 }
 
 impl Nucleotide {
-    /// Ideal-geometry template for this nucleotide.
+    /// Ideal-geometry template for this nucleotide in the given strand
+    /// chemistry.
     ///
-    /// Only the four DNA bases (A, C, G, T) have templates. RNA uracil
-    /// ([`Nucleotide::U`]) returns `None`; an RNA template set is a
-    /// later addition.
+    /// The base enum is strand-agnostic; the deoxyribose-vs-ribose choice
+    /// rides on `na_type`. RNA resolves to the ribose components (A, C, G,
+    /// U), which carry the 2'-OH (`O2'`); DNA resolves to the deoxyribose
+    /// components (DA, DC, DG, DT), which do not. Each strand lacks the
+    /// other's odd base out: RNA has no thymine and DNA has no vendored
+    /// uridine component, so those return `None`. A non-nucleic
+    /// [`MoleculeType`] also returns `None`.
     #[must_use]
-    pub fn template(self) -> Option<&'static ResidueTemplate> {
+    pub fn template(
+        self,
+        na_type: MoleculeType,
+    ) -> Option<&'static ResidueTemplate> {
         use super::completion_data as data;
-        match self {
-            Self::A => Some(&data::DA),
-            Self::C => Some(&data::DC),
-            Self::G => Some(&data::DG),
-            Self::T => Some(&data::DT),
-            Self::U => None,
+        match na_type {
+            MoleculeType::RNA => match self {
+                Self::A => Some(&data::A),
+                Self::C => Some(&data::C),
+                Self::G => Some(&data::G),
+                Self::U => Some(&data::U),
+                Self::T => None,
+            },
+            MoleculeType::DNA => match self {
+                Self::A => Some(&data::DA),
+                Self::C => Some(&data::DC),
+                Self::G => Some(&data::DG),
+                Self::T => Some(&data::DT),
+                Self::U => None,
+            },
+            _ => None,
         }
     }
 }
@@ -157,6 +177,9 @@ mod tests {
     const DNA: &[Nucleotide] =
         &[Nucleotide::A, Nucleotide::C, Nucleotide::G, Nucleotide::T];
 
+    const RNA: &[Nucleotide] =
+        &[Nucleotide::A, Nucleotide::C, Nucleotide::G, Nucleotide::U];
+
     fn name(s: &[u8]) -> AtomName {
         AtomName::from_bytes(s)
     }
@@ -175,7 +198,22 @@ mod tests {
             }
         }
         for &nt in DNA {
-            let t = nt.template().expect("DNA base has a template");
+            let t = nt
+                .template(MoleculeType::DNA)
+                .expect("DNA base has a template");
+            assert!(!t.atoms.is_empty(), "{nt:?} template should not be empty");
+            for atom in t.atoms {
+                assert!(
+                    atom.ideal.is_finite(),
+                    "{nt:?} atom {} has non-finite ideal coords",
+                    atom.name
+                );
+            }
+        }
+        for &nt in RNA {
+            let t = nt
+                .template(MoleculeType::RNA)
+                .expect("RNA base has a template");
             assert!(!t.atoms.is_empty(), "{nt:?} template should not be empty");
             for atom in t.atoms {
                 assert!(
@@ -188,8 +226,45 @@ mod tests {
     }
 
     #[test]
-    fn uracil_has_no_template_yet() {
-        assert!(Nucleotide::U.template().is_none());
+    fn rna_templates_carry_ribose_o2_prime() {
+        // RNA bases resolve to ribose components, which carry the 2'-OH.
+        for &nt in RNA {
+            let t = nt
+                .template(MoleculeType::RNA)
+                .expect("RNA base has a template");
+            assert!(
+                t.atom(name(b"O2'")).is_some(),
+                "RNA {nt:?} template should carry the ribose O2'"
+            );
+        }
+        // DNA bases resolve to deoxyribose components, which lack it.
+        for &nt in DNA {
+            let t = nt
+                .template(MoleculeType::DNA)
+                .expect("DNA base has a template");
+            assert!(
+                t.atom(name(b"O2'")).is_none(),
+                "DNA {nt:?} template (deoxyribose) must not carry O2'"
+            );
+        }
+    }
+
+    #[test]
+    fn uracil_template_is_rna_only() {
+        // Uridine now resolves under RNA (with the ribose O2'); DNA has
+        // no vendored uridine component.
+        let rna_u = Nucleotide::U
+            .template(MoleculeType::RNA)
+            .expect("RNA uridine");
+        assert!(rna_u.atom(name(b"O2'")).is_some(), "RNA U carries O2'");
+        assert!(Nucleotide::U.template(MoleculeType::DNA).is_none());
+    }
+
+    #[test]
+    fn thymine_template_is_dna_only() {
+        // Thymine is the DNA base with no RNA counterpart.
+        assert!(Nucleotide::T.template(MoleculeType::DNA).is_some());
+        assert!(Nucleotide::T.template(MoleculeType::RNA).is_none());
     }
 
     #[test]
@@ -198,12 +273,28 @@ mod tests {
         assert_eq!(AminoAcid::Trp.template().comp_str(), "TRP");
         assert_eq!(AminoAcid::Gly.template().comp_str(), "GLY");
         assert_eq!(
-            Nucleotide::A.template().map(ResidueTemplate::comp_str),
+            Nucleotide::A
+                .template(MoleculeType::DNA)
+                .map(ResidueTemplate::comp_str),
             Some("DA")
         );
         assert_eq!(
-            Nucleotide::T.template().map(ResidueTemplate::comp_str),
+            Nucleotide::T
+                .template(MoleculeType::DNA)
+                .map(ResidueTemplate::comp_str),
             Some("DT")
+        );
+        assert_eq!(
+            Nucleotide::A
+                .template(MoleculeType::RNA)
+                .map(ResidueTemplate::comp_str),
+            Some("A")
+        );
+        assert_eq!(
+            Nucleotide::U
+                .template(MoleculeType::RNA)
+                .map(ResidueTemplate::comp_str),
+            Some("U")
         );
     }
 
@@ -248,7 +339,9 @@ mod tests {
 
     #[test]
     fn da_has_primed_sugar_and_base_atoms() {
-        let t = Nucleotide::A.template().expect("DA template");
+        let t = Nucleotide::A
+            .template(MoleculeType::DNA)
+            .expect("DA template");
         // Phosphate + primed sugar names must survive the quote stripping.
         for atom in [
             b"P".as_slice(),

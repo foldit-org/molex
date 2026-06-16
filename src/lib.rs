@@ -38,15 +38,21 @@ pub mod python;
 // -- Entity-first public API ---------------------------------------------
 // The most commonly used types, re-exported at the crate root.
 
-pub use analysis::{detect_disulfides, BondOrder, HBond, SSType};
+pub use analysis::{detect_disulfides, Aabb, BondOrder, HBond, SSType};
 pub use assembly::{Assembly, CoordinateSnapshot};
 pub use atom_id::AtomId;
 pub use bond::CovalentBond;
 pub use connection::{AtomEnd, AtomLink, ConnectionType};
 pub use element::Element;
 pub use entity::molecule::atom::Atom;
+pub use entity::molecule::bulk::BulkEntity;
 pub use entity::molecule::id::EntityId;
-pub use entity::molecule::protein::{ResidueBackbone, Sidechain};
+pub use entity::molecule::nucleic_acid::NAEntity;
+pub use entity::molecule::polymer::Residue;
+pub use entity::molecule::protein::{
+    ProteinEntity, ResidueBackbone, Sidechain,
+};
+pub use entity::molecule::small_molecule::SmallMoleculeEntity;
 pub use entity::molecule::{
     CompletionMode, EntityKind, MoleculeEntity, MoleculeType, NucleotideRing,
 };
@@ -57,7 +63,7 @@ use pyo3::prelude::*;
 #[cfg(feature = "python")]
 #[pymodule(name = "molex", gil_used = true)]
 fn molex(_py: Python, m: &Bound<PyModule>) -> PyResult<()> {
-    // ASSEM01-based IO helpers (replaces the retired COORDS01 surface).
+    // Assembly wire IO helpers.
     m.add_function(wrap_pyfunction!(python::pdb_to_assembly_bytes, m)?)?;
     m.add_function(wrap_pyfunction!(python::mmcif_to_assembly_bytes, m)?)?;
     m.add_function(wrap_pyfunction!(python::bcif_to_assembly_bytes, m)?)?;
@@ -104,7 +110,7 @@ fn molex(_py: Python, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_class::<python::PyEntity>()?;
     m.add_class::<python::PyResidue>()?;
 
-    // Handle-based edit / DELTA01 surface (parallels c_api::edit).
+    // Handle-based edit / delta surface (parallels c_api::edit).
     m.add_class::<python::PyEditList>()?;
     m.add_class::<python::PyVariant>()?;
     m.add_class::<python::PyAtomRow>()?;

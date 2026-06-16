@@ -58,9 +58,14 @@ pub struct AtomArrays {
 
 #[pymethods]
 impl AtomArrays {
-    /// Number of atoms (length of any column).
+    /// Number of atoms, read from the always-present `(n, 3)` `coords`
+    /// anchor rather than an arbitrary annotation column.
     fn __len__(&self, py: Python) -> PyResult<usize> {
-        self.atom_names.bind(py).len()
+        self.coords.bind(py).len()
+    }
+
+    fn __repr__(&self, py: Python) -> PyResult<String> {
+        Ok(format!("<AtomArrays: {} atoms>", self.__len__(py)?))
     }
 }
 
@@ -124,7 +129,7 @@ pub(crate) fn entities_to_arrays<E: std::borrow::Borrow<MoleculeEntity>>(
     })
 }
 
-/// Convert ASSEM01 bytes to per-atom numpy arrays without Biotite.
+/// Convert assembly wire bytes to per-atom numpy arrays without Biotite.
 ///
 /// Transport/serialization helper: decodes wire bytes, then defers to the
 /// shared [`entities_to_arrays`] core. The documented default for a normal

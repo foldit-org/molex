@@ -20,7 +20,7 @@
               ┌──────────┐ ┌──────────┐ ┌───────────┐
               │ Analysis │ │Transform │ │   Wire    │
               │          │ │          │ │           │
-              │ dssp     │ │ kabsch   │ │ ASSEM01   │
+              │ dssp     │ │ kabsch   │ │ Assembly  │
               │ bonds    │ │ align    │ │ serialize │
               │ disulfide│ │ extract  │ │    /      │
               │ aabb     │ │   ca     │ │deserialize│

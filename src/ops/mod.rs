@@ -5,7 +5,7 @@ pub mod codec;
 /// Typed Assembly edits + apply path.
 pub mod edit;
 pub mod transform;
-/// ASSEM binary wire format encoder/decoder (ASSEM01 / ASSEM02).
+/// Assembly + delta binary wire format encoder/decoder.
 pub mod wire;
 
 pub use edit::{AssemblyEdit, BulkEditError, EditError};

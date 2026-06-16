@@ -6,7 +6,7 @@ use thiserror::Error;
 ///
 /// Used as the `Err` variant for the public adapter entry points
 /// (`pdb_str_to_entities`, `mmcif_str_to_entities`, `bcif_to_entities`),
-/// the ASSEM01 wire format (`serialize_assembly` / `deserialize_assembly`),
+/// the assembly wire format (`serialize_assembly` / `deserialize_assembly`),
 /// and `ops::transform::alignment::align_to`.
 #[derive(Error, Debug)]
 pub enum AdapterError {

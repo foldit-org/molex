@@ -1,15 +1,20 @@
-//! DELTA01 binary wire format: serialized `Vec<AssemblyEdit>`.
+//! Delta binary wire format: serialized `Vec<AssemblyEdit>`.
 //!
-//! Companion to ASSEM02: where ASSEM02 carries a full Assembly snapshot,
-//! DELTA01 carries an incremental edit list (the steady-state path).
-//! Topology edits (`AddEntity` / `RemoveEntity`) are intentionally not
-//! supported on the wire; callers fall back to a full ASSEM02
-//! broadcast for that class of change.
+//! Companion to the assembly format: where the assembly format carries a
+//! full Assembly snapshot, the delta format carries an incremental edit
+//! list (the steady-state path). Topology edits (`AddEntity` /
+//! `RemoveEntity`) are intentionally not supported on the wire; callers
+//! fall back to a full assembly broadcast for that class of change.
+//!
+//! The header is a fixed 8-byte magic followed by a `u8` version byte
+//! that selects the payload layout; the magic never changes when the
+//! payload does.
 //!
 //! Format:
 //!
 //! ```text
-//! 8 bytes  magic b"DLT01\0\0\0"
+//! 8 bytes  magic b"DELTA\0\0\0"
+//! 1 byte   version (currently 1)
 //! 4 bytes  edit_count u32 BE
 //! per edit:
 //!   1 byte tag
@@ -23,8 +28,9 @@
 //! - `0x02` SetResidueCoords: u32 entity_id, u32 residue_idx, u32 coord_count,
 //!   12 bytes per coord
 //! - `0x03` MutateResidue: u32 entity_id, u32 residue_idx, 3 bytes new_name,
-//!   u32 atom_count, 26 bytes per atom (same row layout as ASSEM02), u32
-//!   variant_count, per-variant payload (same as ASSEM02 variants block)
+//!   u32 atom_count, 26 bytes per atom (same row layout as the assembly
+//!   format), u32 variant_count, per-variant payload (same as the assembly
+//!   variants block)
 //! - `0x04` SetVariants: u32 entity_id, u32 residue_idx, u32 variant_count,
 //!   per-variant payload
 
@@ -39,26 +45,34 @@ use crate::entity::molecule::id::EntityIdAllocator;
 use crate::ops::codec::AdapterError;
 use crate::ops::edit::AssemblyEdit;
 
-/// Magic header for DELTA01 byte streams.
-pub const DELTA_MAGIC: &[u8; 8] = b"DLT01\0\0\0";
+/// Magic header for delta byte streams. The version byte that follows
+/// selects the payload layout.
+pub const DELTA_MAGIC: &[u8; 8] = b"DELTA\0\0\0";
+
+/// Wire format version written after [`DELTA_MAGIC`].
+pub const DELTA_VERSION: u8 = 1;
 
 const ATOM_ROW_BYTES: usize = 26;
+
+/// Byte offset where edits begin: 8-byte magic + 1-byte version + 4-byte
+/// edit count.
+const EDITS_START: usize = 13;
 
 const TAG_SET_ENTITY_COORDS: u8 = 0x01;
 const TAG_SET_RESIDUE_COORDS: u8 = 0x02;
 const TAG_MUTATE_RESIDUE: u8 = 0x03;
 const TAG_SET_VARIANTS: u8 = 0x04;
 
-/// Failure modes for DELTA01 serialization.
+/// Failure modes for delta serialization.
 #[derive(Debug, Error)]
 pub enum DeltaSerializeError {
     /// The edit list contained a topology-changing edit
-    /// (`AddEntity` / `RemoveEntity`) which is not representable in
-    /// DELTA01. Callers should broadcast a full ASSEM02 snapshot
+    /// (`AddEntity` / `RemoveEntity`) which is not representable in the
+    /// delta format. Callers should broadcast a full assembly snapshot
     /// instead.
     #[error(
-        "topology edit at index {index} cannot be serialized as DELTA01; \
-         broadcast a full ASSEM02 snapshot instead"
+        "topology edit at index {index} cannot be serialized as a delta; \
+         broadcast a full assembly snapshot instead"
     )]
     TopologyEditNotSupported {
         /// Index of the offending edit in the input slice.
@@ -66,7 +80,7 @@ pub enum DeltaSerializeError {
     },
 }
 
-/// Serialize a list of [`AssemblyEdit`]s as DELTA01 bytes.
+/// Serialize a list of [`AssemblyEdit`]s as delta bytes.
 ///
 /// # Errors
 ///
@@ -77,6 +91,7 @@ pub fn serialize_edits(
 ) -> Result<Vec<u8>, DeltaSerializeError> {
     let mut buffer = Vec::with_capacity(16 + edits.len() * 32);
     buffer.extend_from_slice(DELTA_MAGIC);
+    buffer.push(DELTA_VERSION);
     #[allow(
         clippy::cast_possible_truncation,
         reason = "edit count fits in u32"
@@ -90,31 +105,37 @@ pub fn serialize_edits(
     Ok(buffer)
 }
 
-/// Deserialize DELTA01 bytes into a list of [`AssemblyEdit`]s.
+/// Deserialize delta bytes into a list of [`AssemblyEdit`]s.
 ///
 /// # Errors
 ///
-/// Returns `AdapterError::InvalidFormat` for magic / framing /
+/// Returns `AdapterError::InvalidFormat` for magic / version / framing /
 /// truncation issues.
 pub fn deserialize_edits(
     bytes: &[u8],
 ) -> Result<Vec<AssemblyEdit>, AdapterError> {
-    if bytes.len() < 12 {
+    if bytes.len() < EDITS_START {
         return Err(AdapterError::InvalidFormat(
-            "Data too short for DELTA01 header".to_owned(),
+            "Data too short for delta header".to_owned(),
         ));
     }
     if &bytes[0..8] != DELTA_MAGIC {
         return Err(AdapterError::InvalidFormat(
-            "Invalid magic number for DELTA01".to_owned(),
+            "Invalid magic number for delta format".to_owned(),
         ));
     }
+    let version = bytes[8];
+    if version != DELTA_VERSION {
+        return Err(AdapterError::InvalidFormat(format!(
+            "Unsupported delta wire version: {version}",
+        )));
+    }
     let edit_count =
-        u32::from_be_bytes(bytes[8..12].try_into().map_err(|_| {
+        u32::from_be_bytes(bytes[9..13].try_into().map_err(|_| {
             AdapterError::InvalidFormat("Invalid edit count".to_owned())
         })?) as usize;
 
-    let mut cursor = &bytes[12..];
+    let mut cursor = &bytes[EDITS_START..];
     let mut edits = Vec::with_capacity(edit_count);
     let mut alloc = EntityIdAllocator::new();
     for _ in 0..edit_count {
@@ -251,8 +272,7 @@ fn read_edit<'b>(
             for _ in 0..atom_count {
                 if cur.len() < ATOM_ROW_BYTES {
                     return Err(AdapterError::InvalidFormat(
-                        "Truncated atom row in DELTA01 MutateResidue"
-                            .to_owned(),
+                        "Truncated atom row in delta MutateResidue".to_owned(),
                     ));
                 }
                 let row: AtomRow = read_atom_row(cur)?;
@@ -286,7 +306,7 @@ fn read_edit<'b>(
             ))
         }
         other => Err(AdapterError::InvalidFormat(format!(
-            "Unknown DELTA01 edit tag: {other:#x}",
+            "Unknown delta edit tag: {other:#x}",
         ))),
     }
 }
@@ -326,7 +346,7 @@ fn read_coord_list(cursor: &[u8]) -> Result<(Vec<Vec3>, &[u8]), AdapterError> {
 }
 
 fn coord_truncated() -> AdapterError {
-    AdapterError::InvalidFormat("Truncated coord list in DELTA01".to_owned())
+    AdapterError::InvalidFormat("Truncated coord list in delta".to_owned())
 }
 
 fn write_variant_list(variants: &[VariantTag], buffer: &mut Vec<u8>) {
@@ -356,16 +376,14 @@ fn read_variant_list(
 fn split_first_u8(cursor: &[u8]) -> Result<(u8, &[u8]), AdapterError> {
     cursor.split_first().map(|(b, r)| (*b, r)).ok_or_else(|| {
         AdapterError::InvalidFormat(
-            "Truncated DELTA01 (expected tag byte)".to_owned(),
+            "Truncated delta (expected tag byte)".to_owned(),
         )
     })
 }
 
 fn read_u32(cursor: &[u8]) -> Result<(u32, &[u8]), AdapterError> {
     let (head, rest) = cursor.split_first_chunk::<4>().ok_or_else(|| {
-        AdapterError::InvalidFormat(
-            "Truncated DELTA01 (expected u32)".to_owned(),
-        )
+        AdapterError::InvalidFormat("Truncated delta (expected u32)".to_owned())
     })?;
     Ok((u32::from_be_bytes(*head), rest))
 }
@@ -373,7 +391,7 @@ fn read_u32(cursor: &[u8]) -> Result<(u32, &[u8]), AdapterError> {
 fn read_three_bytes(cursor: &[u8]) -> Result<([u8; 3], &[u8]), AdapterError> {
     if cursor.len() < 3 {
         return Err(AdapterError::InvalidFormat(
-            "Truncated DELTA01 (expected 3-byte residue name)".to_owned(),
+            "Truncated delta (expected 3-byte residue name)".to_owned(),
         ));
     }
     let mut out = [0u8; 3];

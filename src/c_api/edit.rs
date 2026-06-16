@@ -1,4 +1,4 @@
-//! C ABI for typed Assembly edits (`AssemblyEdit`) and the DELTA01
+//! C ABI for typed Assembly edits (`AssemblyEdit`) and the delta
 //! wire format.
 //!
 //! Mirrors the Rust surface in [`crate::ops::edit`] and
@@ -11,7 +11,7 @@
 //!   length. Their backing memory is borrowed for the duration of the call
 //!   only.
 //! - Byte buffers returned via `out_buf` / `out_len` from
-//!   [`molex_edits_to_delta01`] are heap-allocated by Rust; caller frees with
+//!   [`molex_edits_to_delta`] are heap-allocated by Rust; caller frees with
 //!   `molex_free_bytes`.
 
 #![allow(non_camel_case_types)]
@@ -44,7 +44,7 @@ pub mod read;
 /// Free with [`molex_edits_free`]. Enumerate per-entry via
 /// [`molex_edits_kind_at`] followed by the matching
 /// `molex_edits_*_at` per-variant getter; or dump to wire bytes with
-/// [`molex_edits_to_delta01`].
+/// [`molex_edits_to_delta`].
 pub struct molex_EditList;
 
 /// Construct an empty edit list.
@@ -55,7 +55,7 @@ pub extern "C" fn molex_edits_new() -> *mut molex_EditList {
 }
 
 /// Free an edit list returned by `molex_edits_new` or
-/// `molex_delta01_to_edits`. Safe to call with a null pointer (no-op).
+/// `molex_delta_to_edits`. Safe to call with a null pointer (no-op).
 #[no_mangle]
 pub extern "C" fn molex_edits_free(list: *mut molex_EditList) {
     if list.is_null() {
@@ -149,7 +149,7 @@ pub struct molex_Variant {
     pub str_len: usize,
 }
 
-/// One atom row crossed-over to C. Layout mirrors the ASSEM02 atom
+/// One atom row crossed-over to C. Layout mirrors the assembly wire atom
 /// row (12 + 4 + 2 = 18 bytes excluding chain/residue context which
 /// is conveyed separately).
 #[repr(C)]
@@ -405,26 +405,26 @@ pub extern "C" fn molex_edits_push_set_variants(
 }
 
 // ---------------------------------------------------------------------------
-// Serialize / deserialize DELTA01
+// Serialize / deserialize delta
 // ---------------------------------------------------------------------------
 
-/// Serialize the edit list to DELTA01 bytes.
+/// Serialize the edit list to delta bytes.
 ///
 /// On success returns [`MOLEX_OK`] and writes the heap-allocated
 /// buffer pointer + length to `out_buf` / `out_len`; caller frees with
 /// `molex_free_bytes`.
 #[no_mangle]
-pub extern "C" fn molex_edits_to_delta01(
+pub extern "C" fn molex_edits_to_delta(
     list: *const molex_EditList,
     out_buf: *mut *mut u8,
     out_len: *mut usize,
 ) -> i32 {
     if out_buf.is_null() || out_len.is_null() {
-        set_last_error(&"molex_edits_to_delta01: null out pointer");
+        set_last_error(&"molex_edits_to_delta: null out pointer");
         return MOLEX_ERR_NULL;
     }
     let Some(inner) = edit_list_inner(list) else {
-        set_last_error(&"molex_edits_to_delta01: null list");
+        set_last_error(&"molex_edits_to_delta: null list");
         return MOLEX_ERR_NULL;
     };
     match serialize_edits(inner) {
@@ -434,25 +434,25 @@ pub extern "C" fn molex_edits_to_delta01(
         }
         Err(DeltaSerializeError::TopologyEditNotSupported { index }) => {
             set_last_error(&format!(
-                "molex_edits_to_delta01: topology edit at index {index} \
-                 cannot be encoded as DELTA01"
+                "molex_edits_to_delta: topology edit at index {index} cannot \
+                 be encoded as delta"
             ));
             MOLEX_ERR
         }
     }
 }
 
-/// Decode DELTA01 bytes into a new edit list.
+/// Decode delta bytes into a new edit list.
 ///
 /// Returns null on failure with the error message available via
 /// `molex_last_error_message`. Caller frees with `molex_edits_free`.
 #[no_mangle]
-pub extern "C" fn molex_delta01_to_edits(
+pub extern "C" fn molex_delta_to_edits(
     bytes_ptr: *const u8,
     len: usize,
 ) -> *mut molex_EditList {
     let Some(bytes) = slice_from_raw(bytes_ptr, len) else {
-        set_last_error(&"molex_delta01_to_edits: null input pointer");
+        set_last_error(&"molex_delta_to_edits: null input pointer");
         return ptr::null_mut();
     };
     match deserialize_edits(bytes) {
@@ -500,24 +500,24 @@ pub extern "C" fn molex_assembly_apply_edits(
     }
 }
 
-/// Decode DELTA01 bytes and apply them to `assembly`.
+/// Decode delta bytes and apply them to `assembly`.
 ///
-/// Equivalent to calling `molex_delta01_to_edits` then
+/// Equivalent to calling `molex_delta_to_edits` then
 /// `molex_assembly_apply_edits` then `molex_edits_free`, but avoids
 /// the round-trip through a separate list handle on the apply hot
 /// path.
 #[no_mangle]
-pub extern "C" fn molex_assembly_apply_delta01(
+pub extern "C" fn molex_assembly_apply_delta(
     assembly: *mut molex_Assembly,
     bytes_ptr: *const u8,
     len: usize,
 ) -> i32 {
     let Some(asm) = assembly_inner_mut(assembly) else {
-        set_last_error(&"molex_assembly_apply_delta01: null assembly");
+        set_last_error(&"molex_assembly_apply_delta: null assembly");
         return MOLEX_ERR_NULL;
     };
     let Some(bytes) = slice_from_raw(bytes_ptr, len) else {
-        set_last_error(&"molex_assembly_apply_delta01: null input pointer");
+        set_last_error(&"molex_assembly_apply_delta: null input pointer");
         return MOLEX_ERR_NULL;
     };
     let edits = match deserialize_edits(bytes) {
@@ -624,14 +624,14 @@ mod tests {
         let mut out_buf: *mut u8 = ptr::null_mut();
         let mut out_len: usize = 0;
         let status =
-            molex_edits_to_delta01(list, &raw mut out_buf, &raw mut out_len);
+            molex_edits_to_delta(list, &raw mut out_buf, &raw mut out_len);
         assert_eq!(status, MOLEX_OK);
         assert!(!out_buf.is_null());
         assert!(out_len > 12);
 
-        // Round-trip the bytes back through delta01_to_edits then
+        // Round-trip the bytes back through molex_delta_to_edits then
         // apply.
-        let back = molex_delta01_to_edits(out_buf, out_len);
+        let back = molex_delta_to_edits(out_buf, out_len);
         assert!(!back.is_null());
         assert_eq!(molex_edits_count(back), 1);
 
@@ -652,7 +652,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_delta01_combined_entry_point() {
+    fn apply_delta_combined_entry_point() {
         let (asm_ptr, entity_raw) = make_assembly_handle();
 
         let list = molex_edits_new();
@@ -672,12 +672,12 @@ mod tests {
         let mut out_buf: *mut u8 = ptr::null_mut();
         let mut out_len: usize = 0;
         assert_eq!(
-            molex_edits_to_delta01(list, &raw mut out_buf, &raw mut out_len,),
+            molex_edits_to_delta(list, &raw mut out_buf, &raw mut out_len,),
             MOLEX_OK,
         );
 
         // The combined apply path - decode + apply in one call.
-        let status = molex_assembly_apply_delta01(asm_ptr, out_buf, out_len);
+        let status = molex_assembly_apply_delta(asm_ptr, out_buf, out_len);
         assert_eq!(status, MOLEX_OK);
 
         let asm_ref = unsafe { &*asm_ptr.cast::<Assembly>() };

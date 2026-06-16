@@ -393,27 +393,26 @@ class Assembly {
     return from_bcif(bytes.data(), bytes.size());
   }
 
-  /// Decode ASSEM01 binary bytes. Returns an empty optional on failure.
-  static std::optional<Assembly> from_assem01(
+  /// Decode assembly binary bytes. Returns an empty optional on failure.
+  static std::optional<Assembly> from_assembly_bytes(
       const std::uint8_t* bytes, std::size_t len) {
-    ::molex_Assembly* h = ::molex_assem01_to_assembly(bytes, len);
+    ::molex_Assembly* h = ::molex_bytes_to_assembly(bytes, len);
     if (h == nullptr) {
       return std::nullopt;
     }
     return Assembly{h};
   }
 
-  static std::optional<Assembly> from_assem01(
+  static std::optional<Assembly> from_assembly_bytes(
       const std::vector<std::uint8_t>& bytes) {
-    return from_assem01(bytes.data(), bytes.size());
+    return from_assembly_bytes(bytes.data(), bytes.size());
   }
 
-  /// Emit this assembly as ASSEM01 binary bytes. Empty optional on
-  /// failure.
-  std::optional<std::vector<std::uint8_t>> to_assem01() const {
+  /// Emit this assembly as binary bytes. Empty optional on failure.
+  std::optional<std::vector<std::uint8_t>> to_assembly_bytes() const {
     std::uint8_t* buf = nullptr;
     std::size_t len = 0;
-    if (::molex_assembly_to_assem01(handle_, &buf, &len) != MOLEX_OK) {
+    if (::molex_assembly_to_bytes(handle_, &buf, &len) != MOLEX_OK) {
       return std::nullopt;
     }
     std::vector<std::uint8_t> out(buf, buf + len);
@@ -439,15 +438,15 @@ class Assembly {
   /// one stay applied. See `molex::last_error_message()` for details.
   bool apply_edits(const EditList& edits);
 
-  /// Decode DELTA01 bytes and apply them in one call. Equivalent to
-  /// `EditList::from_delta01` + `apply_edits` + drop, but avoids the
+  /// Decode delta bytes and apply them in one call. Equivalent to
+  /// `EditList::from_delta` + `apply_edits` + drop, but avoids the
   /// intermediate handle on the apply hot path.
-  bool apply_delta01(const std::uint8_t* bytes, std::size_t len) {
-    return ::molex_assembly_apply_delta01(handle_, bytes, len) == MOLEX_OK;
+  bool apply_delta(const std::uint8_t* bytes, std::size_t len) {
+    return ::molex_assembly_apply_delta(handle_, bytes, len) == MOLEX_OK;
   }
 
-  bool apply_delta01(const std::vector<std::uint8_t>& bytes) {
-    return apply_delta01(bytes.data(), bytes.size());
+  bool apply_delta(const std::vector<std::uint8_t>& bytes) {
+    return apply_delta(bytes.data(), bytes.size());
   }
 
   std::uint64_t generation() const noexcept {
@@ -561,13 +560,13 @@ class EditList {
         == MOLEX_OK;
   }
 
-  /// Serialize this list as DELTA01 bytes. Empty optional on failure
+  /// Serialize this list as delta bytes. Empty optional on failure
   /// (e.g., when the list contains a topology edit). See
   /// `molex::last_error_message()` for details.
-  std::optional<std::vector<std::uint8_t>> to_delta01() const {
+  std::optional<std::vector<std::uint8_t>> to_delta() const {
     std::uint8_t* buf = nullptr;
     std::size_t len = 0;
-    if (::molex_edits_to_delta01(handle_, &buf, &len) != MOLEX_OK) {
+    if (::molex_edits_to_delta(handle_, &buf, &len) != MOLEX_OK) {
       return std::nullopt;
     }
     std::vector<std::uint8_t> out(buf, buf + len);
@@ -575,20 +574,20 @@ class EditList {
     return out;
   }
 
-  /// Decode DELTA01 bytes into a new edit list. Empty optional on
+  /// Decode delta bytes into a new edit list. Empty optional on
   /// failure.
-  static std::optional<EditList> from_delta01(
+  static std::optional<EditList> from_delta(
       const std::uint8_t* bytes, std::size_t len) {
-    ::molex_EditList* h = ::molex_delta01_to_edits(bytes, len);
+    ::molex_EditList* h = ::molex_delta_to_edits(bytes, len);
     if (h == nullptr) {
       return std::nullopt;
     }
     return EditList{h};
   }
 
-  static std::optional<EditList> from_delta01(
+  static std::optional<EditList> from_delta(
       const std::vector<std::uint8_t>& bytes) {
-    return from_delta01(bytes.data(), bytes.size());
+    return from_delta(bytes.data(), bytes.size());
   }
 
   const ::molex_EditList* handle() const noexcept { return handle_; }
@@ -728,8 +727,8 @@ class EditList {
   };
 
   /// Tagged union of all readable edit kinds (the four steady-state
-  /// variants that ride DELTA01 -- `AddEntity` / `RemoveEntity` are
-  /// not exposed because they don't survive the wire round trip).
+  /// variants that ride the delta wire -- `AddEntity` / `RemoveEntity`
+  /// are not exposed because they don't survive the wire round trip).
   /// `EditList::view_at` returns this; consumers `std::visit` over it.
   using EditView = std::variant<
       SetEntityCoordsView,

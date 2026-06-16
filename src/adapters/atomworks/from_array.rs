@@ -298,7 +298,8 @@ fn extract_atom_name_and_element(
     Ok((an_bytes, elem))
 }
 
-/// Convert a Biotite `AtomArray` (or `AtomArrayPlus`) back to ASSEM01 bytes.
+/// Convert a Biotite `AtomArray` (or `AtomArrayPlus`) back to assembly wire
+/// bytes.
 ///
 /// Reconstructs `Vec<MoleculeEntity>` from per-atom annotations.
 /// Entity boundaries are determined by `entity_id` annotation if present,
@@ -475,7 +476,7 @@ pub fn atom_array_to_entity_vec(
 // ============================================================================
 
 /// Load a structure file through AtomWorks' full parsing pipeline and return
-/// ASSEM01 bytes containing properly cleaned and annotated entities.
+/// assembly wire bytes containing properly cleaned and annotated entities.
 ///
 /// This is the highest-fidelity path for loading structures when AtomWorks
 /// is available: it gets CCD bond lookup, leaving group removal, charge
@@ -504,9 +505,10 @@ pub fn parse_file_to_entities(
 /// Load a structure file through AtomWorks and return chain metadata.
 ///
 /// Returns a Python dict with:
-/// - `"assembly_bytes"`: ASSEM01 bytes for the entity assembly
+/// - `"assembly_bytes"`: assembly wire bytes for the entity assembly
 /// - `"chain_info"`: dict of chain_id -> { "sequence": str, ... }
-/// - `"assemblies"`: dict of assembly_id -> ASSEM01 bytes for each bio assembly
+/// - `"assemblies"`: dict of assembly_id -> assembly wire bytes for each bio
+///   assembly
 ///
 /// # Errors
 ///

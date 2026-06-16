@@ -2,7 +2,7 @@
 //!
 //! The push entry points in the parent module let C callers build edit
 //! lists. The accessors here let them read the lists back out --
-//! needed by the rosetta bridge dispatching DELTA01-decoded edits
+//! needed by the rosetta bridge dispatching delta-decoded edits
 //! per-variant onto rosetta API calls.
 //!
 //! Coords are exposed as borrowed pointers into the EditList's owned
@@ -42,7 +42,7 @@ use crate::ops::edit::AssemblyEdit;
 /// Returned by [`molex_edits_kind_at`]; caller dispatches on the
 /// value to pick the right per-variant getter. `AddEntity` /
 /// `RemoveEntity` are listed for completeness but never appear in
-/// lists obtained from `molex_delta01_to_edits` (the DELTA01
+/// lists obtained from `molex_delta_to_edits` (the delta
 /// serializer rejects topology edits up front).
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,10 +64,10 @@ pub enum molex_EditKind {
     /// via [`molex_edits_set_variants_at`].
     SetVariants = 4,
     /// `AddEntity` — topology edit; appears only in Rust-side edit
-    /// lists, never in lists decoded from DELTA01.
+    /// lists, never in lists decoded from delta.
     AddEntity = 5,
     /// `RemoveEntity` — topology edit; appears only in Rust-side edit
-    /// lists, never in lists decoded from DELTA01.
+    /// lists, never in lists decoded from delta.
     RemoveEntity = 6,
 }
 
@@ -208,7 +208,7 @@ pub extern "C" fn molex_edits_set_residue_coords_at(
 /// `molex_AtomRow` array derived from the edit's internal `Atom`
 /// storage. Caller MUST free with [`molex_atom_rows_free`]. The
 /// conversion is lossy on the `occupancy` / `b_factor` /
-/// `formal_charge` fields (those don't ride DELTA01 and aren't
+/// `formal_charge` fields (those don't ride delta and aren't
 /// representable in `molex_AtomRow`).
 ///
 /// `out_variants` / `out_variant_count` receive a freshly-allocated

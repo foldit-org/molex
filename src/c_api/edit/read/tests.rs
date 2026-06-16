@@ -11,10 +11,10 @@ use std::ptr;
 
 use super::*;
 use crate::c_api::edit::{
-    molex_delta01_to_edits, molex_edits_count, molex_edits_free,
-    molex_edits_new, molex_edits_push_mutate_residue,
-    molex_edits_push_set_entity_coords, molex_edits_push_set_residue_coords,
-    molex_edits_push_set_variants, molex_edits_to_delta01,
+    molex_delta_to_edits, molex_edits_count, molex_edits_free, molex_edits_new,
+    molex_edits_push_mutate_residue, molex_edits_push_set_entity_coords,
+    molex_edits_push_set_residue_coords, molex_edits_push_set_variants,
+    molex_edits_to_delta,
 };
 use crate::c_api::molex_free_bytes;
 #[test]
@@ -296,11 +296,11 @@ fn read_kind_mismatch_rejected() {
 }
 
 /// Two-edit fixture: build a list with one `SetEntityCoords` plus
-/// one `SetResidueCoords`, serialize to DELTA01, decode, return
+/// one `SetResidueCoords`, serialize to delta, decode, return
 /// the decoded list + the original byte buffer (caller frees
 /// both). The original push-side list is dropped before return --
 /// only the decoded one survives, so any assertion about its
-/// contents has to hit DELTA01 round-trip semantics.
+/// contents has to hit delta round-trip semantics.
 fn build_decoded_two_edit_list(
     coords_a: &[f32],
     coords_b: &[f32],
@@ -312,17 +312,17 @@ fn build_decoded_two_edit_list(
     let mut buf: *mut u8 = ptr::null_mut();
     let mut len: usize = 0;
     assert_eq!(
-        molex_edits_to_delta01(list, &raw mut buf, &raw mut len),
+        molex_edits_to_delta(list, &raw mut buf, &raw mut len),
         MOLEX_OK
     );
-    let decoded = molex_delta01_to_edits(buf, len);
+    let decoded = molex_delta_to_edits(buf, len);
     assert!(!decoded.is_null());
     molex_edits_free(list);
     (decoded, buf, len)
 }
 
 #[test]
-fn delta01_decoded_list_reports_correct_kinds() {
+fn delta_decoded_list_reports_correct_kinds() {
     let coords_a: [f32; 3] = [1.0, 2.0, 3.0];
     let coords_b: [f32; 3] = [4.0, 5.0, 6.0];
     let (decoded, buf, len) = build_decoded_two_edit_list(&coords_a, &coords_b);
@@ -340,7 +340,7 @@ fn delta01_decoded_list_reports_correct_kinds() {
 }
 
 #[test]
-fn delta01_decoded_list_round_trips_per_edit_fields() {
+fn delta_decoded_list_round_trips_per_edit_fields() {
     let coords_a: [f32; 3] = [1.0, 2.0, 3.0];
     let coords_b: [f32; 3] = [4.0, 5.0, 6.0];
     let (decoded, buf, len) = build_decoded_two_edit_list(&coords_a, &coords_b);

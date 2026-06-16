@@ -69,7 +69,7 @@ if let Some(hbonds) = assembly.detect_fallback_connections().get(&ConnectionType
 }
 ```
 
-## Serialize to ASSEM01 binary (for FFI/IPC)
+## Serialize to assembly binary (for FFI/IPC)
 
 ```rust,ignore
 use molex::ops::wire::assembly_bytes;
@@ -86,7 +86,7 @@ derived-data pipeline has already been run.
 ```python
 import molex
 
-# PDB round-trip via ASSEM01 bytes
+# PDB round-trip via assembly bytes
 assembly_bytes = molex.pdb_to_assembly_bytes(pdb_string)
 pdb_back = molex.assembly_bytes_to_pdb(assembly_bytes)
 

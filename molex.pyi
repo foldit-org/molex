@@ -1,0 +1,447 @@
+# Type stubs for the `molex` extension module.
+#
+# HAND-MAINTAINED. There is no auto-generation step: when the pyo3 surface in
+# `src/python/` (mod.rs, entity.rs, io.rs, arrays.rs, views.rs) or the module
+# registration in `src/lib.rs` changes, update this file by hand to match. The
+# registered surface is the `#[pyclass]` / `#[pymethods]` / `#[pyfunction]`
+# items wired in the `molex` `#[pymodule]` (`src/lib.rs`).
+#
+# Layout note: this is a pure-Rust extension (no `python-source`). maturin
+# ships this file from the project root alongside an auto-generated `py.typed`
+# marker (see pyproject.toml `[tool.maturin]`).
+#
+# Mapping conventions used here:
+#   Rust `Vec<u8>`        -> Python `bytes`
+#   Rust `String`/`&str`  -> Python `str`
+#   Rust `Option<String>` -> Python `str | None`
+#   Rust `u32/u64/usize/i32` -> Python `int`
+#   Rust `f32`            -> Python `float`
+#   numpy columns         -> `Any` (numpy is not a typing dependency here)
+#   Biotite AtomArray     -> `Any`
+
+from typing import Any
+
+# ---------------------------------------------------------------------------
+# Object API (primary surface)
+#
+# The documented default for a normal caller: parse a structure with
+# `Assembly.from_pdb` / `from_mmcif` / `from_bcif`, walk `entities()` ->
+# `Entity` -> `residues()` -> `Residue`, and read atoms as numpy columns via
+# `to_arrays()`. Completion (missing heavy atoms filled) runs at parse time.
+# ---------------------------------------------------------------------------
+
+class Assembly:
+    """Object-graph handle over a parsed molecular assembly.
+
+    Primary entry points are the `from_pdb` / `from_mmcif` / `from_bcif`
+    static methods; navigate via `entities()` and read atoms via `to_arrays()`.
+    """
+
+    @staticmethod
+    def from_pdb(text: str) -> Assembly:
+        """Parse a PDB string. Atoms are completed during classification;
+        secondary structure is left empty (call `recompute_ss()`)."""
+        ...
+    @staticmethod
+    def from_mmcif(text: str) -> Assembly:
+        """Parse an mmCIF string (raw ingest, see `from_pdb`)."""
+        ...
+    @staticmethod
+    def from_bcif(bytes: bytes) -> Assembly:
+        """Parse BinaryCIF bytes (raw ingest, see `from_pdb`)."""
+        ...
+    @staticmethod
+    def from_assembly_bytes(bytes: bytes) -> Assembly:
+        """Decode assembly wire bytes into an `Assembly`."""
+        ...
+    def to_assembly_bytes(self) -> bytes:
+        """Emit the assembly as wire bytes."""
+        ...
+    @property
+    def generation(self) -> int:
+        """Monotonic generation counter."""
+        ...
+    def normalize(self) -> Assembly:
+        """Fresh heavy-complete assembly: polymer entities gain missing heavy
+        atoms. Atom indices shift; externally held indices do not carry over."""
+        ...
+    def to_all_atom(self) -> Assembly:
+        """Fresh all-atom assembly: polymer entities gain template hydrogens.
+        Atom indices shift; externally held indices do not carry over."""
+        ...
+    def apply_edits(self, edits: EditList) -> None:
+        """Apply every edit in `edits` in order, advancing `generation`."""
+        ...
+    def apply_delta(self, bytes: bytes) -> None:
+        """Decode delta bytes and apply them in one call."""
+        ...
+    def recompute_ss(self) -> None:
+        """Recompute per-entity secondary structure in place (opt-in DSSP)."""
+        ...
+    def entities(self) -> list[Entity]:
+        """The assembly's entities, in order."""
+        ...
+    def to_arrays(self) -> AtomArrays:
+        """Every atom as per-atom numpy columns (Biotite-free)."""
+        ...
+    def __len__(self) -> int:
+        """Number of entities in the assembly."""
+        ...
+    def __repr__(self) -> str:
+        """`<Assembly: {n} entities, gen {g}>`."""
+        ...
+
+class Entity:
+    """One entity in an `Assembly` (a cheap `Arc` refcount handle).
+
+    Reached from `Assembly.entities()`; all members are read accessors."""
+
+    @property
+    def id(self) -> int:
+        """Raw entity id."""
+        ...
+    @property
+    def kind(self) -> str:
+        """Structural discriminant: `"Protein"`, `"NucleicAcid"`,
+        `"SmallMolecule"`, or `"Bulk"`."""
+        ...
+    @property
+    def molecule_type(self) -> str:
+        """Molecule-type classification, e.g. `"Protein"`, `"Ligand"`,
+        `"Ion"`, `"Water"`."""
+        ...
+    @property
+    def chain_id(self) -> str | None:
+        """PDB chain id as a one-char string, or `None` when the entity has no
+        chain id (a non-polymer entity). A non-printable chain byte also yields
+        `None` as a safety fallback."""
+        ...
+    @property
+    def label(self) -> str:
+        """Human-readable label, e.g. `"Protein Chain A"`, `"Ligand (ATP)"`."""
+        ...
+    @property
+    def atom_count(self) -> int:
+        """Total atom count in this entity."""
+        ...
+    @property
+    def residue_count(self) -> int:
+        """Residue count; 0 for non-polymer entities."""
+        ...
+    def residues(self) -> list[Residue]:
+        """The entity's residues, in order. Empty for a non-polymer entity."""
+        ...
+    def to_arrays(self) -> AtomArrays:
+        """This entity's atoms as per-atom numpy columns (Biotite-free)."""
+        ...
+    def __len__(self) -> int:
+        """Residue count; mirrors `len(assembly)` so `len(entity)` works too."""
+        ...
+    def __repr__(self) -> str:
+        """`<Entity {id} {kind} chain={chain_id} {atom_count} atoms>`."""
+        ...
+
+class Residue:
+    """One residue in a polymer entity (copied-out scalars, no back-reference).
+
+    Reached from `Entity.residues()`."""
+
+    @property
+    def name(self) -> str:
+        """Trimmed 3-letter residue name, e.g. `"ALA"`."""
+        ...
+    @property
+    def seq_id(self) -> int:
+        """Author-side sequence id (falls back to `label_seq_id` when absent)."""
+        ...
+    @property
+    def label_seq_id(self) -> int:
+        """Structural-side sequence id."""
+        ...
+    @property
+    def ins_code(self) -> str | None:
+        """Insertion code as a one-char string, or `None` when blank."""
+        ...
+    def __repr__(self) -> str:
+        """`<Residue {name} {seq_id}{ins_code}>`."""
+        ...
+
+class AtomArrays:
+    """Per-atom annotation columns as numpy arrays (the native, Biotite-free
+    read path). Each attribute is a `numpy.ndarray`; bonds are not exposed
+    here (a Biotite-only concern)."""
+
+    coords: Any
+    """`(n, 3)` float32 coordinates."""
+    atom_names: Any
+    """Per-atom PDB atom names."""
+    elements: Any
+    """Per-atom element symbols."""
+    res_ids: Any
+    """Per-atom residue ids (int32)."""
+    res_names: Any
+    """Per-atom residue names."""
+    chain_ids: Any
+    """Per-atom chain ids."""
+    occupancies: Any
+    """Per-atom occupancies (float32)."""
+    b_factors: Any
+    """Per-atom B-factors (float32)."""
+    entity_ids: Any
+    """Per-atom AtomWorks entity ids (int32)."""
+    mol_types: Any
+    """Per-atom AtomWorks `mol_type` strings."""
+    chain_types: Any
+    """Per-atom AtomWorks `chain_type` codes (int32)."""
+    def __len__(self) -> int:
+        """Number of atoms (read from the `(n, 3)` `coords` anchor)."""
+        ...
+    def __repr__(self) -> str:
+        """`<AtomArrays: {n} atoms>`."""
+        ...
+
+# ---------------------------------------------------------------------------
+# Edit / delta handle surface
+#
+# Build a typed list of assembly edits, serialize to delta bytes, or read
+# edits back out as the `*View` value classes. Parallels the C API in
+# `c_api::edit`.
+# ---------------------------------------------------------------------------
+
+class EditList:
+    """An ordered list of typed assembly edits."""
+
+    def __init__(self) -> None:
+        """Construct an empty edit list."""
+        ...
+    def __len__(self) -> int:
+        """Number of edits currently in the list."""
+        ...
+    def push_set_entity_coords(
+        self, entity_id: int, coords: list[tuple[float, float, float]]
+    ) -> None:
+        """Append a `SetEntityCoords` edit."""
+        ...
+    def push_set_residue_coords(
+        self,
+        entity_id: int,
+        residue_idx: int,
+        coords: list[tuple[float, float, float]],
+    ) -> None:
+        """Append a `SetResidueCoords` edit."""
+        ...
+    def push_mutate_residue(
+        self,
+        entity_id: int,
+        residue_idx: int,
+        new_name: bytes,
+        atoms: list[AtomRow],
+        variants: list[Variant],
+    ) -> None:
+        """Append a `MutateResidue` edit. `new_name` is a 3-byte residue
+        name (e.g. `b"HIS"`). Note: the edit-side names here take raw bytes
+        (`new_name`, `AtomRow.name`), unlike `Residue.name`, which is a
+        decoded `str`."""
+        ...
+    def push_set_variants(
+        self, entity_id: int, residue_idx: int, variants: list[Variant]
+    ) -> None:
+        """Append a `SetVariants` edit."""
+        ...
+    def to_delta(self) -> bytes:
+        """Serialize this list as delta bytes."""
+        ...
+    @staticmethod
+    def from_delta(bytes: bytes) -> EditList:
+        """Decode delta bytes into a new edit list."""
+        ...
+    def kind_at(self, index: int) -> int:
+        """Kind of the edit at `index` (an `EditKind.*`-style integer:
+        1=SetEntityCoords, 2=SetResidueCoords, 3=MutateResidue,
+        4=SetVariants, 5=AddEntity, 6=RemoveEntity)."""
+        ...
+    def set_entity_coords_at(self, index: int) -> SetEntityCoordsView:
+        """Read the `SetEntityCoords` edit at `index`."""
+        ...
+    def set_residue_coords_at(self, index: int) -> SetResidueCoordsView:
+        """Read the `SetResidueCoords` edit at `index`."""
+        ...
+    def mutate_residue_at(self, index: int) -> MutateResidueView:
+        """Read the `MutateResidue` edit at `index`."""
+        ...
+    def set_variants_at(self, index: int) -> SetVariantsView:
+        """Read the `SetVariants` edit at `index`."""
+        ...
+
+class Variant:
+    """A single residue variant tag (terminus / disulfide / protonation)."""
+
+    @staticmethod
+    def n_terminus() -> Variant:
+        """Chain N-terminus patch."""
+        ...
+    @staticmethod
+    def c_terminus() -> Variant:
+        """Chain C-terminus patch."""
+        ...
+    @staticmethod
+    def disulfide() -> Variant:
+        """Participates in a disulfide bond."""
+        ...
+    @staticmethod
+    def protonation_his_delta() -> Variant:
+        """`HID` - delta-protonated histidine."""
+        ...
+    @staticmethod
+    def protonation_his_epsilon() -> Variant:
+        """`HIE` - epsilon-protonated histidine."""
+        ...
+    @staticmethod
+    def protonation_his_doubly() -> Variant:
+        """`HIP` - doubly-protonated histidine."""
+        ...
+    @staticmethod
+    def protonation_custom(name: str) -> Variant:
+        """Custom protonation state, e.g. `"ASP_PROTONATED"`."""
+        ...
+    @staticmethod
+    def other(name: str) -> Variant:
+        """Open-ended variant tag carrying an arbitrary string."""
+        ...
+
+class AtomRow:
+    """A single atom row: position + name + element."""
+
+    position_x: float
+    position_y: float
+    position_z: float
+    name: bytes
+    """PDB atom name (4 bytes, space-padded; e.g. `b"CA  "`)."""
+    element: str
+    """Element symbol (e.g. `"C"`, `"Fe"`)."""
+    def __init__(
+        self,
+        position_x: float,
+        position_y: float,
+        position_z: float,
+        name: bytes,
+        element: str,
+    ) -> None:
+        """Construct an `AtomRow` from positional fields."""
+        ...
+
+class SetEntityCoordsView:
+    """Read view of a `SetEntityCoords` edit (from
+    `EditList.set_entity_coords_at`)."""
+
+    entity_id: int
+    coords: list[tuple[float, float, float]]
+
+class SetResidueCoordsView:
+    """Read view of a `SetResidueCoords` edit."""
+
+    entity_id: int
+    residue_idx: int
+    coords: list[tuple[float, float, float]]
+
+class MutateResidueView:
+    """Read view of a `MutateResidue` edit."""
+
+    entity_id: int
+    residue_idx: int
+    new_name: bytes
+    """New 3-letter residue name (space-padded)."""
+    atoms: list[AtomRow]
+    variants: list[Variant]
+
+class SetVariantsView:
+    """Read view of a `SetVariants` edit."""
+
+    entity_id: int
+    residue_idx: int
+    variants: list[Variant]
+
+# ---------------------------------------------------------------------------
+# Transport / serialization free functions
+#
+# Byte-blob helpers kept for the plugin wire protocol, not the front door.
+# A normal caller wants the object API above.
+# ---------------------------------------------------------------------------
+
+def pdb_to_assembly_bytes(pdb_str: str) -> bytes:
+    """Parse a PDB string and emit assembly wire bytes. Transport helper; prefer
+    `Assembly.from_pdb`."""
+    ...
+
+def mmcif_to_assembly_bytes(cif_str: str) -> bytes:
+    """Parse an mmCIF string and emit assembly wire bytes. Transport helper; prefer
+    `Assembly.from_mmcif`."""
+    ...
+
+def bcif_to_assembly_bytes(bytes: bytes) -> bytes:
+    """Parse BinaryCIF bytes and emit assembly wire bytes. Transport helper; prefer
+    `Assembly.from_bcif`."""
+    ...
+
+def assembly_bytes_to_pdb(bytes: bytes) -> str:
+    """Decode assembly wire bytes and emit a PDB string.
+    Transport / serialization helper."""
+    ...
+
+def deserialize_assembly_bytes(bytes: bytes) -> bytes:
+    """Round-trip assembly wire bytes through `Assembly` and back (validation).
+    Transport / serialization helper."""
+    ...
+
+def assembly_bytes_to_arrays(bytes: bytes) -> AtomArrays:
+    """Decode wire bytes to per-atom numpy columns (Biotite-free). Transport
+    helper; prefer `Assembly.to_arrays` / `Entity.to_arrays`."""
+    ...
+
+# ---------------------------------------------------------------------------
+# AtomWorks / Biotite interop free functions
+#
+# Convert between molex's wire bytes / entities and Biotite `AtomArray` /
+# `AtomArrayPlus` objects, and parse structure files through the AtomWorks
+# pipeline. `AtomArray` arguments and returns are typed `Any` (Biotite is not
+# a typing dependency).
+# ---------------------------------------------------------------------------
+
+def entities_to_atom_array(assembly_bytes: bytes) -> Any:
+    """Convert assembly wire bytes to a Biotite `AtomArray`."""
+    ...
+
+def entities_to_atom_array_plus(assembly_bytes: bytes) -> Any:
+    """Convert assembly wire bytes to an AtomWorks `AtomArrayPlus` (signals the
+    structure is already fully constructed; skips CCD rebuilding)."""
+    ...
+
+def atom_array_to_entities(atom_array: Any) -> bytes:
+    """Convert a Biotite `AtomArray` (or `AtomArrayPlus`) back to assembly wire
+    bytes."""
+    ...
+
+def assembly_bytes_to_atom_array(bytes: bytes) -> Any:
+    """Convert assembly wire bytes to a Biotite `AtomArray`."""
+    ...
+
+def assembly_bytes_to_atom_array_plus(bytes: bytes) -> Any:
+    """Convert assembly wire bytes to an AtomWorks `AtomArrayPlus`."""
+    ...
+
+def entities_to_atom_array_parsed(
+    assembly_bytes: bytes, source_path: str | None = ...
+) -> Any:
+    """Convert entities to an `AtomArray`, then run AtomWorks' full cleaning
+    pipeline (highest fidelity; slower than `entities_to_atom_array`)."""
+    ...
+
+def parse_file_to_entities(file_path: str) -> bytes:
+    """Load a structure file through AtomWorks' full parsing pipeline and
+    return assembly wire bytes of the cleaned, annotated entities."""
+    ...
+
+def parse_file_full(file_path: str) -> Any:
+    """Load a structure file through AtomWorks and return a dict with
+    `"assembly_bytes"`, `"chain_info"`, and `"assemblies"`."""
+    ...

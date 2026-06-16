@@ -33,3 +33,6 @@ Documentation = "https://petridecus.github.io/molex/"
 features = ["python", "extension-module"]
 bindings = "pyo3"
 module-name = "molex"
+# Pure-Rust extension (no `python-source`): maturin ships the project-root
+# `molex.pyi` type stubs and adds the `py.typed` marker automatically. The
+# stubs are hand-maintained against the pyo3 surface in `src/python/`.

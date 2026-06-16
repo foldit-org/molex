@@ -1,10 +1,9 @@
-//! ASSEM binary wire format: encoder, decoder, header constants.
+//! Assembly binary wire format: encoder, decoder, header constants.
 //!
-//! Current version is ASSEM02 (carries per-residue variant tags after the
-//! atom payload). ASSEM01 (no variants) is still accepted by the
-//! deserializer and is treated as if every residue had empty variants —
-//! existing readers that emit ASSEM01 bytes continue to round-trip
-//! through molex without code changes.
+//! The header is a fixed 8-byte magic followed by a `u8` version byte.
+//! The version selects the payload layout; the magic never changes when
+//! the payload does. Version 1 carries the entity / atom payload plus a
+//! trailing per-residue variants section.
 //!
 //! See [`crate::ops::wire::serialize_assembly`] for the byte layout.
 
@@ -16,19 +15,15 @@ pub(crate) mod variants;
 use crate::entity::molecule::{MoleculeEntity, MoleculeType};
 use crate::ops::codec::AdapterError;
 
-/// Magic header bytes identifying the legacy ASSEM01 binary format
-/// (atoms only, no per-residue variants).
-pub const ASSEMBLY_MAGIC_V1: &[u8; 8] = b"ASSEM01\0";
+/// Magic header bytes identifying the assembly binary format. The version
+/// byte that follows selects the payload layout.
+pub const ASSEMBLY_MAGIC: &[u8; 8] = b"ASSEMBLY";
 
-/// Magic header bytes for the current ASSEM02 binary format. Carries a
-/// trailing variants section after the atom payload.
-pub const ASSEMBLY_MAGIC_V2: &[u8; 8] = b"ASSEM02\0";
+/// Wire format version written after [`ASSEMBLY_MAGIC`]. Version 1 carries
+/// the entity / atom payload followed by a per-residue variants section.
+pub const ASSEMBLY_VERSION: u8 = 1;
 
-/// Magic emitted by the current serializer. Alias for the latest
-/// supported version.
-pub const ASSEMBLY_MAGIC: &[u8; 8] = ASSEMBLY_MAGIC_V2;
-
-/// Encode a `MoleculeType` to its ASSEM02 wire byte.
+/// Encode a `MoleculeType` to its wire byte.
 pub(crate) fn molecule_type_to_wire(mol_type: MoleculeType) -> u8 {
     match mol_type {
         MoleculeType::Protein => 0,
@@ -43,7 +38,7 @@ pub(crate) fn molecule_type_to_wire(mol_type: MoleculeType) -> u8 {
     }
 }
 
-/// Decode an ASSEM02 wire byte to a `MoleculeType`.
+/// Decode a wire byte to a `MoleculeType`.
 pub(crate) fn molecule_type_from_wire(b: u8) -> Option<MoleculeType> {
     match b {
         0 => Some(MoleculeType::Protein),
@@ -59,7 +54,7 @@ pub(crate) fn molecule_type_from_wire(b: u8) -> Option<MoleculeType> {
     }
 }
 
-/// ASSEM02-encode a raw entity slice (includes molecule type metadata).
+/// Encode a raw entity slice (includes molecule type metadata).
 ///
 /// # Errors
 ///

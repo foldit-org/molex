@@ -1,7 +1,7 @@
 //! Transport/serialization free functions: parse structure files (PDB /
-//! mmCIF / BinaryCIF) into ASSEM02 bytes and emit PDB from ASSEM02 bytes.
-//! These are kept for the plugin wire protocol, not the front door; a normal
-//! caller wants the object API (`Assembly.from_pdb` / `from_mmcif` /
+//! mmCIF / BinaryCIF) into assembly wire bytes and emit PDB from assembly wire
+//! bytes. These are kept for the plugin wire protocol, not the front door; a
+//! normal caller wants the object API (`Assembly.from_pdb` / `from_mmcif` /
 //! `from_bcif` -> `entities()` -> `to_arrays()`) in the `python` module's
 //! object API. A submodule of `python`, split out to keep each file under the
 //! 800-line source cap enforced by `just file-lengths`.
@@ -13,7 +13,7 @@ use crate::ops::wire::{
     assembly_bytes, deserialize_assembly, serialize_assembly,
 };
 
-/// Parse a PDB string and emit ASSEM02 binary bytes.
+/// Parse a PDB string and emit assembly binary bytes.
 ///
 /// Transport helper for the plugin wire protocol. Prefer `Assembly.from_pdb`
 /// for the object API.
@@ -32,7 +32,7 @@ pub fn pdb_to_assembly_bytes(pdb_str: String) -> PyResult<Vec<u8>> {
     })
 }
 
-/// Parse an mmCIF string and emit ASSEM02 binary bytes.
+/// Parse an mmCIF string and emit assembly binary bytes.
 ///
 /// Transport helper for the plugin wire protocol. Prefer `Assembly.from_mmcif`
 /// for the object API.
@@ -51,7 +51,7 @@ pub fn mmcif_to_assembly_bytes(cif_str: String) -> PyResult<Vec<u8>> {
     })
 }
 
-/// Parse BinaryCIF bytes and emit ASSEM02 binary bytes.
+/// Parse BinaryCIF bytes and emit assembly binary bytes.
 ///
 /// Transport helper for the plugin wire protocol. Prefer `Assembly.from_bcif`
 /// for the object API.
@@ -70,7 +70,7 @@ pub fn bcif_to_assembly_bytes(bytes: Vec<u8>) -> PyResult<Vec<u8>> {
     })
 }
 
-/// Decode ASSEM02 (or legacy ASSEM01) bytes and emit a PDB-format
+/// Decode assembly wire bytes and emit a PDB-format
 /// string.
 ///
 /// Transport/serialization helper for the plugin wire protocol.
@@ -89,7 +89,7 @@ pub fn assembly_bytes_to_pdb(bytes: Vec<u8>) -> PyResult<String> {
     })
 }
 
-/// Round-trip ASSEM01 bytes through `Assembly` and back (validation).
+/// Round-trip assembly wire bytes through `Assembly` and back (validation).
 ///
 /// Transport/serialization helper for the plugin wire protocol.
 ///

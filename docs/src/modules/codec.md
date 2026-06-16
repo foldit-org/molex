@@ -1,7 +1,7 @@
 # Codec
 
 `molex::ops::codec` holds the crate's shared adapter error type plus a
-small entity-utility helper. The ASSEM02 binary wire format lives in
+small entity-utility helper. The assembly binary wire format lives in
 [`molex::ops::wire`](wire.md); the structural-transform routines live in
 [`molex::ops::transform`](analysis.md#transforms).
 
@@ -19,7 +19,7 @@ let ca: Vec<Vec3> = ca_positions(&entities);
 `AdapterError` is the `Err` variant for every adapter entry point
 (`pdb_str_to_entities`, `mmcif_str_to_entities`, `bcif_to_entities`,
 their `_file_*` and `_to_all_models` siblings), the PDB writers
-(`assembly_to_pdb`, `entities_to_pdb`), and the ASSEM02 codec
+(`assembly_to_pdb`, `entities_to_pdb`), and the assembly wire codec
 (`ops::wire::serialize_assembly` / `deserialize_assembly`).
 
 ```rust,ignore

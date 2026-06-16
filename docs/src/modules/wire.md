@@ -1,17 +1,18 @@
 # Wire Format
 
-`molex::ops::wire` is the home of the ASSEM02 binary wire format:
+`molex::ops::wire` is the home of the assembly binary wire format:
 the on-disk / IPC format used to round-trip an `Assembly` through
 bytes.
 
-ASSEM02 is entity-aware: it preserves per-entity molecule-type
+The header is a fixed 8-byte magic (`ASSEMBLY`) followed by a `u8`
+version byte that selects the payload layout; the magic never changes
+when the payload does. Only version 1 exists today, and any other
+version is a clean decode rejection.
+
+The format is entity-aware: it preserves per-entity molecule-type
 metadata so the decoder can reconstruct `MoleculeEntity` variants
 without re-running residue classification. It also carries each
 entity's `EntityId` and a trailing per-residue variants section.
-
-The legacy ASSEM01 format (magic `ASSEM01\0`, atoms only, no variants
-section) is still accepted by the deserializer and read as if every
-residue carried empty variants. The serializer always emits ASSEM02.
 
 ## Public surface
 
@@ -29,14 +30,15 @@ let bytes: Vec<u8> = assembly_bytes(&entities)?;
 // Deserialize back to an Assembly (recomputes derived data via Assembly::new)
 let assembly: Assembly = deserialize_assembly(&bytes)?;
 
-// Magic header for ASSEM02 detection
+// Magic header for assembly-format detection
 assert_eq!(&bytes[0..8], ASSEMBLY_MAGIC);
 ```
 
 ## Byte layout
 
 ```text
-8 bytes:   magic "ASSEM02\0"
+8 bytes:   magic "ASSEMBLY"
+1 byte:    version (currently 1)
 4 bytes:   entity_count (u32 BE)
 Per entity header (9 bytes each):
   1 byte:  molecule_type wire byte

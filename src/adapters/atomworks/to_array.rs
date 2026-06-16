@@ -337,7 +337,8 @@ fn set_bond_list(
     Ok(())
 }
 
-/// Convert `Vec<MoleculeEntity>` (from ASSEM01 bytes) to a Biotite `AtomArray`.
+/// Convert `Vec<MoleculeEntity>` (from assembly wire bytes) to a Biotite
+/// `AtomArray`.
 ///
 /// # Errors
 ///
@@ -355,7 +356,8 @@ pub fn entities_to_atom_array(
     entities_to_atom_array_impl(py, assembly.entities())
 }
 
-/// Convert `Vec<MoleculeEntity>` (from ASSEM01 bytes) to an `AtomArrayPlus`.
+/// Convert `Vec<MoleculeEntity>` (from assembly wire bytes) to an
+/// `AtomArrayPlus`.
 ///
 /// `AtomArrayPlus` signals to downstream consumers (e.g. `parse_atom_array`)
 /// that the structure is already fully constructed and should skip CCD
@@ -381,11 +383,11 @@ pub fn entities_to_atom_array_plus(
     Ok(as_plus.call1((atom_array,))?.unbind())
 }
 
-/// Convert ASSEM01 bytes to a Biotite `AtomArray`.
+/// Convert assembly wire bytes to a Biotite `AtomArray`.
 ///
 /// Replaces the old `coords_to_atom_array(coords_bytes)` (COORDS01-shaped),
 /// which was retired with the COORDS01 wire format. Callers should pass
-/// ASSEM01 bytes (the output of `serialize_assembly` / `assembly_bytes`).
+/// assembly wire bytes (the output of `serialize_assembly` / `assembly_bytes`).
 ///
 /// # Errors
 ///
@@ -403,7 +405,7 @@ pub fn assembly_bytes_to_atom_array(
     entities_to_atom_array_impl(py, assembly.entities())
 }
 
-/// Convert ASSEM01 bytes to an `AtomArrayPlus`.
+/// Convert assembly wire bytes to an `AtomArrayPlus`.
 ///
 /// Replaces the old `coords_to_atom_array_plus(coords_bytes)`.
 ///

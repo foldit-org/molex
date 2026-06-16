@@ -1,14 +1,14 @@
-//! Serialization for the ASSEM02 binary wire format.
+//! Serialization for the assembly binary wire format.
 
 use super::variants::serialize_variants_section;
-use super::{molecule_type_to_wire, ASSEMBLY_MAGIC};
+use super::{molecule_type_to_wire, ASSEMBLY_MAGIC, ASSEMBLY_VERSION};
 use crate::assembly::Assembly;
 use crate::entity::molecule::atom::Atom;
 use crate::entity::molecule::polymer::Residue;
 use crate::entity::molecule::MoleculeEntity;
 use crate::ops::codec::AdapterError;
 
-/// Serialize an [`Assembly`] to ASSEM02 binary format.
+/// Serialize an [`Assembly`] to the assembly binary format.
 ///
 /// Writes the entity list only. `generation` resets to 0 on the
 /// [`deserialize_assembly`](super::deserialize::deserialize_assembly)
@@ -16,7 +16,8 @@ use crate::ops::codec::AdapterError;
 /// caller opts in via [`Assembly::recompute_ss`].
 ///
 /// Format:
-/// - 8 bytes: magic `b"ASSEM02\0"`
+/// - 8 bytes: magic `b"ASSEMBLY"`
+/// - 1 byte:  version (currently 1)
 /// - 4 bytes: entity_count (u32 BE)
 /// - Per entity header (9 bytes each):
 ///   - 1 byte: `molecule_type` wire byte
@@ -46,7 +47,7 @@ pub fn serialize_assembly(
     serialize_entities(assembly.entities())
 }
 
-/// Serialize a raw entity slice to ASSEM02 binary format.
+/// Serialize a raw entity slice to the assembly binary format.
 ///
 /// Internal helper for in-crate paths that operate on owned entity
 /// slices and don't need an [`Assembly`] wrapper.
@@ -60,12 +61,13 @@ pub(crate) fn serialize_entities<E: std::borrow::Borrow<MoleculeEntity>>(
 ) -> Result<Vec<u8>, AdapterError> {
     let total_atoms: usize =
         entities.iter().map(|e| e.borrow().atom_count()).sum();
-    let header_size = 8 + 4 + entities.len() * 9;
+    let header_size = 8 + 1 + 4 + entities.len() * 9;
     let atom_size = total_atoms * 26;
     let mut buffer = Vec::with_capacity(header_size + atom_size);
 
-    // Magic
+    // Magic + version byte
     buffer.extend_from_slice(ASSEMBLY_MAGIC);
+    buffer.push(ASSEMBLY_VERSION);
 
     // Entity count
     #[allow(clippy::cast_possible_truncation)] // entity count fits in u32
@@ -85,8 +87,8 @@ pub(crate) fn serialize_entities<E: std::borrow::Borrow<MoleculeEntity>>(
         write_entity_atoms(entity.borrow(), &mut buffer);
     }
 
-    // Per-entity variants section (ASSEM02). Empty when no residue
-    // carries variants — costs 4 bytes per entity in that case.
+    // Per-entity variants section. Empty when no residue carries
+    // variants — costs 4 bytes per entity in that case.
     serialize_variants_section(entities, &mut buffer);
 
     Ok(buffer)

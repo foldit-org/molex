@@ -51,14 +51,17 @@ impl PyEntity {
         molecule_type_str(self.inner.molecule_type())
     }
 
-    /// PDB chain identifier as a one-character string, or `None` for a
-    /// non-polymer entity (or a non-printable chain byte).
+    /// PDB chain identifier as a one-character string, or `None` when the
+    /// entity has no chain id (a non-polymer entity). The printable filter
+    /// (`is_ascii_graphic`) is a safety fallback that also yields `None` for a
+    /// non-printable chain byte; it is not the primary meaning of `None`.
     #[must_use]
     #[getter]
     pub fn chain_id(&self) -> Option<String> {
-        self.inner.pdb_chain_id().and_then(|b| {
-            b.is_ascii_alphanumeric().then(|| (b as char).to_string())
-        })
+        self.inner
+            .pdb_chain_id()
+            .filter(u8::is_ascii_graphic)
+            .map(|b| (b as char).to_string())
     }
 
     /// Human-readable label (e.g. `"Protein Chain A"`, `"Ligand (ATP)"`).
@@ -102,6 +105,25 @@ impl PyEntity {
     /// `PyErr` if numpy is unavailable or a numpy operation fails.
     pub fn to_arrays(&self, py: Python) -> PyResult<AtomArrays> {
         entities_to_arrays(py, std::slice::from_ref(&self.inner))
+    }
+
+    /// Residue count; mirrors `len(assembly)` so `len(entity)` works too.
+    #[must_use]
+    pub fn __len__(&self) -> usize {
+        self.residue_count()
+    }
+
+    /// Concise repr: `<Entity {id} {kind} chain={chain_id} {n} atoms>`.
+    #[must_use]
+    pub fn __repr__(&self) -> String {
+        let chain = self.chain_id().unwrap_or_else(|| "None".to_owned());
+        format!(
+            "<Entity {} {} chain={} {} atoms>",
+            self.id(),
+            self.kind(),
+            chain,
+            self.atom_count(),
+        )
     }
 }
 
@@ -162,5 +184,16 @@ impl PyResidue {
     #[getter]
     pub fn ins_code(&self) -> Option<String> {
         self.ins_code.clone()
+    }
+
+    /// Concise repr: `<Residue {name} {seq_id}{ins_code}>`.
+    #[must_use]
+    pub fn __repr__(&self) -> String {
+        format!(
+            "<Residue {} {}{}>",
+            self.name,
+            self.seq_id,
+            self.ins_code.as_deref().unwrap_or(""),
+        )
     }
 }

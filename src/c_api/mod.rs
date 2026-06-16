@@ -62,7 +62,7 @@ use std::ffi::c_char;
 
 use crate::adapters::{bcif, cif, pdb};
 use crate::assembly::Assembly;
-use crate::entity::molecule::{MoleculeEntity, MoleculeType};
+use crate::entity::molecule::{EntityKind, MoleculeEntity, MoleculeType};
 use crate::ops::wire::{deserialize_assembly, serialize_assembly};
 
 thread_local! {
@@ -141,6 +141,36 @@ impl From<MoleculeType> for molex_MoleculeType {
             MoleculeType::Lipid => molex_MoleculeType::Lipid,
             MoleculeType::Cofactor => molex_MoleculeType::Cofactor,
             MoleculeType::Solvent => molex_MoleculeType::Solvent,
+        }
+    }
+}
+
+/// Structural discriminant for an entity across the FFI boundary.
+///
+/// The four-way taxonomy of the underlying variant, 1:1 with the Rust
+/// `EntityKind`. Distinct from the finer [`molex_MoleculeType`]
+/// classification. Stable integer codes so C consumers can pattern-match
+/// without depending on Rust's enum layout.
+#[repr(i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum molex_EntityKind {
+    /// A single protein chain.
+    Protein = 0,
+    /// A single DNA or RNA chain.
+    NucleicAcid = 1,
+    /// A single non-polymer molecule.
+    SmallMolecule = 2,
+    /// A group of identical small molecules.
+    Bulk = 3,
+}
+
+impl From<EntityKind> for molex_EntityKind {
+    fn from(value: EntityKind) -> Self {
+        match value {
+            EntityKind::Protein => molex_EntityKind::Protein,
+            EntityKind::NucleicAcid => molex_EntityKind::NucleicAcid,
+            EntityKind::SmallMolecule => molex_EntityKind::SmallMolecule,
+            EntityKind::Bulk => molex_EntityKind::Bulk,
         }
     }
 }
@@ -374,20 +404,20 @@ pub extern "C" fn molex_cif_str_to_assembly(
     }
 }
 
-/// Decode ASSEM01 binary bytes into an `Assembly`.
+/// Decode assembly binary bytes into an `Assembly`.
 ///
-/// Bytes must start with the `ASSEM01\0` magic header followed by the
-/// entity / atom payload (see `crate::ops::wire`). Returns null on
-/// failure with the error message available via [`molex_last_error_message`].
-/// The caller owns the returned handle and must free it with
-/// [`molex_assembly_free`].
+/// Bytes must start with the `ASSEMBLY` magic header and version byte
+/// followed by the entity / atom payload (see `crate::ops::wire`). Returns
+/// null on failure with the error message available via
+/// [`molex_last_error_message`]. The caller owns the returned handle and
+/// must free it with [`molex_assembly_free`].
 #[no_mangle]
-pub extern "C" fn molex_assem01_to_assembly(
+pub extern "C" fn molex_bytes_to_assembly(
     bytes_ptr: *const u8,
     len: usize,
 ) -> *mut molex_Assembly {
     let Some(bytes) = slice_from_raw(bytes_ptr, len) else {
-        set_last_error(&"molex_assem01_to_assembly: null input pointer");
+        set_last_error(&"molex_bytes_to_assembly: null input pointer");
         return std::ptr::null_mut();
     };
     match deserialize_assembly(bytes) {
@@ -448,24 +478,24 @@ fn vec_to_out_buffer(
     MOLEX_OK
 }
 
-/// Emit an `Assembly` as ASSEM01 binary bytes.
+/// Emit an `Assembly` as assembly binary bytes.
 ///
 /// On success returns [`MOLEX_OK`] and writes the heap-allocated buffer
 /// pointer + length to `out_buf` / `out_len`; the caller frees with
 /// [`molex_free_bytes`]. On failure returns a nonzero status and the
 /// error message is available via [`molex_last_error_message`].
 #[no_mangle]
-pub extern "C" fn molex_assembly_to_assem01(
+pub extern "C" fn molex_assembly_to_bytes(
     assembly: *const molex_Assembly,
     out_buf: *mut *mut u8,
     out_len: *mut usize,
 ) -> i32 {
     if out_buf.is_null() || out_len.is_null() {
-        set_last_error(&"molex_assembly_to_assem01: null pointer argument");
+        set_last_error(&"molex_assembly_to_bytes: null pointer argument");
         return MOLEX_ERR_NULL;
     }
     let Some(assembly) = assembly_inner(assembly) else {
-        set_last_error(&"molex_assembly_to_assem01: null pointer argument");
+        set_last_error(&"molex_assembly_to_bytes: null pointer argument");
         return MOLEX_ERR_NULL;
     };
     match serialize_assembly(assembly) {

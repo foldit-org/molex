@@ -1,4 +1,4 @@
-//! Benchmarks for the ASSEM01 wire format round-trip.
+//! Benchmarks for the assembly wire format round-trip.
 #![allow(
     missing_docs,
     unused_results,

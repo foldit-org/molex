@@ -1,4 +1,4 @@
-//! Per-residue variant tag encoding for the ASSEM02 wire format.
+//! Per-residue variant tag encoding for the assembly wire format.
 //!
 //! Section layout (after atom payload, in entity-header order):
 //!

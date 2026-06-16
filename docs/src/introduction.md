@@ -12,7 +12,7 @@
 
 - **`AtomId`** and **`CovalentBond`** are the cross-cutting identifiers: bonds reference atoms by `AtomId { entity, index }` so they remain addressable across reorderings.
 
-- **`ASSEM01`** is a compact binary serialization format for FFI and IPC that round-trips per-entity molecule-type metadata alongside coordinates.
+- The **assembly wire format** is a compact binary serialization format for FFI and IPC that round-trips per-entity molecule-type metadata alongside coordinates.
 
 - **Analysis** includes covalent bond inference, DSSP hydrogen bond detection, disulfide bridges, secondary structure classification, AABBs, and volumetric/SES utilities.
 

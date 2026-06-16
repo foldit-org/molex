@@ -9,7 +9,7 @@ and serializing molecular structure data.
 - **Entity model** — proteins, nucleic acids, ligands, ions, waters, and cofactors as typed entities
 - **Analyze** — DSSP secondary structure, hydrogen bonds, covalent bonds, disulfide bridges
 - **Transform** — Kabsch alignment, CA extraction, backbone segments
-- **Serialize** — compact binary format (ASSEM02) for FFI and IPC
+- **Serialize** — compact binary assembly format for FFI and IPC
 - **Python bindings** — PyO3 module with AtomWorks/Biotite interop
 
 ## Quick start
@@ -29,12 +29,25 @@ for e in &entities {
 pip install molex
 ```
 
+The Python API is object-centric: parse a structure into an `Assembly`, walk
+its entities and residues, and read atoms as numpy columns.
+
 ```python
 import molex
 
-assembly_bytes = molex.pdb_to_assembly_bytes(open("1ubq.pdb").read())
-pdb_string = molex.assembly_bytes_to_pdb(assembly_bytes)
+asm = molex.Assembly.from_pdb(open("1ubq.pdb").read())
+for e in asm.entities():
+    print(e.kind, e.chain_id, e.residue_count)
+
+arr = asm.to_arrays()    # per-atom numpy columns, no Biotite required
+asm.recompute_ss()       # opt-in DSSP secondary structure
 ```
+
+Atom completion (filling missing heavy atoms) happens at parse time, during
+file ingest. `from_mmcif` and `from_bcif` parse the other formats. The
+`*_to_assembly_bytes` / `assembly_bytes_to_*` free functions are transport
+helpers for the wire protocol, not the default path. Type stubs (`molex.pyi`)
+ship with the wheel.
 
 ## Optional features
 

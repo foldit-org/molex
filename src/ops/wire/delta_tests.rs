@@ -4,6 +4,7 @@ use glam::Vec3;
 
 use super::{
     deserialize_edits, serialize_edits, DeltaSerializeError, DELTA_MAGIC,
+    DELTA_VERSION,
 };
 use crate::chemistry::variant::{ProtonationState, VariantTag};
 use crate::element::Element;
@@ -38,9 +39,10 @@ fn res_bytes(s: &str) -> [u8; 3] {
 fn magic_header_is_emitted_first() {
     let bytes = serialize_edits(&[]).unwrap();
     assert_eq!(&bytes[0..8], DELTA_MAGIC);
+    assert_eq!(bytes[8], DELTA_VERSION);
     // Empty list -> 0 edits.
-    assert_eq!(u32::from_be_bytes(bytes[8..12].try_into().unwrap()), 0);
-    assert_eq!(bytes.len(), 12);
+    assert_eq!(u32::from_be_bytes(bytes[9..13].try_into().unwrap()), 0);
+    assert_eq!(bytes.len(), 13);
 }
 
 #[test]
@@ -244,8 +246,16 @@ fn topology_edits_are_rejected_at_serialize_time() {
 
 #[test]
 fn deserialize_rejects_bad_magic() {
-    let mut bytes = vec![0u8; 12];
+    let mut bytes = vec![0u8; 13];
     bytes[..8].copy_from_slice(b"BADMAGIC");
+    assert!(deserialize_edits(&bytes).is_err());
+}
+
+#[test]
+fn deserialize_rejects_unknown_version() {
+    let mut bytes = vec![0u8; 13];
+    bytes[..8].copy_from_slice(DELTA_MAGIC);
+    bytes[8] = DELTA_VERSION.wrapping_add(1); // unsupported version
     assert!(deserialize_edits(&bytes).is_err());
 }
 

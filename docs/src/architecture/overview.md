@@ -13,7 +13,7 @@ molex/src/
 ├── ops/              Operations
 │   ├── codec/        AdapterError, ca_positions helper
 │   ├── transform/    Kabsch alignment, CA extraction, backbone segments
-│   └── wire/         ASSEM02 binary wire format encoder/decoder
+│   └── wire/         assembly binary wire format encoder/decoder
 ├── assembly.rs       Top-level Assembly container with eagerly-computed derived data
 ├── atom_id.rs        Cross-cutting AtomId (entity + index)
 ├── bond.rs           Cross-cutting CovalentBond (AtomId endpoints)
@@ -82,4 +82,4 @@ The `entity::surface` module provides volumetric data types:
 
 ## Binary format
 
-**ASSEM02** is molex's compact binary IPC format (magic: `ASSEM02\0`). It is entity-aware: each entity is preceded by a 9-byte header (molecule-type byte, atom count, and `EntityId`) so the decoder reconstructs `MoleculeEntity` variants without re-running residue classification, and a trailing variants section carries per-residue variant tags. The legacy ASSEM01 format is still accepted on read. See the [Wire Format](../modules/wire.md) page for the full byte layout.
+The **assembly format** is molex's compact binary IPC format: a fixed 8-byte magic (`ASSEMBLY`) followed by a version byte that selects the payload layout (only version 1 exists today). It is entity-aware: each entity is preceded by a 9-byte header (molecule-type byte, atom count, and `EntityId`) so the decoder reconstructs `MoleculeEntity` variants without re-running residue classification, and a trailing variants section carries per-residue variant tags. See the [Wire Format](../modules/wire.md) page for the full byte layout.

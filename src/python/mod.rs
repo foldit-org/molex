@@ -1,4 +1,4 @@
-//! Python bindings for the `Assembly` object graph and the edit / DELTA01
+//! Python bindings for the `Assembly` object graph and the edit / delta
 //! handle surface.
 //!
 //! The documented default for a normal caller is the object API: parse a
@@ -62,27 +62,26 @@ pub struct PyAssembly {
 
 #[pymethods]
 impl PyAssembly {
-    /// Decode ASSEM01 / ASSEM02 bytes into an `Assembly`.
+    /// Decode assembly wire bytes into an `Assembly`.
     ///
     /// # Errors
     ///
     /// `PyValueError` if the magic header is wrong or the payload is
     /// truncated / malformed.
     #[staticmethod]
-    #[pyo3(name = "from_assem01")]
     #[allow(clippy::needless_pass_by_value)]
-    pub fn from_assem01(bytes: Vec<u8>) -> PyResult<Self> {
+    pub fn from_assembly_bytes(bytes: Vec<u8>) -> PyResult<Self> {
         let inner = deserialize_assembly(&bytes).map_err(value_err)?;
         Ok(Self { inner })
     }
 
-    /// Emit the assembly as ASSEM02 bytes (latest wire format).
+    /// Emit the assembly as wire bytes.
     ///
     /// # Errors
     ///
     /// `PyValueError` propagated from the serializer (currently
     /// infallible in practice; the `Result` is kept for API stability).
-    pub fn to_assem01(&self) -> PyResult<Vec<u8>> {
+    pub fn to_assembly_bytes(&self) -> PyResult<Vec<u8>> {
         serialize_assembly(&self.inner).map_err(value_err)
     }
 
@@ -129,15 +128,15 @@ impl PyAssembly {
         self.inner.apply_edits(&edits.inner).map_err(value_err)
     }
 
-    /// Decode DELTA01 bytes and apply them in one call.
+    /// Decode delta bytes and apply them in one call.
     ///
     /// # Errors
     ///
-    /// `PyValueError` for invalid DELTA01 bytes (bad magic / truncated
+    /// `PyValueError` for invalid delta bytes (bad magic / truncated
     /// payload / unknown tag) or any of the apply failures documented
     /// on `apply_edits`.
     #[allow(clippy::needless_pass_by_value)]
-    pub fn apply_delta01(&mut self, bytes: Vec<u8>) -> PyResult<()> {
+    pub fn apply_delta(&mut self, bytes: Vec<u8>) -> PyResult<()> {
         let edits = deserialize_edits(&bytes).map_err(value_err)?;
         self.inner.apply_edits(&edits).map_err(value_err)
     }
@@ -220,6 +219,16 @@ impl PyAssembly {
         self.inner.entities().len()
     }
 
+    /// Concise repr: `<Assembly: {n} entities, gen {g}>`.
+    #[must_use]
+    pub fn __repr__(&self) -> String {
+        format!(
+            "<Assembly: {} entities, gen {}>",
+            self.inner.entities().len(),
+            self.inner.generation(),
+        )
+    }
+
     /// Every atom in the assembly as per-atom numpy columns (an
     /// `AtomArrays`), via the shared entities -> arrays core.
     ///
@@ -297,6 +306,10 @@ impl PyEditList {
     /// Append a `MutateResidue` edit. `new_name` is a 3-byte residue
     /// name (e.g. `b"HIS"`); `atoms` is a list of `AtomRow`;
     /// `variants` is a list of `Variant`.
+    ///
+    /// Note: the edit-side names here take raw bytes (`new_name` is a
+    /// `[u8; 3]`, `AtomRow.name` a `[u8; 4]`), unlike `Residue.name` on the
+    /// read side, which is a decoded `str`.
     #[allow(
         clippy::needless_pass_by_value,
         clippy::too_many_arguments,
@@ -341,20 +354,20 @@ impl PyEditList {
         });
     }
 
-    /// Serialize this list as DELTA01 bytes.
+    /// Serialize this list as delta bytes.
     ///
     /// # Errors
     ///
     /// `PyValueError` when the list contains a topology edit
-    /// (`AddEntity` / `RemoveEntity`) which is not representable in
-    /// DELTA01; callers should broadcast a full ASSEM02 snapshot in
+    /// (`AddEntity` / `RemoveEntity`) which is not representable in the
+    /// delta format; callers should broadcast a full assembly snapshot in
     /// that case.
-    pub fn to_delta01(&self) -> PyResult<Vec<u8>> {
+    pub fn to_delta(&self) -> PyResult<Vec<u8>> {
         serialize_edits(&self.inner)
             .map_err(|e: DeltaSerializeError| value_err(format!("{e}")))
     }
 
-    /// Decode DELTA01 bytes into a new edit list.
+    /// Decode delta bytes into a new edit list.
     ///
     /// # Errors
     ///
@@ -362,7 +375,7 @@ impl PyEditList {
     /// truncated, or an unknown edit tag is encountered.
     #[staticmethod]
     #[allow(clippy::needless_pass_by_value)]
-    pub fn from_delta01(bytes: Vec<u8>) -> PyResult<Self> {
+    pub fn from_delta(bytes: Vec<u8>) -> PyResult<Self> {
         let inner = deserialize_edits(&bytes).map_err(value_err)?;
         Ok(Self { inner })
     }
@@ -373,19 +386,15 @@ impl PyEditList {
     // copies edit fields into freshly-allocated Python objects, which the
     // Python GC owns.
 
-    /// Kind of the edit at `index`. Returns one of the
-    /// `EditKind.*` integer constants exposed at module scope.
+    /// Kind of the edit at `index`, as an integer:
+    /// 1=SetEntityCoords, 2=SetResidueCoords, 3=MutateResidue,
+    /// 4=SetVariants, 5=AddEntity, 6=RemoveEntity.
     ///
     /// # Errors
     ///
     /// `PyIndexError` when `index >= len(self)`.
     pub fn kind_at(&self, index: usize) -> PyResult<i32> {
-        let edit = self.inner.get(index).ok_or_else(|| {
-            PyErr::new::<pyo3::exceptions::PyIndexError, _>(format!(
-                "EditList.kind_at: index {index} out of range (len={})",
-                self.inner.len()
-            ))
-        })?;
+        let edit = self.edit_at(index, "kind_at")?;
         Ok(edit_kind_int(edit))
     }
 
@@ -400,18 +409,13 @@ impl PyEditList {
         &self,
         index: usize,
     ) -> PyResult<PySetEntityCoordsView> {
-        let edit = self.inner.get(index).ok_or_else(|| {
-            PyErr::new::<pyo3::exceptions::PyIndexError, _>(format!(
-                "EditList.set_entity_coords_at: index {index} out of range \
-                 (len={})",
-                self.inner.len()
-            ))
-        })?;
+        let edit = self.edit_at(index, "set_entity_coords_at")?;
         let AssemblyEdit::SetEntityCoords { entity, coords } = edit else {
-            return Err(value_err(format!(
-                "EditList.set_entity_coords_at: edit at index {index} is not \
-                 SetEntityCoords"
-            )));
+            return Err(wrong_kind_err(
+                "set_entity_coords_at",
+                index,
+                "SetEntityCoords",
+            ));
         };
         Ok(PySetEntityCoordsView {
             entity_id: entity.raw(),
@@ -428,23 +432,18 @@ impl PyEditList {
         &self,
         index: usize,
     ) -> PyResult<PySetResidueCoordsView> {
-        let edit = self.inner.get(index).ok_or_else(|| {
-            PyErr::new::<pyo3::exceptions::PyIndexError, _>(format!(
-                "EditList.set_residue_coords_at: index {index} out of range \
-                 (len={})",
-                self.inner.len()
-            ))
-        })?;
+        let edit = self.edit_at(index, "set_residue_coords_at")?;
         let AssemblyEdit::SetResidueCoords {
             entity,
             residue_idx,
             coords,
         } = edit
         else {
-            return Err(value_err(format!(
-                "EditList.set_residue_coords_at: edit at index {index} is not \
-                 SetResidueCoords"
-            )));
+            return Err(wrong_kind_err(
+                "set_residue_coords_at",
+                index,
+                "SetResidueCoords",
+            ));
         };
         Ok(PySetResidueCoordsView {
             entity_id: entity.raw(),
@@ -462,13 +461,7 @@ impl PyEditList {
         &self,
         index: usize,
     ) -> PyResult<PyMutateResidueView> {
-        let edit = self.inner.get(index).ok_or_else(|| {
-            PyErr::new::<pyo3::exceptions::PyIndexError, _>(format!(
-                "EditList.mutate_residue_at: index {index} out of range \
-                 (len={})",
-                self.inner.len()
-            ))
-        })?;
+        let edit = self.edit_at(index, "mutate_residue_at")?;
         let AssemblyEdit::MutateResidue {
             entity,
             residue_idx,
@@ -477,10 +470,11 @@ impl PyEditList {
             new_variants,
         } = edit
         else {
-            return Err(value_err(format!(
-                "EditList.mutate_residue_at: edit at index {index} is not \
-                 MutateResidue"
-            )));
+            return Err(wrong_kind_err(
+                "mutate_residue_at",
+                index,
+                "MutateResidue",
+            ));
         };
         Ok(PyMutateResidueView {
             entity_id: entity.raw(),
@@ -500,22 +494,18 @@ impl PyEditList {
     ///
     /// Same shape as [`Self::set_entity_coords_at`].
     pub fn set_variants_at(&self, index: usize) -> PyResult<PySetVariantsView> {
-        let edit = self.inner.get(index).ok_or_else(|| {
-            PyErr::new::<pyo3::exceptions::PyIndexError, _>(format!(
-                "EditList.set_variants_at: index {index} out of range (len={})",
-                self.inner.len()
-            ))
-        })?;
+        let edit = self.edit_at(index, "set_variants_at")?;
         let AssemblyEdit::SetVariants {
             entity,
             residue_idx,
             variants,
         } = edit
         else {
-            return Err(value_err(format!(
-                "EditList.set_variants_at: edit at index {index} is not \
-                 SetVariants"
-            )));
+            return Err(wrong_kind_err(
+                "set_variants_at",
+                index,
+                "SetVariants",
+            ));
         };
         Ok(PySetVariantsView {
             entity_id: entity.raw(),
@@ -526,6 +516,29 @@ impl PyEditList {
                 .collect(),
         })
     }
+}
+
+impl PyEditList {
+    /// Bounds-checked read of the edit at `index`, shared by every
+    /// `*_at` accessor so the `PyIndexError` message stays uniform.
+    /// `method` is the accessor name used in the error text.
+    fn edit_at(&self, index: usize, method: &str) -> PyResult<&AssemblyEdit> {
+        self.inner.get(index).ok_or_else(|| {
+            PyErr::new::<pyo3::exceptions::PyIndexError, _>(format!(
+                "EditList.{method}: index {index} out of range (len={})",
+                self.inner.len()
+            ))
+        })
+    }
+}
+
+/// Uniform `PyValueError` for a typed `*_at` accessor whose edit at `index`
+/// is the wrong kind. `method` is the accessor name, `kind` the expected
+/// `AssemblyEdit` variant.
+fn wrong_kind_err(method: &str, index: usize, kind: &str) -> PyErr {
+    value_err(format!(
+        "EditList.{method}: edit at index {index} is not {kind}"
+    ))
 }
 
 fn edit_kind_int(edit: &AssemblyEdit) -> i32 {

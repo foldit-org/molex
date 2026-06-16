@@ -11,6 +11,17 @@
 #include <stdint.h>
 
 /**
+ * Wire format version written after [`ASSEMBLY_MAGIC`]. Version 1 carries
+ * the entity / atom payload followed by a per-residue variants section.
+ */
+#define ASSEMBLY_VERSION 1
+
+/**
+ * Wire format version written after [`DELTA_MAGIC`].
+ */
+#define DELTA_VERSION 1
+
+/**
  * Success status returned by writer-style entry points.
  */
 #define MOLEX_OK 0
@@ -103,7 +114,7 @@ typedef int32_t molex_ProtonationKind;
  * Returned by [`molex_edits_kind_at`]; caller dispatches on the
  * value to pick the right per-variant getter. `AddEntity` /
  * `RemoveEntity` are listed for completeness but never appear in
- * lists obtained from `molex_delta01_to_edits` (the DELTA01
+ * lists obtained from `molex_delta_to_edits` (the delta
  * serializer rejects topology edits up front).
  */
 enum molex_EditKind
@@ -139,12 +150,12 @@ enum molex_EditKind
   MOLEX_EDIT_KIND_SET_VARIANTS = 4,
   /**
    * `AddEntity` — topology edit; appears only in Rust-side edit
-   * lists, never in lists decoded from DELTA01.
+   * lists, never in lists decoded from delta.
    */
   MOLEX_EDIT_KIND_ADD_ENTITY = 5,
   /**
    * `RemoveEntity` — topology edit; appears only in Rust-side edit
-   * lists, never in lists decoded from DELTA01.
+   * lists, never in lists decoded from delta.
    */
   MOLEX_EDIT_KIND_REMOVE_ENTITY = 6,
 };
@@ -204,6 +215,40 @@ typedef int32_t molex_MoleculeType;
 #endif // __cplusplus
 
 /**
+ * Structural discriminant for an entity across the FFI boundary.
+ *
+ * The four-way taxonomy of the underlying variant, 1:1 with the Rust
+ * `EntityKind`. Distinct from the finer [`molex_MoleculeType`]
+ * classification. Stable integer codes so C consumers can pattern-match
+ * without depending on Rust's enum layout.
+ */
+enum molex_EntityKind
+#ifdef __cplusplus
+  : int32_t
+#endif // __cplusplus
+ {
+  /**
+   * A single protein chain.
+   */
+  MOLEX_ENTITY_KIND_PROTEIN = 0,
+  /**
+   * A single DNA or RNA chain.
+   */
+  MOLEX_ENTITY_KIND_NUCLEIC_ACID = 1,
+  /**
+   * A single non-polymer molecule.
+   */
+  MOLEX_ENTITY_KIND_SMALL_MOLECULE = 2,
+  /**
+   * A group of identical small molecules.
+   */
+  MOLEX_ENTITY_KIND_BULK = 3,
+};
+#ifndef __cplusplus
+typedef int32_t molex_EntityKind;
+#endif // __cplusplus
+
+/**
  * Owned, top-level assembly handle. Free with [`molex_assembly_free`].
  */
 typedef struct molex_Assembly molex_Assembly;
@@ -219,7 +264,7 @@ typedef struct molex_Atom molex_Atom;
  * Free with [`molex_edits_free`]. Enumerate per-entry via
  * [`molex_edits_kind_at`] followed by the matching
  * `molex_edits_*_at` per-variant getter; or dump to wire bytes with
- * [`molex_edits_to_delta01`].
+ * [`molex_edits_to_delta`].
  */
 typedef struct molex_EditList molex_EditList;
 
@@ -234,7 +279,7 @@ typedef struct molex_Entity molex_Entity;
 typedef struct molex_Residue molex_Residue;
 
 /**
- * One atom row crossed-over to C. Layout mirrors the ASSEM02 atom
+ * One atom row crossed-over to C. Layout mirrors the assembly wire atom
  * row (12 + 4 + 2 = 18 bytes excluding chain/residue context which
  * is conveyed separately).
  */
@@ -284,12 +329,6 @@ typedef struct {
    */
   uintptr_t str_len;
 } molex_Variant;
-
-/**
- * Magic emitted by the current serializer. Alias for the latest
- * supported version.
- */
-#define ASSEMBLY_MAGIC ASSEMBLY_MAGIC_V2
 
 #ifdef __cplusplus
 extern "C" {
@@ -390,17 +429,17 @@ molex_Assembly *molex_cif_str_to_assembly(const char *str_ptr,
 ;
 
 /**
- * Decode ASSEM01 binary bytes into an `Assembly`.
+ * Decode assembly binary bytes into an `Assembly`.
  *
- * Bytes must start with the `ASSEM01\0` magic header followed by the
- * entity / atom payload (see `crate::ops::wire`). Returns null on
- * failure with the error message available via [`molex_last_error_message`].
- * The caller owns the returned handle and must free it with
- * [`molex_assembly_free`].
+ * Bytes must start with the `ASSEMBLY` magic header and version byte
+ * followed by the entity / atom payload (see `crate::ops::wire`). Returns
+ * null on failure with the error message available via
+ * [`molex_last_error_message`]. The caller owns the returned handle and
+ * must free it with [`molex_assembly_free`].
  */
 
-molex_Assembly *molex_assem01_to_assembly(const uint8_t *bytes_ptr,
-                                          uintptr_t len)
+molex_Assembly *molex_bytes_to_assembly(const uint8_t *bytes_ptr,
+                                        uintptr_t len)
 ;
 
 /**
@@ -416,7 +455,7 @@ molex_Assembly *molex_bcif_to_assembly(const uint8_t *bytes_ptr,
 ;
 
 /**
- * Emit an `Assembly` as ASSEM01 binary bytes.
+ * Emit an `Assembly` as assembly binary bytes.
  *
  * On success returns [`MOLEX_OK`] and writes the heap-allocated buffer
  * pointer + length to `out_buf` / `out_len`; the caller frees with
@@ -424,9 +463,9 @@ molex_Assembly *molex_bcif_to_assembly(const uint8_t *bytes_ptr,
  * error message is available via [`molex_last_error_message`].
  */
 
-int32_t molex_assembly_to_assem01(const molex_Assembly *assembly,
-                                  uint8_t **out_buf,
-                                  uintptr_t *out_len)
+int32_t molex_assembly_to_bytes(const molex_Assembly *assembly,
+                                uint8_t **out_buf,
+                                uintptr_t *out_len)
 ;
 
 /**
@@ -452,7 +491,7 @@ molex_EditList *molex_edits_new(void)
 
 /**
  * Free an edit list returned by `molex_edits_new` or
- * `molex_delta01_to_edits`. Safe to call with a null pointer (no-op).
+ * `molex_delta_to_edits`. Safe to call with a null pointer (no-op).
  */
 
 void molex_edits_free(molex_EditList *list)
@@ -515,27 +554,27 @@ int32_t molex_edits_push_set_variants(molex_EditList *list,
 ;
 
 /**
- * Serialize the edit list to DELTA01 bytes.
+ * Serialize the edit list to delta bytes.
  *
  * On success returns [`MOLEX_OK`] and writes the heap-allocated
  * buffer pointer + length to `out_buf` / `out_len`; caller frees with
  * `molex_free_bytes`.
  */
 
-int32_t molex_edits_to_delta01(const molex_EditList *list,
-                               uint8_t **out_buf,
-                               uintptr_t *out_len)
+int32_t molex_edits_to_delta(const molex_EditList *list,
+                             uint8_t **out_buf,
+                             uintptr_t *out_len)
 ;
 
 /**
- * Decode DELTA01 bytes into a new edit list.
+ * Decode delta bytes into a new edit list.
  *
  * Returns null on failure with the error message available via
  * `molex_last_error_message`. Caller frees with `molex_edits_free`.
  */
 
-molex_EditList *molex_delta01_to_edits(const uint8_t *bytes_ptr,
-                                       uintptr_t len)
+molex_EditList *molex_delta_to_edits(const uint8_t *bytes_ptr,
+                                     uintptr_t len)
 ;
 
 /**
@@ -550,17 +589,17 @@ int32_t molex_assembly_apply_edits(molex_Assembly *assembly,
 ;
 
 /**
- * Decode DELTA01 bytes and apply them to `assembly`.
+ * Decode delta bytes and apply them to `assembly`.
  *
- * Equivalent to calling `molex_delta01_to_edits` then
+ * Equivalent to calling `molex_delta_to_edits` then
  * `molex_assembly_apply_edits` then `molex_edits_free`, but avoids
  * the round-trip through a separate list handle on the apply hot
  * path.
  */
 
-int32_t molex_assembly_apply_delta01(molex_Assembly *assembly,
-                                     const uint8_t *bytes_ptr,
-                                     uintptr_t len)
+int32_t molex_assembly_apply_delta(molex_Assembly *assembly,
+                                   const uint8_t *bytes_ptr,
+                                   uintptr_t len)
 ;
 
 /**
@@ -618,7 +657,7 @@ int32_t molex_edits_set_residue_coords_at(const molex_EditList *list,
  * `molex_AtomRow` array derived from the edit's internal `Atom`
  * storage. Caller MUST free with [`molex_atom_rows_free`]. The
  * conversion is lossy on the `occupancy` / `b_factor` /
- * `formal_charge` fields (those don't ride DELTA01 and aren't
+ * `formal_charge` fields (those don't ride delta and aren't
  * representable in `molex_AtomRow`).
  *
  * `out_variants` / `out_variant_count` receive a freshly-allocated
@@ -719,6 +758,15 @@ uint32_t molex_entity_id(const molex_Entity *entity)
  */
 
 molex_MoleculeType molex_entity_molecule_type(const molex_Entity *entity)
+;
+
+/**
+ * Structural discriminant (the four-way variant taxonomy). Returns
+ * [`molex_EntityKind::Bulk`]'s integer value (3) as a placeholder if
+ * `entity` is null - callers should null-check the handle first.
+ */
+
+molex_EntityKind molex_entity_kind(const molex_Entity *entity)
 ;
 
 /**

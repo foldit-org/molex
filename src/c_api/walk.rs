@@ -4,6 +4,22 @@
 //! here are `#[no_mangle] pub extern "C"` and so emit C symbols
 //! identically to functions declared at the parent module scope.
 //! cbindgen discovers them via the parent module's `pub mod walk;`.
+//!
+//! The per-atom walk (`molex_entity_atom` + the `molex_atom_*`
+//! accessors) is the C-side equivalent of the Python binding's
+//! columnar atom read (`Entity.to_arrays()` / `AtomArrays`): C consumers
+//! iterate atom handles, Python consumers receive numpy columns. The two
+//! atom-read shapes are intentionally different per ecosystem and are not
+//! a symmetry gap to close. The entity-scalar and residue accessors below
+//! mirror the Python `Entity` / `Residue` getters one-for-one, with one
+//! intentional exception: `molex_entity_label` is not exposed. Every C
+//! string accessor here returns a borrowed pointer into a stable byte
+//! field, but `MoleculeEntity::label()` returns a computed display
+//! `String` (for example "Ligand (ATP)"), which does not fit that
+//! borrow-only convention. Python's `Entity.label` covers the need
+//! natively; a C consumer that requires the label should add a
+//! heap-allocated accessor freed via `molex_free_bytes` (the writer-entry
+//! convention), not a borrowed one.
 
 #![allow(
     clippy::missing_safety_doc,
@@ -15,7 +31,7 @@
 use std::sync::Arc;
 
 use super::{
-    assembly_inner, molex_Assembly, molex_Atom, molex_Entity,
+    assembly_inner, molex_Assembly, molex_Atom, molex_Entity, molex_EntityKind,
     molex_MoleculeType, molex_Residue,
 };
 use crate::assembly::Assembly;
@@ -87,6 +103,17 @@ pub extern "C" fn molex_entity_molecule_type(
 ) -> molex_MoleculeType {
     entity_inner(entity)
         .map_or(molex_MoleculeType::Solvent, |e| e.molecule_type().into())
+}
+
+/// Structural discriminant (the four-way variant taxonomy). Returns
+/// [`molex_EntityKind::Bulk`]'s integer value (3) as a placeholder if
+/// `entity` is null - callers should null-check the handle first.
+#[no_mangle]
+pub extern "C" fn molex_entity_kind(
+    entity: *const molex_Entity,
+) -> molex_EntityKind {
+    entity_inner(entity)
+        .map_or(molex_EntityKind::Bulk, |e| e.entity_kind().into())
 }
 
 /// PDB chain identifier byte for polymer entities. Returns -1 when the
@@ -411,7 +438,8 @@ mod tests {
 
     use super::*;
     use crate::c_api::{
-        molex_Assembly, molex_MoleculeType, molex_assembly_free,
+        molex_Assembly, molex_EntityKind, molex_MoleculeType,
+        molex_assembly_free,
     };
     use crate::entity::molecule::atom::Atom;
     use crate::entity::molecule::id::EntityIdAllocator;
@@ -520,6 +548,8 @@ mod tests {
             molex_entity_molecule_type(null),
             molex_MoleculeType::Solvent
         );
+        // Documented null sentinel: Bulk's integer value (3).
+        assert_eq!(molex_entity_kind(null), molex_EntityKind::Bulk);
         assert_eq!(molex_entity_pdb_chain_id(null), -1);
         assert_eq!(molex_entity_num_atoms(null), 0);
         assert_eq!(molex_entity_molecule_count(null), 0);
@@ -535,6 +565,7 @@ mod tests {
             molex_entity_molecule_type(protein),
             molex_MoleculeType::Protein
         );
+        assert_eq!(molex_entity_kind(protein), molex_EntityKind::Protein);
         assert_eq!(molex_entity_pdb_chain_id(protein), i32::from(b'A'));
         assert_eq!(molex_entity_num_atoms(protein), 9);
         assert_eq!(molex_entity_num_residues(protein), 2);

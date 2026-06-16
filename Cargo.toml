@@ -11,6 +11,9 @@ repository = "https://github.com/foldit-org/molex"
 readme = "README.md"
 keywords = ["protein", "molecular", "pdb", "mmcif", "structure"]
 categories = ["science", "parser-implementations", "data-structures"]
+# Regeneration provenance, not needed at runtime: the generated
+# src/chemistry/completion_data.rs is compiled-in const data.
+exclude = ["examples/gen_completion_table.rs", "data/ccd/"]
 
 [lib]
 name = "molex"

@@ -41,9 +41,11 @@ deny:
 machete:
     cargo machete
 
-# Check file lengths (max 800 lines)
+# Check file lengths (max 800 lines). A file opts out by placing the sentinel
+# comment `foldit:allow-long-file` within its first 10 lines (mirrors the
+# repo-wide scripts/check_file_lengths.py convention).
 file-lengths:
-    python3 -c "import os, sys; files = [os.path.join(r,f) for r,_,fs in os.walk('src') for f in fs if f.endswith('.rs') and 'target' not in r]; bad = [(f,sum(1 for _ in open(f,encoding='utf-8',errors='replace'))) for f in files]; bad = [(f,n) for f,n in bad if n > 800]; [print(f'ERROR: {f} has {n} lines (max 800)') for f,n in bad]; sys.exit(1 if bad else 0)"
+    python3 -c "import os, sys; SENTINEL='foldit:allow-long-file'; files = [os.path.join(r,f) for r,_,fs in os.walk('src') for f in fs if f.endswith('.rs') and 'target' not in r]; bad = []; [bad.append((f,len(L))) for f in files for L in [open(f,encoding='utf-8',errors='replace').readlines()] if len(L) > 800 and not any(SENTINEL in ln for ln in L[:10])]; [print(f'ERROR: {f} has {n} lines (max 800)') for f,n in bad]; sys.exit(1 if bad else 0)"
 
 # One-time repo setup (hooks + commit template)
 setup:

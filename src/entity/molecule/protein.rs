@@ -6,6 +6,7 @@
 use glam::Vec3;
 
 use super::atom::Atom;
+use super::complete::complete_protein_residues;
 use super::id::EntityId;
 use super::traits::{Entity, Polymer};
 use super::{MoleculeType, Residue};
@@ -142,6 +143,7 @@ impl ProteinEntity {
         pdb_chain_id: u8,
         auth_asym_id: Option<u8>,
     ) -> Self {
+        let (atoms, residues) = complete_protein_residues(&atoms, &residues);
         let (atoms, residues) =
             canonicalize_protein_residues(&atoms, &residues, pdb_chain_id);
         let segment_breaks = compute_segment_breaks(&residues, &atoms);
@@ -180,6 +182,7 @@ impl ProteinEntity {
         pdb_chain_id: u8,
         auth_asym_id: Option<u8>,
     ) -> Self {
+        let (atoms, residues) = complete_protein_residues(&atoms, &residues);
         let (atoms, residues) =
             canonicalize_protein_residues(&atoms, &residues, pdb_chain_id);
         let segment_breaks = Vec::new();

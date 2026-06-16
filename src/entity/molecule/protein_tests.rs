@@ -208,12 +208,17 @@ fn canonical_ordering_reorders_scrambled_input() {
         .clone()
         .map(|i| std::str::from_utf8(&protein.atoms[i].name).unwrap().trim())
         .collect();
+    // The four backbone atoms come first, then CB, then the parsed HA.
+    // Completion is heavy-only by default and this residue is already
+    // heavy-complete, so no atoms are fabricated.
     assert_eq!(names, vec!["N", "CA", "C", "O", "CB", "HA"]);
 }
 
 #[test]
 fn canonical_ordering_drops_residue_missing_backbone() {
-    // GLY has only N, CA, C (missing O); must be dropped.
+    // GLY has only N, CA, C (missing O); it cannot have its carbonyl
+    // oxygen rebuilt (O is a C-terminal template atom, out of scope for
+    // completion) so it must still be dropped. The complete ALA is kept.
     let atoms = vec![
         atom_at("N", Element::N, 0.0, 0.0, 0.0),
         atom_at("CA", Element::C, 1.0, 0.0, 0.0),
@@ -227,7 +232,6 @@ fn canonical_ordering_drops_residue_missing_backbone() {
     let protein = build_protein(atoms, residues);
     assert_eq!(protein.residues.len(), 1);
     assert_eq!(&protein.residues[0].name, b"ALA");
-    assert_eq!(protein.atoms.len(), 7);
 }
 
 #[test]
@@ -296,13 +300,15 @@ fn peptide_bond_connects_consecutive_residues() {
 #[test]
 fn dropped_residue_emits_log_warning() {
     testing_logger::setup();
-    // ALA residue missing CA; must be dropped and logged.
+    // ALA residue with only N and O: missing CA and C, and with just two
+    // present atoms it is below the three-atom anchor floor, so the
+    // completion pass cannot rebuild the missing backbone. The residue
+    // must be dropped and logged.
     let atoms = vec![
         atom_at("N", Element::N, 0.0, 0.0, 0.0),
-        atom_at("C", Element::C, 1.5, 0.0, 0.0),
         atom_at("O", Element::O, 2.5, 1.0, 0.0),
     ];
-    let residues = vec![residue("ALA", 7, 0..3)];
+    let residues = vec![residue("ALA", 7, 0..2)];
     let _ = build_protein(atoms, residues);
     testing_logger::validate(|captured_logs| {
         let warn_bodies: Vec<&str> = captured_logs

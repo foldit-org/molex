@@ -579,8 +579,11 @@ mod tests {
     fn make_assembly_handle() -> (*mut molex_Assembly, u32) {
         let mut alloc = EntityIdAllocator::new();
         let id = alloc.allocate();
+        // Residue named MSE so the missing-atom completion pass is a
+        // no-op; these coordinate-edit tests fix the entity at four atoms
+        // and are about the edit wire path, not chemistry completion.
         let residues = vec![Residue {
-            name: *b"ALA",
+            name: *b"MSE",
             label_seq_id: 1,
             auth_seq_id: None,
             auth_comp_id: None,

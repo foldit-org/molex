@@ -222,7 +222,16 @@ fn fast_path_semicolon_text_field_does_not_desync() {
     let protein_entity = first_protein(&entities);
     let protein = protein_entity.as_protein().unwrap();
     assert_eq!(protein.residues.len(), 1);
-    assert_eq!(protein_entity.atom_count(), 4);
+    // Desync proxy: the four parsed backbone rows survive in order. The
+    // missing-atom completion pass then appends sidechain/hydrogen atoms,
+    // so assert on the parsed prefix rather than the total atom count.
+    let names: Vec<String> = protein_entity
+        .atom_set()
+        .iter()
+        .take(4)
+        .map(|a| std::str::from_utf8(&a.name).unwrap().trim().to_owned())
+        .collect();
+    assert_eq!(names, ["N", "CA", "C", "O"]);
 }
 
 #[test]

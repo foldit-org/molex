@@ -7,6 +7,8 @@ pub(crate) mod builder;
 pub mod bulk;
 pub(crate) mod chain;
 pub(crate) mod classify;
+/// Missing-atom completion against ideal-geometry templates.
+pub(crate) mod complete;
 /// Structural diff between two views of one entity.
 pub mod diff;
 /// Opaque entity ID with controlled allocation.
@@ -412,9 +414,14 @@ mod tests {
         }
     }
 
-    /// Build a 2-residue protein (ALA-GLY) on chain A with backbone atoms
-    /// at known positions. The C->N gap between residues exceeds 2 A so a
-    /// segment break falls between them.
+    /// Build a 2-residue protein on chain A with backbone atoms at known
+    /// positions. The C->N gap between residues exceeds 2 A so a segment
+    /// break falls between them.
+    ///
+    /// Residues are named `UNK` so the missing-atom completion pass (which
+    /// only fires on residues that resolve to a standard template) leaves
+    /// the backbone-only atom set untouched; these tests assert exact
+    /// atom counts and positions and are not about chemistry completion.
     fn two_residue_protein() -> MoleculeEntity {
         let atoms = vec![
             atom_at("N", Element::N, 1.0, 2.0, 3.0),
@@ -426,7 +433,7 @@ mod tests {
             atom_at("C", Element::C, 19.0, 20.0, 21.0),
             atom_at("O", Element::O, 22.0, 23.0, 24.0),
         ];
-        let residues = vec![residue("ALA", 1, 0..4), residue("GLY", 2, 4..8)];
+        let residues = vec![residue("UNK", 1, 0..4), residue("UNK", 2, 4..8)];
         let id = EntityIdAllocator::new().allocate();
         MoleculeEntity::Protein(ProteinEntity::new(
             id, atoms, residues, b'A', None,

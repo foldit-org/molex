@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use glam::Vec3;
 
 use super::atom::Atom;
+use super::complete::complete_na_residues;
 use super::id::EntityId;
 use super::protein::trimmed_atom_name;
 use super::traits::{Entity, Polymer};
@@ -123,6 +124,7 @@ impl NAEntity {
         pdb_chain_id: u8,
         auth_asym_id: Option<u8>,
     ) -> Self {
+        let (atoms, residues) = complete_na_residues(&atoms, &residues);
         let (atoms, residues) =
             canonicalize_na_residues(&atoms, &residues, pdb_chain_id);
         let segment_breaks = compute_na_segment_breaks(&atoms, &residues);
@@ -595,14 +597,13 @@ mod tests {
 
     #[test]
     fn na_drops_residue_missing_backbone() {
-        // Build residue missing O3'.
+        // Residue with only P and O5': missing four backbone atoms, and
+        // with just two present atoms it falls below the three-atom
+        // anchor floor, so the completion pass cannot rebuild the
+        // backbone and the residue is still dropped.
         let atoms = vec![
             atom_with("P", Element::P, 0.0),
             atom_with("O5'", Element::O, 1.0),
-            atom_with("C5'", Element::C, 2.0),
-            atom_with("C4'", Element::C, 3.0),
-            atom_with("C3'", Element::C, 4.0),
-            // no O3'
         ];
         let residues = vec![Residue {
             name: res_name_bytes("DA "),
@@ -618,7 +619,7 @@ mod tests {
         let na =
             NAEntity::new(id, MoleculeType::DNA, atoms, residues, b'A', None);
         assert_eq!(na.residues.len(), 0);
-        // Atoms still present.
-        assert_eq!(na.atoms.len(), 5);
+        // Atoms still present (carried through, unreferenced).
+        assert_eq!(na.atoms.len(), 2);
     }
 }

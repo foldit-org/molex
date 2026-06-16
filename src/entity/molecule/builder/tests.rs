@@ -586,8 +586,11 @@ fn altloc_blank_arrives_after_non_blank_replaces_it() {
 #[test]
 fn altloc_same_atom_name_different_residues_is_independent() {
     let mut b = EntityBuilder::new();
-    push_protein_residue(&mut b, "A", 1, "ALA", 0.0, None);
-    push_protein_residue(&mut b, "A", 2, "ALA", 3.8, None);
+    // MSE residues so the missing-atom completion pass is a no-op; this
+    // test fixes the backbone-only atom count and is about altloc
+    // independence across residues, not chemistry completion.
+    push_protein_residue(&mut b, "A", 1, "MSE", 0.0, None);
+    push_protein_residue(&mut b, "A", 2, "MSE", 3.8, None);
     let entities = b.finish().unwrap();
     let protein = entities[0].as_protein().unwrap();
     // 4 backbone atoms x 2 residues = 8 atoms total.

@@ -22,3 +22,15 @@ pub struct Atom {
     /// Formal charge (signed). 0 means neutral.
     pub formal_charge: i8,
 }
+
+/// Pack an atom-name string into the 4-byte, left-justified, space-padded
+/// buffer every parser uses for [`Atom::name`] (PDB-column convention).
+/// Inputs longer than 4 bytes are truncated to the first 4.
+#[must_use]
+pub(crate) fn pad_atom_name(name: &str) -> [u8; 4] {
+    let mut buf = [b' '; 4];
+    for (slot, byte) in buf.iter_mut().zip(name.bytes().take(4)) {
+        *slot = byte;
+    }
+    buf
+}

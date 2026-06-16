@@ -449,9 +449,13 @@ mod tests {
             mk_atom(*b"C   ", Element::C, Vec3::new(5.2, 0.0, 0.0)),
             mk_atom(*b"O   ", Element::O, Vec3::new(5.2, 1.0, 0.0)),
         ];
+        // Residues named MSE so the missing-atom completion pass is a
+        // no-op (MSE classifies as protein but resolves to no standard
+        // template); these tests fix exact per-residue atom counts and
+        // are about pointer-walking, not chemistry completion.
         let residues = vec![
             Residue {
-                name: *b"ALA",
+                name: *b"MSE",
                 label_seq_id: 1,
                 auth_seq_id: None,
                 auth_comp_id: None,
@@ -460,7 +464,7 @@ mod tests {
                 variants: Vec::new(),
             },
             Residue {
-                name: *b"GLY",
+                name: *b"MSE",
                 label_seq_id: 2,
                 auth_seq_id: None,
                 auth_comp_id: None,
@@ -655,7 +659,7 @@ mod tests {
         assert_eq!(out_len, 3);
         unsafe {
             let name = std::slice::from_raw_parts(p, out_len);
-            assert_eq!(name, b"ALA");
+            assert_eq!(name, b"MSE");
         }
         assert_eq!(molex_residue_label_seq_id(residue), 1);
         molex_assembly_free(asm);

@@ -70,7 +70,10 @@ fn small_protein() -> Assembly {
         v.extend(ala_atoms(10.0));
         v
     };
-    let residues = vec![residue("ALA", 1, 0..4), residue("ALA", 2, 4..8)];
+    // Residues named UNK so the missing-atom completion pass is a no-op;
+    // these coordinate-edit tests fix the entity at exactly two 4-atom
+    // residues and are not about chemistry completion.
+    let residues = vec![residue("UNK", 1, 0..4), residue("UNK", 2, 4..8)];
     let protein = MoleculeEntity::Protein(ProteinEntity::new(
         id, atoms, residues, b'A', None,
     ));

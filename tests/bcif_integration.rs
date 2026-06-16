@@ -785,7 +785,11 @@ fn delta_integer_packing_reconstructs_coords_exactly() {
 
     let entities = bcif_to_entities(&bcif).unwrap();
     let atoms = first_protein(&entities).atom_set();
-    let got: Vec<f32> = atoms.iter().map(|a| a.position.x).collect();
+    // Missing-atom completion appends sidechain/hydrogen atoms after the
+    // parsed ones; the codec round-trip only governs the four parsed
+    // coordinates, so compare just that prefix.
+    let got: Vec<f32> =
+        atoms.iter().take(xs.len()).map(|a| a.position.x).collect();
     let want: Vec<f32> = xs.iter().map(|&v| v as f32).collect();
     assert_eq!(
         got, want,

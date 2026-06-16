@@ -11,12 +11,14 @@ use super::{entities_to_pdb, pdb_str_to_all_models, pdb_str_to_entities};
 use crate::entity::molecule::MoleculeType;
 use crate::MoleculeEntity;
 
-/// Minimal PDB with one residue (N, CA, C, O) for alanine.
+/// Minimal PDB with one backbone-only residue (N, CA, C, O). Named MSE
+/// so the missing-atom completion pass is a no-op and these parse-path
+/// tests keep their fixed 4-atom counts.
 const MINIMAL_PDB: &str = "\
-ATOM      1  N   ALA A   1       1.000   2.000   3.000  1.00  0.00           N
-ATOM      2  CA  ALA A   1       4.000   5.000   6.000  1.00  0.00           C
-ATOM      3  C   ALA A   1       7.000   8.000   9.000  1.00  0.00           C
-ATOM      4  O   ALA A   1      10.000  11.000  12.000  1.00  0.00           O
+ATOM      1  N   MSE A   1       1.000   2.000   3.000  1.00  0.00           N
+ATOM      2  CA  MSE A   1       4.000   5.000   6.000  1.00  0.00           C
+ATOM      3  C   MSE A   1       7.000   8.000   9.000  1.00  0.00           C
+ATOM      4  O   MSE A   1      10.000  11.000  12.000  1.00  0.00           O
 END
 ";
 
@@ -83,7 +85,7 @@ fn entities_to_pdb_produces_valid_output() {
     let entities = pdb_str_to_entities(MINIMAL_PDB).unwrap();
     let pdb_output = entities_to_pdb(&entities).unwrap();
     assert!(pdb_output.contains("ATOM"));
-    assert!(pdb_output.contains("ALA"));
+    assert!(pdb_output.contains("MSE"));
     assert!(pdb_output.ends_with("END\n"));
     let atom_line_count =
         pdb_output.lines().filter(|l| l.starts_with("ATOM")).count();
@@ -109,14 +111,16 @@ fn pdb_str_empty_produces_error() {
 
 #[test]
 fn parser_silently_skips_remarks_and_misc_records() {
+    // MSE residue so missing-atom completion is a no-op; this test fixes
+    // the parsed atom count and is about record skipping, not chemistry.
     let pdb = "\
 HEADER    SOME HEADER
 REMARK no leading digit accepted
 TITLE     A LONELY PROTEIN
-ATOM      1  N   ALA A   1       1.000   2.000   3.000  1.00  0.00           N
-ATOM      2  CA  ALA A   1       4.000   5.000   6.000  1.00  0.00           C
-ATOM      3  C   ALA A   1       7.000   8.000   9.000  1.00  0.00           C
-ATOM      4  O   ALA A   1      10.000  11.000  12.000  1.00  0.00           O
+ATOM      1  N   MSE A   1       1.000   2.000   3.000  1.00  0.00           N
+ATOM      2  CA  MSE A   1       4.000   5.000   6.000  1.00  0.00           C
+ATOM      3  C   MSE A   1       7.000   8.000   9.000  1.00  0.00           C
+ATOM      4  O   MSE A   1      10.000  11.000  12.000  1.00  0.00           O
 CONECT    1    2
 END
 ";
@@ -194,18 +198,20 @@ fn all_models_returns_one_entry_for_single_model_file() {
 
 #[test]
 fn all_models_returns_one_entry_per_model_block() {
+    // MSE residues so missing-atom completion is a no-op; this test fixes
+    // the per-model atom count and is about MODEL/ENDMDL block handling.
     let pdb = "\
 MODEL        1
-ATOM      1  N   ALA A   1       1.000   2.000   3.000  1.00  0.00           N
-ATOM      2  CA  ALA A   1       4.000   5.000   6.000  1.00  0.00           C
-ATOM      3  C   ALA A   1       7.000   8.000   9.000  1.00  0.00           C
-ATOM      4  O   ALA A   1      10.000  11.000  12.000  1.00  0.00           O
+ATOM      1  N   MSE A   1       1.000   2.000   3.000  1.00  0.00           N
+ATOM      2  CA  MSE A   1       4.000   5.000   6.000  1.00  0.00           C
+ATOM      3  C   MSE A   1       7.000   8.000   9.000  1.00  0.00           C
+ATOM      4  O   MSE A   1      10.000  11.000  12.000  1.00  0.00           O
 ENDMDL
 MODEL        2
-ATOM      1  N   ALA A   1       1.500   2.500   3.500  1.00  0.00           N
-ATOM      2  CA  ALA A   1       4.500   5.500   6.500  1.00  0.00           C
-ATOM      3  C   ALA A   1       7.500   8.500   9.500  1.00  0.00           C
-ATOM      4  O   ALA A   1      10.500  11.500  12.500  1.00  0.00           O
+ATOM      1  N   MSE A   1       1.500   2.500   3.500  1.00  0.00           N
+ATOM      2  CA  MSE A   1       4.500   5.500   6.500  1.00  0.00           C
+ATOM      3  C   MSE A   1       7.500   8.500   9.500  1.00  0.00           C
+ATOM      4  O   MSE A   1      10.500  11.500  12.500  1.00  0.00           O
 ENDMDL
 END
 ";

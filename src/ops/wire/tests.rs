@@ -97,10 +97,13 @@ fn assembly_bytes_roundtrip_mixed() {
 #[test]
 fn assembly_bytes_protein_only() {
     let id = EntityIdAllocator::new().allocate();
+    // Residue named UNK so the missing-atom completion pass is a no-op;
+    // this test fixes the serialized atom count and is about wire layout,
+    // not chemistry.
     let protein = MoleculeEntity::Protein(ProteinEntity::new(
         id,
         ala_residue_atoms(1.0),
-        vec![residue("ALA", 1, 0..4)],
+        vec![residue("UNK", 1, 0..4)],
         b'A',
         None,
     ));
@@ -150,10 +153,12 @@ fn assembly_bytes_empty_entities() {
 #[test]
 fn assembly_byte_layout() {
     let id = EntityIdAllocator::new().allocate();
+    // Residue named UNK so the missing-atom completion pass is a no-op
+    // and the exact serialized byte length below stays fixed at 4 atoms.
     let protein = MoleculeEntity::Protein(ProteinEntity::new(
         id,
         ala_residue_atoms(1.0),
-        vec![residue("ALA", 1, 0..4)],
+        vec![residue("UNK", 1, 0..4)],
         b'A',
         None,
     ));
@@ -203,7 +208,9 @@ fn assembly_bytes_na_roundtrip() {
         atom_at("O3'", Element::O, 5.0),
         atom_at("N9", Element::N, 6.0),
     ];
-    let residues = vec![residue("DA", 1, 0..7)];
+    // Residue named UNK so the missing-atom completion pass is a no-op;
+    // the molecule type comes from the DNA argument, not the residue name.
+    let residues = vec![residue("UNK", 1, 0..7)];
     let id = EntityIdAllocator::new().allocate();
     let na = MoleculeEntity::NucleicAcid(NAEntity::new(
         id,

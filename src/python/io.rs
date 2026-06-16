@@ -70,10 +70,7 @@ pub fn bcif_to_assembly_bytes(bytes: Vec<u8>) -> PyResult<Vec<u8>> {
     })
 }
 
-/// Decode assembly wire bytes and emit a PDB-format
-/// string.
-///
-/// Transport/serialization helper for the plugin wire protocol.
+/// Decode assembly wire bytes and emit a PDB-format string.
 ///
 /// # Errors
 ///
@@ -90,8 +87,6 @@ pub fn assembly_bytes_to_pdb(bytes: Vec<u8>) -> PyResult<String> {
 }
 
 /// Round-trip assembly wire bytes through `Assembly` and back (validation).
-///
-/// Transport/serialization helper for the plugin wire protocol.
 ///
 /// # Errors
 ///

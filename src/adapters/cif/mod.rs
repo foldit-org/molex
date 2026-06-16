@@ -22,9 +22,7 @@ use crate::element::Element;
 use crate::entity::molecule::{BuildError, MoleculeEntity};
 use crate::ops::codec::AdapterError;
 
-// ---------------------------------------------------------------------------
 // Helpers shared by the fast (`fast_row`) and DOM (`dom_build`) decode paths.
-// ---------------------------------------------------------------------------
 
 /// Resolve an atom's [`Element`] from its CIF `type_symbol`, falling back
 /// to the atom name when the symbol is absent, blank, or unrecognised.

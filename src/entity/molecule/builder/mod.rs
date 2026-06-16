@@ -28,9 +28,7 @@ const MAX_CHAINS: usize = 90;
 const DEFAULT_WATER_RESNAME: [u8; 3] = *b"HOH";
 const DEFAULT_SOLVENT_RESNAME: [u8; 3] = *b"GOL";
 
-// ---------------------------------------------------------------------------
 // Public API
-// ---------------------------------------------------------------------------
 
 /// Hint about an entity's classification, sourced from mmCIF
 /// `_entity.type` joined with `_entity_poly.type`. The PDB ingest path
@@ -289,9 +287,7 @@ impl EntityBuilder {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Internal state
-// ---------------------------------------------------------------------------
 
 /// Both chain bytes derived for an emitted entity: the label-side byte
 /// (used internally and as the `pdb_chain_id`) and the optional
@@ -421,9 +417,7 @@ fn candidate_should_replace(
     }
 }
 
-// ---------------------------------------------------------------------------
 // finish() context
-// ---------------------------------------------------------------------------
 
 pub(super) struct ChainCtx<'a> {
     pub(super) allocator: &'a mut EntityIdAllocator,
@@ -471,9 +465,7 @@ impl GlobalBulk {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Helpers
-// ---------------------------------------------------------------------------
 
 fn validate_coords(row: &AtomRow) -> Result<(), BuildError> {
     for (axis, value) in [('x', row.x), ('y', row.y), ('z', row.z)] {

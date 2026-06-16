@@ -17,9 +17,7 @@ use crate::chemistry::amino_acids::AminoAcid;
 use crate::chemistry::atom_name::AtomName;
 use crate::element::Element;
 
-// ---------------------------------------------------------------------------
 // Per-residue types
-// ---------------------------------------------------------------------------
 
 /// Backbone atom positions for a single protein residue.
 ///
@@ -69,9 +67,7 @@ impl Sidechain {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Protein entity
-// ---------------------------------------------------------------------------
 
 /// A single protein chain instance.
 ///
@@ -413,7 +409,7 @@ impl Polymer for ProteinEntity {
     }
 }
 
-// -- Internal helpers --------------------------------------------------------
+// Internal helpers
 
 /// Shared protein-entity construction: complete (in `mode`), canonicalize,
 /// derive segment breaks, and build the bond graph. `continuous` selects

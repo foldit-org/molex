@@ -373,9 +373,7 @@ pub extern "C" fn molex_variants_free(ptr: *mut molex_Variant, count: usize) {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Internal helpers for the read accessors
-// ---------------------------------------------------------------------------
 
 /// Build a `molex_AtomRow` from an internal `Atom`. Loses occupancy /
 /// b_factor / formal_charge (not representable in the C row struct).

@@ -35,9 +35,7 @@ use crate::ops::wire::delta::{
 
 pub mod read;
 
-// ---------------------------------------------------------------------------
 // Opaque list handle
-// ---------------------------------------------------------------------------
 
 /// Owned, ordered list of typed Assembly edits.
 ///
@@ -90,9 +88,7 @@ fn edit_list_inner_mut<'a>(
     Some(unsafe { &mut *list.cast::<Vec<AssemblyEdit>>() })
 }
 
-// ---------------------------------------------------------------------------
 // Variant / atom payload structs
-// ---------------------------------------------------------------------------
 
 /// Variant tag kind discriminant on the C boundary.
 #[repr(i32)]
@@ -166,9 +162,7 @@ pub struct molex_AtomRow {
     pub element: [u8; 2],
 }
 
-// ---------------------------------------------------------------------------
 // Push entry points
-// ---------------------------------------------------------------------------
 
 fn build_coord_list(
     coords_xyz: *const f32,
@@ -403,9 +397,7 @@ pub extern "C" fn molex_edits_push_set_variants(
     MOLEX_OK
 }
 
-// ---------------------------------------------------------------------------
 // Serialize / deserialize delta
-// ---------------------------------------------------------------------------
 
 /// Serialize the edit list to delta bytes.
 ///
@@ -466,9 +458,7 @@ pub extern "C" fn molex_delta_to_edits(
     }
 }
 
-// ---------------------------------------------------------------------------
 // Apply
-// ---------------------------------------------------------------------------
 
 /// Apply every edit in `list` to `assembly` in order. Stops at the
 /// first failure and returns nonzero; edits applied before the

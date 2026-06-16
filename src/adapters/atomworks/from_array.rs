@@ -471,9 +471,7 @@ pub fn atom_array_to_entity_vec(
         })
 }
 
-// ============================================================================
 // Convenience: parse from file through AtomWorks, return entities
-// ============================================================================
 
 /// Load a structure file through AtomWorks' full parsing pipeline and return
 /// assembly wire bytes containing properly cleaned and annotated entities.

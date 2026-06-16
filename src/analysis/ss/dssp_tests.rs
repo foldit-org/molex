@@ -15,7 +15,7 @@ fn hb(donor: usize, acceptor: usize) -> HBond {
     }
 }
 
-// --- Basic edge cases ---
+// Basic edge cases
 
 #[test]
 fn empty_input() {
@@ -35,7 +35,7 @@ fn two_residues_no_hbonds() {
     assert_eq!(result, vec![SSType::Coil; 2]);
 }
 
-// --- Helix detection ---
+// Helix detection
 
 #[test]
 fn alpha_helix_minimal() {
@@ -100,7 +100,7 @@ fn alpha_priority_over_310() {
     assert!(result[1..=5].iter().all(|&s| s == SSType::Helix));
 }
 
-// --- Sheet detection ---
+// Sheet detection
 
 #[test]
 fn antiparallel_bridge_pair() {
@@ -172,7 +172,7 @@ fn bridge_requires_separation() {
     assert_eq!(result2[7], SSType::Coil);
 }
 
-// --- Integration tests with real structures ---
+// Integration tests with real structures
 
 #[test]
 #[allow(clippy::too_many_lines)]
@@ -274,7 +274,7 @@ fn ubiquitin_secondary_structure() {
     );
 }
 
-// --- End-to-end geometry pipeline (real coordinates) ---
+// End-to-end geometry pipeline (real coordinates)
 
 /// Internal coordinates placing one atom relative to three prior ones:
 /// the new bond length plus the bond angle and dihedral (degrees) that

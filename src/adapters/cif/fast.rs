@@ -151,9 +151,7 @@ fn build_model(
     }
 }
 
-// ---------------------------------------------------------------------------
 // Hint registration
-// ---------------------------------------------------------------------------
 
 #[derive(Default)]
 struct PrePass {
@@ -210,9 +208,7 @@ fn register_hints(pre: &PrePass, builder: &mut EntityBuilder) {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Scanner state machine
-// ---------------------------------------------------------------------------
 
 enum RowOutcome {
     /// A complete row of values for the current loop.
@@ -608,7 +604,7 @@ impl<'a> Scanner<'a> {
         }
     }
 
-    // ------------------ Token primitives ------------------
+    // Token primitives
 
     fn skip_whitespace_and_comments(&mut self) {
         while self.pos < self.len() {

@@ -15,9 +15,7 @@ use crate::entity::molecule::{
 };
 use crate::ops::codec::AdapterError;
 
-// ---------------------------------------------------------------------------
 // Public entry points (called by adapters::bcif::mod.rs)
-// ---------------------------------------------------------------------------
 
 pub(super) fn decode_to_entities(
     bytes: &[u8],
@@ -101,9 +99,7 @@ pub(super) fn decode_to_all_models(
     Ok(out)
 }
 
-// ---------------------------------------------------------------------------
 // Block selection
-// ---------------------------------------------------------------------------
 
 /// Owning view of the single coordinate `dataBlock` extracted from the file.
 struct BlockView {
@@ -223,9 +219,7 @@ fn decompress_if_gzip(bytes: &[u8]) -> Result<Vec<u8>, AdapterError> {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Hint pre-pass
-// ---------------------------------------------------------------------------
 
 fn register_hints(
     block: &BlockView,
@@ -294,9 +288,7 @@ fn collect_entity_poly_table(
     Ok(out)
 }
 
-// ---------------------------------------------------------------------------
 // _atom_site row decode
-// ---------------------------------------------------------------------------
 
 fn require_atom_site(block: &BlockView) -> Result<CategoryView, AdapterError> {
     let cat = block.find_category("_atom_site").ok_or_else(|| {
@@ -479,9 +471,7 @@ fn map_build_error(err: &BuildError) -> AdapterError {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Column extraction + mask-aware accessors
-// ---------------------------------------------------------------------------
 
 /// One BCIF column decoded with its optional mask.
 ///

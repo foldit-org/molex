@@ -14,9 +14,7 @@ pub use self::write::{assembly_to_pdb, entities_to_pdb};
 use crate::entity::molecule::MoleculeEntity;
 use crate::ops::codec::AdapterError;
 
-// ---------------------------------------------------------------------------
 // Entity-first API (primary)
-// ---------------------------------------------------------------------------
 
 /// Parse PDB format string to entity list.
 ///

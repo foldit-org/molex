@@ -103,9 +103,7 @@ pub(super) fn parse_mmcif_dom_to_all_models(
     Ok(out)
 }
 
-// ---------------------------------------------------------------------------
 // Block selection + hint pre-pass
-// ---------------------------------------------------------------------------
 
 fn parse_document(input: &str) -> Result<Document, AdapterError> {
     parse(input).map_err(|e| {
@@ -191,9 +189,7 @@ fn collect_poly_types(block: &Block) -> HashMap<String, String> {
     out
 }
 
-// ---------------------------------------------------------------------------
 // _atom_site column resolution and row decoding
-// ---------------------------------------------------------------------------
 
 struct AtomSiteCols {
     label_atom_id: usize,

@@ -16,9 +16,7 @@
 
 use super::*;
 
-// ---------------------------------------------------------------------------
 // Row construction helpers
-// ---------------------------------------------------------------------------
 
 pub(super) fn resname(s: &str) -> [u8; 3] {
     let mut n = [b' '; 3];
@@ -228,9 +226,7 @@ fn push_dna_residue(
     }
 }
 
-// ---------------------------------------------------------------------------
 // PDB-style heuristic (no hints)
-// ---------------------------------------------------------------------------
 
 #[test]
 fn pdb_path_single_protein_chain() {
@@ -348,9 +344,7 @@ fn pdb_path_heterogeneous_non_polymer_chain_splits() {
     assert!(types.contains(&MoleculeType::Water), "{types:?}");
 }
 
-// ---------------------------------------------------------------------------
 // mmCIF hint path
-// ---------------------------------------------------------------------------
 
 #[test]
 fn hint_protein_keeps_modified_residues() {
@@ -462,9 +456,7 @@ fn hint_unknown_falls_back_to_pdb_heuristic() {
     assert_eq!(entities[0].as_protein().unwrap().residues.len(), 2);
 }
 
-// ---------------------------------------------------------------------------
 // AltLoc dedup
-// ---------------------------------------------------------------------------
 
 fn solo_chain_residue_atom_count(
     rows: impl IntoIterator<Item = AtomRow>,
@@ -616,9 +608,7 @@ fn altloc_numeric_alphabetic_tiebreak() {
     assert_eq!(sm.atoms[0].position.x, 1.0, "'1' < '2' alphabetic");
 }
 
-// ---------------------------------------------------------------------------
 // Insertion codes
-// ---------------------------------------------------------------------------
 
 #[test]
 fn insertion_codes_distinguish_residues() {
@@ -649,9 +639,7 @@ fn insertion_codes_distinguish_residues() {
     assert_eq!(bulk.molecule_count, 2);
 }
 
-// ---------------------------------------------------------------------------
 // Error paths
-// ---------------------------------------------------------------------------
 
 #[test]
 fn too_many_chains_errors_on_91st() {
@@ -710,9 +698,7 @@ fn infinite_z_errors() {
     ));
 }
 
-// ---------------------------------------------------------------------------
 // Output stability
-// ---------------------------------------------------------------------------
 
 fn build_sample(prefix: &str) -> Vec<MoleculeEntity> {
     let mut b = EntityBuilder::new();
@@ -748,9 +734,7 @@ fn chain_order_follows_insertion_order() {
     assert_eq!(entities[1].molecule_type(), MoleculeType::Protein);
 }
 
-// ---------------------------------------------------------------------------
 // register_entity conflicts
-// ---------------------------------------------------------------------------
 
 #[test]
 fn register_entity_idempotent_on_same_hint() {

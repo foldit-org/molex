@@ -38,9 +38,7 @@ use crate::assembly::Assembly;
 use crate::element::Element;
 use crate::entity::molecule::{Atom, MoleculeEntity, Residue};
 
-// ---------------------------------------------------------------------------
 // Assembly walk accessors
-// ---------------------------------------------------------------------------
 
 /// Monotonic generation counter; increments on every mutation.
 ///
@@ -77,9 +75,7 @@ pub extern "C" fn molex_assembly_entity(
     })
 }
 
-// ---------------------------------------------------------------------------
 // Entity walk accessors
-// ---------------------------------------------------------------------------
 
 fn entity_inner<'a>(entity: *const molex_Entity) -> Option<&'a MoleculeEntity> {
     if entity.is_null() {
@@ -286,9 +282,7 @@ pub extern "C" fn molex_entity_residue_atom(
     })
 }
 
-// ---------------------------------------------------------------------------
 // Residue accessors
-// ---------------------------------------------------------------------------
 
 fn residue_inner<'a>(residue: *const molex_Residue) -> Option<&'a Residue> {
     if residue.is_null() {
@@ -346,9 +340,7 @@ pub extern "C" fn molex_residue_ins_code(residue: *const molex_Residue) -> u8 {
     residue_inner(residue).and_then(|r| r.ins_code).unwrap_or(0)
 }
 
-// ---------------------------------------------------------------------------
 // Atom accessors
-// ---------------------------------------------------------------------------
 
 fn atom_inner<'a>(atom: *const molex_Atom) -> Option<&'a Atom> {
     if atom.is_null() {

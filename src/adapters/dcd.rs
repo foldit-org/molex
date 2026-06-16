@@ -139,9 +139,7 @@ pub fn dcd_file_to_frames(
     Ok((header, frames))
 }
 
-// ---------------------------------------------------------------------------
 // Internal parsing helpers
-// ---------------------------------------------------------------------------
 
 fn read_i32(r: &mut impl Read) -> io::Result<i32> {
     let mut buf = [0u8; 4];

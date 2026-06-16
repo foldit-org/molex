@@ -194,9 +194,7 @@ pub fn align_to_reference(
     Ok(())
 }
 
-// ============================================================================
 // SVD Implementation (Jacobi iteration for 3x3 matrices)
-// ============================================================================
 
 fn svd_3x3(a: [[f32; 3]; 3]) -> ([[f32; 3]; 3], [f32; 3], [[f32; 3]; 3]) {
     let ata = compute_ata(a);
@@ -426,9 +424,7 @@ mod tests {
         assert!(translation.length() < 0.01);
     }
 
-    // ------------------------------------------------------------------
     // Rigorous correctness tests for the hand-rolled 3x3 SVD / Kabsch.
-    // ------------------------------------------------------------------
 
     /// Compare two matrices element-by-element to a tolerance.
     fn mat_close(a: Mat3, b: Mat3, tol: f32) -> bool {

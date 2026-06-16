@@ -9,9 +9,7 @@ use std::io::Read;
 
 use crate::ops::codec::AdapterError;
 
-// ---------------------------------------------------------------------------
 // Lightweight MessagePack value tree
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 pub(crate) enum MsgVal {
@@ -98,9 +96,7 @@ impl MsgVal {
     }
 }
 
-// ---------------------------------------------------------------------------
 // MessagePack decoder
-// ---------------------------------------------------------------------------
 
 pub(crate) fn decode_msgpack(data: &[u8]) -> Result<MsgVal, AdapterError> {
     let mut cursor = std::io::Cursor::new(data);
@@ -259,9 +255,7 @@ fn read_map(
     Ok(MsgVal::Map(pairs))
 }
 
-// ---------------------------------------------------------------------------
 // BinaryCIF encoding chain decoder
-// ---------------------------------------------------------------------------
 
 #[derive(Debug)]
 pub(crate) enum ColData {

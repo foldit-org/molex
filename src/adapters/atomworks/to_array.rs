@@ -410,9 +410,8 @@ pub fn entities_to_atom_array_plus(
 
 /// Convert assembly wire bytes to a Biotite `AtomArray`.
 ///
-/// Replaces the old `coords_to_atom_array(coords_bytes)` (COORDS01-shaped),
-/// which was retired with the COORDS01 wire format. Callers should pass
-/// assembly wire bytes (the output of `serialize_assembly` / `assembly_bytes`).
+/// Pass assembly wire bytes (the output of `serialize_assembly` /
+/// `assembly_bytes`).
 ///
 /// # Errors
 ///
@@ -431,8 +430,6 @@ pub fn assembly_bytes_to_atom_array(
 }
 
 /// Convert assembly wire bytes to an `AtomArrayPlus`.
-///
-/// Replaces the old `coords_to_atom_array_plus(coords_bytes)`.
 ///
 /// # Errors
 ///

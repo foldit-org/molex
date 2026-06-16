@@ -189,7 +189,7 @@ impl Assembly {
         projected
     }
 
-    // -- Read accessors ----------------------------------------------
+    // Read accessors
 
     /// All entities in declaration order.
     ///
@@ -325,7 +325,7 @@ impl Assembly {
             .collect()
     }
 
-    // -- Mutation methods --------------------------------------------
+    // Mutation methods
     //
     // All direct content mutators are `pub(crate)`: cross-crate callers
     // must go through [`Self::apply_edit`] / [`Self::apply_edits`] so the
@@ -375,7 +375,7 @@ impl Assembly {
         self.ss_types = compute_per_entity_ss(&self.entities);
     }
 
-    // -- Internal helpers --------------------------------------------
+    // Internal helpers
 
     fn after_mutation(&mut self) {
         self.generation = self.generation.saturating_add(1);

@@ -52,9 +52,7 @@ pub(crate) use to_array::{collect_atom_data, AtomData};
 
 use crate::entity::molecule::MoleculeType;
 
-// ============================================================================
 // Molecule type <-> AtomWorks chain type mapping
-// ============================================================================
 
 /// AtomWorks `ChainType` enum values (from `atomworks.enums.ChainType`).
 ///
@@ -116,9 +114,7 @@ fn mol_type_str_to_molecule_type(s: &str) -> MoleculeType {
     }
 }
 
-// ============================================================================
 // Helpers
-// ============================================================================
 
 /// Try to get an optional annotation array from an AtomArray.
 /// Returns `None` if the annotation doesn't exist.
@@ -129,9 +125,7 @@ fn get_annotation_opt<'py>(
     atom_array.call_method1("get_annotation", (name,)).ok()
 }
 
-// ============================================================================
 // Tests
-// ============================================================================
 
 #[cfg(test)]
 mod tests {

@@ -82,9 +82,7 @@ fn clear_last_error() {
     });
 }
 
-// ---------------------------------------------------------------------------
 // Opaque handle types
-// ---------------------------------------------------------------------------
 //
 // These are zero-sized tag types. Pointers in the FFI are tagged with
 // these but always cast back to the real inner type before dereference.
@@ -175,9 +173,7 @@ impl From<EntityKind> for molex_EntityKind {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Status codes
-// ---------------------------------------------------------------------------
 
 /// Success status returned by writer-style entry points.
 pub const MOLEX_OK: i32 = 0;
@@ -186,9 +182,7 @@ pub const MOLEX_ERR: i32 = -1;
 /// One of the input pointers was null.
 pub const MOLEX_ERR_NULL: i32 = -2;
 
-// ---------------------------------------------------------------------------
 // Error reporting
-// ---------------------------------------------------------------------------
 
 /// Pointer to the most recent error message recorded on this thread.
 ///
@@ -226,9 +220,7 @@ pub extern "C" fn molex_last_error_message(
     })
 }
 
-// ---------------------------------------------------------------------------
 // Buffer / handle lifecycle
-// ---------------------------------------------------------------------------
 
 /// Free a buffer previously returned via `out_buf` / `out_len` from a
 /// writer-style entry point.
@@ -259,9 +251,7 @@ pub extern "C" fn molex_assembly_free(assembly: *mut molex_Assembly) {
     drop(unsafe { Box::from_raw(assembly.cast::<Assembly>()) });
 }
 
-// ---------------------------------------------------------------------------
 // Parser entry points (PDB / CIF / BCIF -> Assembly)
-// ---------------------------------------------------------------------------
 
 fn assembly_from_entities(
     entities: Vec<MoleculeEntity>,
@@ -458,9 +448,7 @@ pub extern "C" fn molex_bcif_to_assembly(
     }
 }
 
-// ---------------------------------------------------------------------------
 // Writer entry points (Assembly -> PDB)
-// ---------------------------------------------------------------------------
 
 fn vec_to_out_buffer(
     bytes: Vec<u8>,

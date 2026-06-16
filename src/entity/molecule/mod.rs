@@ -69,9 +69,7 @@ pub enum MoleculeType {
     Solvent,
 }
 
-// ---------------------------------------------------------------------------
 // MoleculeEntity enum
-// ---------------------------------------------------------------------------
 
 /// Structural discriminant of a [`MoleculeEntity`]: the four-way
 /// taxonomy of the variant itself. Distinct from the finer

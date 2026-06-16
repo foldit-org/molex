@@ -4,7 +4,7 @@
 //! the structure: hydrogen bonds, disulfides, clashes, and (eventually)
 //! pull bands. Connections are rendering metadata, not structural source
 //! of truth; they are populated by the assembly's owner (which selects a
-//! provider) rather than by `recompute_derived`, and stored keyed by
+//! provider) rather than by `recompute_ss`, and stored keyed by
 //! [`ConnectionType`]. The category key selects the renderer; there is no
 //! per-connection style.
 

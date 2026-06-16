@@ -280,11 +280,11 @@ fn parse_entity_headers(
     })
 }
 
-/// Deserialize ASSEM01 binary format into an [`Assembly`] with
-/// derived data populated.
+/// Deserialize ASSEM01 binary format into an [`Assembly`].
 ///
-/// Runs [`Assembly::new`] over the decoded entities so callers see
-/// `ss_types` without a follow-up step.
+/// Runs [`Assembly::new`] over the decoded entities. The result is
+/// secondary-structure-free: `ss_types` is empty until a caller opts in
+/// via [`Assembly::recompute_ss`].
 ///
 /// # Errors
 ///
@@ -295,6 +295,7 @@ fn parse_entity_headers(
 ///
 /// [`Assembly`]: crate::Assembly
 /// [`Assembly::new`]: crate::Assembly::new
+/// [`Assembly::recompute_ss`]: crate::Assembly::recompute_ss
 pub fn deserialize_assembly(
     bytes: &[u8],
 ) -> Result<crate::Assembly, AdapterError> {
@@ -306,15 +307,13 @@ pub fn deserialize_assembly(
 /// an [`Assembly`].
 ///
 /// Internal helper for in-crate paths that mutate entities in place
-/// before re-serializing and don't need the derived-data recompute
-/// [`Assembly::new`] performs.
+/// before re-serializing and don't need an [`Assembly`] wrapper.
 ///
 /// # Errors
 ///
 /// Same as [`deserialize_assembly`].
 ///
 /// [`Assembly`]: crate::Assembly
-/// [`Assembly::new`]: crate::Assembly::new
 pub(crate) fn deserialize_assembly_entities(
     bytes: &[u8],
 ) -> Result<Vec<MoleculeEntity>, AdapterError> {

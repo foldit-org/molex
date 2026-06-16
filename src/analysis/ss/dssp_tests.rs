@@ -186,7 +186,8 @@ fn ubiquitin_secondary_structure() {
         crate::adapters::pdb::structure_file_to_entities(path).unwrap();
 
     let protein_id = entities.iter().find_map(|e| e.as_protein()).unwrap().id;
-    let assembly = crate::Assembly::new(entities);
+    let mut assembly = crate::Assembly::new(entities);
+    assembly.recompute_ss();
     let ss =
         crate::analysis::merge_short_segments(assembly.ss_types(protein_id));
 
@@ -469,7 +470,9 @@ fn ideal_helix_classifies_as_helix_via_real_geometry() {
         protein.segment_breaks
     );
 
-    let assembly = crate::Assembly::new(vec![MoleculeEntity::Protein(protein)]);
+    let mut assembly =
+        crate::Assembly::new(vec![MoleculeEntity::Protein(protein)]);
+    assembly.recompute_ss();
     let ss = assembly.ss_types(id);
     assert_eq!(ss.len(), N_RES);
 
@@ -507,7 +510,8 @@ fn hemoglobin_mostly_helical() {
         crate::adapters::pdb::structure_file_to_entities(path).unwrap();
 
     let protein_id = entities.iter().find_map(|e| e.as_protein()).unwrap().id;
-    let assembly = crate::Assembly::new(entities);
+    let mut assembly = crate::Assembly::new(entities);
+    assembly.recompute_ss();
     let ss =
         crate::analysis::merge_short_segments(assembly.ss_types(protein_id));
 

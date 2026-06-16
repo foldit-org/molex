@@ -11,8 +11,9 @@
 //!
 //! `Assembly::apply_edit` and `Assembly::apply_edits` dispatch each
 //! variant to the appropriate primitive. Each successful apply bumps
-//! the Assembly's generation counter (via `after_mutation`) and
-//! recomputes derived data.
+//! the Assembly's generation counter (via `after_mutation`). Secondary
+//! structure is not recomputed here; callers opt in via
+//! `Assembly::recompute_ss`.
 
 use std::sync::Arc;
 
@@ -160,8 +161,9 @@ pub enum EditError {
 impl Assembly {
     /// Apply a single [`AssemblyEdit`] to this assembly.
     ///
-    /// On success the generation counter is incremented and derived
-    /// data (`ss_types`) is recomputed exactly once.
+    /// On success the generation counter is incremented. Secondary
+    /// structure is not recomputed; `ss_types` stays as-is until a caller
+    /// opts in via [`Assembly::recompute_ss`].
     ///
     /// # Errors
     ///

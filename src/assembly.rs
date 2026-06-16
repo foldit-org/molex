@@ -1,12 +1,14 @@
-//! Top-level `Assembly` container: entities plus eagerly-recomputed
-//! secondary structure.
+//! Top-level `Assembly` container: entities plus opt-in secondary
+//! structure.
 //!
-//! `Assembly` is the host-owned structural source of truth. Every
-//! `&mut Assembly` mutation bumps the generation counter and recomputes
-//! per-entity secondary structure before returning, so readers of a given
-//! snapshot see consistent `ss_types`. Rendering connections (disulfides,
-//! backbone H-bonds, etc.) are owner-populated via `set_connections`, not
-//! derived here.
+//! `Assembly` is the host-owned structural source of truth. Construction
+//! and `&mut Assembly` mutation are secondary-structure-free: per-entity
+//! DSSP classification is expensive, so `ss_types` starts empty and is
+//! populated only when a caller explicitly opts in via
+//! [`Assembly::recompute_ss`]. Every `&mut Assembly` mutation still bumps
+//! the generation counter. Rendering connections (disulfides, backbone
+//! H-bonds, etc.) are owner-populated via `set_connections`, not derived
+//! here.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -22,8 +24,7 @@ use crate::connection::{AtomEnd, AtomLink, ConnectionType};
 use crate::entity::molecule::id::EntityId;
 use crate::entity::molecule::MoleculeEntity;
 
-/// Top-level container of entities plus eagerly-computed secondary
-/// structure.
+/// Top-level container of entities plus opt-in secondary structure.
 ///
 /// Each entity is stored behind an `Arc`, so cloning an `Assembly` is
 /// O(entities) of refcount bumps, independent of the total atom count.
@@ -37,7 +38,7 @@ pub struct Assembly {
     entities: Vec<Arc<MoleculeEntity>>,
     ss_types: HashMap<EntityId, Arc<Vec<SSType>>>,
     /// Owner-populated rendering connections, keyed by category. NOT
-    /// computed by `recompute_derived`; the assembly's owner selects a
+    /// computed by `recompute_ss`; the assembly's owner selects a
     /// provider and sets this. Empty until populated.
     connections: HashMap<ConnectionType, Vec<AtomLink>>,
     generation: u64,
@@ -99,18 +100,17 @@ impl CoordinateSnapshot {
 impl Assembly {
     /// Build an `Assembly` from a collection of entities.
     ///
-    /// Runs per-entity DSSP classification to populate `ss_types`.
-    /// `generation` is initialized to 0.
+    /// Construction is secondary-structure-free: `ss_types` starts empty.
+    /// Call [`Assembly::recompute_ss`] to populate it. `generation` is
+    /// initialized to 0.
     #[must_use]
     pub fn new(entities: Vec<MoleculeEntity>) -> Self {
-        let mut this = Self {
+        Self {
             entities: entities.into_iter().map(Arc::new).collect(),
             ss_types: HashMap::new(),
             connections: HashMap::new(),
             generation: 0,
-        };
-        this.recompute_derived();
-        this
+        }
     }
 
     /// Build an `Assembly` from entities a host already holds behind
@@ -119,21 +119,19 @@ impl Assembly {
     /// The `Arc`-preserving sibling of [`Assembly::new`]: hosts that
     /// already keep `Arc<MoleculeEntity>` snapshots (e.g. foldit's
     /// `EntityStore`) can hand them straight in instead of deep-cloning
-    /// each payload only to have `new` re-`Arc` it. Runs the same
-    /// `recompute_derived` as `new`, so per-entity DSSP classification is
-    /// populated identically. `generation` is initialized to 0; stamp it
-    /// via [`Assembly::set_generation`] if the host tracks its own version
-    /// counter.
+    /// each payload only to have `new` re-`Arc` it. Like `new`,
+    /// construction is secondary-structure-free: `ss_types` starts empty,
+    /// populate it via [`Assembly::recompute_ss`]. `generation` is
+    /// initialized to 0; stamp it via [`Assembly::set_generation`] if the
+    /// host tracks its own version counter.
     #[must_use]
     pub fn from_arcs(entities: Vec<Arc<MoleculeEntity>>) -> Self {
-        let mut this = Self {
+        Self {
             entities,
             ss_types: HashMap::new(),
             connections: HashMap::new(),
             generation: 0,
-        };
-        this.recompute_derived();
-        this
+        }
     }
 
     /// Project to a fresh heavy-complete `Assembly`: every protein and
@@ -337,15 +335,16 @@ impl Assembly {
     // plugin protocol; a caller that mutates directly bypasses the
     // queue and leaves peer plugins one generation behind.
 
-    /// Append an entity. Bumps the generation counter and recomputes
-    /// per-entity secondary structure.
+    /// Append an entity. Bumps the generation counter. Does not recompute
+    /// secondary structure; callers opt in via [`Assembly::recompute_ss`].
     pub(crate) fn add_entity(&mut self, entity: MoleculeEntity) {
         self.entities.push(Arc::new(entity));
         self.after_mutation();
     }
 
-    /// Remove an entity by id. Bumps the generation counter and
-    /// recomputes per-entity secondary structure.
+    /// Remove an entity by id. Bumps the generation counter and drops the
+    /// entity's stale `ss_types` entry. Does not recompute secondary
+    /// structure; callers opt in via [`Assembly::recompute_ss`].
     pub(crate) fn remove_entity(&mut self, id: EntityId) {
         self.entities.retain(|e| e.id() != id);
         let _ = self.ss_types.remove(&id);
@@ -360,22 +359,26 @@ impl Assembly {
         &mut self.entities
     }
 
-    /// Bump generation and recompute derived data. Crate-internal
-    /// counterpart to the private `after_mutation` for the
-    /// `ops::edit` apply functions.
+    /// Bump the generation counter. Crate-internal counterpart to the
+    /// private `after_mutation` for the `ops::edit` apply functions.
     pub(crate) fn after_mutation_pub(&mut self) {
         self.after_mutation();
+    }
+
+    /// Recompute per-entity secondary structure into `ss_types`.
+    ///
+    /// Per-entity DSSP classification is expensive, so construction and
+    /// mutation leave `ss_types` empty; call this when a caller needs
+    /// secondary structure populated (e.g. after a load or before a
+    /// render that reads SS). Replaces any prior `ss_types`.
+    pub fn recompute_ss(&mut self) {
+        self.ss_types = compute_per_entity_ss(&self.entities);
     }
 
     // -- Internal helpers --------------------------------------------
 
     fn after_mutation(&mut self) {
         self.generation = self.generation.saturating_add(1);
-        self.recompute_derived();
-    }
-
-    fn recompute_derived(&mut self) {
-        self.ss_types = compute_per_entity_ss(&self.entities);
     }
 }
 

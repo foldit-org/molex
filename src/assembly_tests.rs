@@ -142,9 +142,13 @@ fn from_arcs_matches_new_over_same_entities() {
     let a_id = a.id();
     let b_id = b.id();
 
-    let from_arcs =
+    let mut from_arcs =
         Assembly::from_arcs(vec![Arc::new(a.clone()), Arc::new(b.clone())]);
-    let fresh = Assembly::new(vec![a, b]);
+    let mut fresh = Assembly::new(vec![a, b]);
+
+    // Secondary structure is opt-in; populate both before comparing.
+    from_arcs.recompute_ss();
+    fresh.recompute_ss();
 
     // Same entity count and ids, in order.
     assert_eq!(from_arcs.entities().len(), fresh.entities().len());
@@ -198,9 +202,10 @@ fn remove_entity_bumps_generation_exactly_once() {
 
 #[test]
 fn mutation_result_matches_fresh_build() {
-    // A fresh Assembly over the same final entity set must produce
-    // the same derived outputs as a mutated Assembly: that is the
-    // contract "derived data is recomputed on every mutation".
+    // A fresh Assembly over the same final entity set must produce the
+    // same secondary structure as a mutated Assembly once both opt in:
+    // recompute_ss reads the current entity set regardless of how the
+    // assembly was assembled.
     let mut alloc = EntityIdAllocator::new();
     let a = make_dipeptide(&mut alloc, b'A', Vec3::ZERO);
     let b = make_dipeptide(&mut alloc, b'B', Vec3::new(20.0, 0.0, 0.0));
@@ -209,11 +214,76 @@ fn mutation_result_matches_fresh_build() {
     // Mutation path: start with just `a`, add `b`.
     let mut mutated = Assembly::new(vec![a.clone()]);
     mutated.add_entity(b.clone());
+    mutated.recompute_ss();
 
     // Fresh path: build from both at once.
-    let fresh = Assembly::new(vec![a, b]);
+    let mut fresh = Assembly::new(vec![a, b]);
+    fresh.recompute_ss();
 
     assert_eq!(mutated.ss_types(a_id).len(), fresh.ss_types(a_id).len());
+}
+
+// -- Secondary structure is opt-in --
+
+#[test]
+fn construction_is_ss_free_by_default() {
+    // A protein that WOULD have a per-residue SS vector after
+    // recompute_ss must come out of `new` / `from_arcs` with empty
+    // ss_types: construction does not run DSSP.
+    let mut alloc = EntityIdAllocator::new();
+    let protein = make_dipeptide(&mut alloc, b'A', Vec3::ZERO);
+    let id = protein.id();
+
+    let fresh = Assembly::new(vec![protein.clone()]);
+    assert!(
+        fresh.ss_types(id).is_empty(),
+        "Assembly::new must not populate ss_types"
+    );
+
+    let from_arcs = Assembly::from_arcs(vec![Arc::new(protein)]);
+    assert!(
+        from_arcs.ss_types(id).is_empty(),
+        "Assembly::from_arcs must not populate ss_types"
+    );
+}
+
+#[test]
+fn recompute_ss_populates_secondary_structure() {
+    // After the explicit opt-in, the protein gets a per-residue SS
+    // vector (one entry per residue).
+    let mut alloc = EntityIdAllocator::new();
+    let protein = make_dipeptide(&mut alloc, b'A', Vec3::ZERO);
+    let id = protein.id();
+
+    let mut assembly = Assembly::new(vec![protein]);
+    assert!(assembly.ss_types(id).is_empty());
+
+    assembly.recompute_ss();
+    assert_eq!(
+        assembly.ss_types(id).len(),
+        2,
+        "recompute_ss must populate one SS entry per residue"
+    );
+}
+
+#[test]
+fn deserialize_assembly_is_ss_free() {
+    // The wire path (serialize -> deserialize_assembly -> Assembly::new)
+    // is the per-frame streaming hot path; it must not run DSSP. Every
+    // entity comes back with empty ss_types.
+    use crate::ops::wire::{assembly_bytes, deserialize_assembly};
+
+    let mut alloc = EntityIdAllocator::new();
+    let protein = make_dipeptide(&mut alloc, b'A', Vec3::ZERO);
+    let id = protein.id();
+
+    let bytes = assembly_bytes(&[protein]).unwrap();
+    let roundtripped = deserialize_assembly(&bytes).unwrap();
+
+    assert!(
+        roundtripped.ss_types(id).is_empty(),
+        "deserialize_assembly must yield empty ss_types"
+    );
 }
 
 // -- All-atom projection --

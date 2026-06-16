@@ -10,10 +10,10 @@ use crate::ops::codec::AdapterError;
 
 /// Serialize an [`Assembly`] to ASSEM02 binary format.
 ///
-/// Writes the entity list only; derived data (`ss_types`, `generation`)
-/// is rebuilt by
-/// [`deserialize_assembly`](super::deserialize::deserialize_assembly) via
-/// [`Assembly::new`].
+/// Writes the entity list only. `generation` resets to 0 on the
+/// [`deserialize_assembly`](super::deserialize::deserialize_assembly)
+/// rebuild via [`Assembly::new`], and `ss_types` comes back empty until a
+/// caller opts in via [`Assembly::recompute_ss`].
 ///
 /// Format:
 /// - 8 bytes: magic `b"ASSEM02\0"`

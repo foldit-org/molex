@@ -42,11 +42,14 @@ pub struct NAEntity {
     ///
     /// After [`NAEntity::new`], atoms belonging to a kept residue are
     /// laid out in canonical order: `P, O5', C5', C4', C3', O3',
-    /// base heavy..., hydrogens...`. Atoms of dropped residues remain
-    /// in `atoms` but are not referenced by any `Residue::atom_range`.
+    /// base heavy..., hydrogens...`. A free 5'-OH terminal residue omits
+    /// the leading `P` (its backbone starts at `O5'`). Atoms of dropped
+    /// residues remain in `atoms` but are not referenced by any
+    /// `Residue::atom_range`.
     pub atoms: Vec<Atom>,
-    /// Ordered residues (nucleotides). Residues missing any of the
-    /// six canonical backbone atoms are dropped during construction.
+    /// Ordered residues (nucleotides). Residues missing any required
+    /// canonical backbone atom are dropped during construction; `P` is
+    /// required except at the 5'-terminal residue.
     pub residues: Vec<Residue>,
     /// Backbone segment break indices.
     pub segment_breaks: Vec<usize>,
@@ -99,10 +102,10 @@ impl NAEntity {
     /// Construct an NA entity, enforcing canonical atom ordering.
     ///
     /// For every kept residue, atoms are laid out as
-    /// `P, O5', C5', C4', C3', O3', base heavy..., hydrogens...`.
-    /// Residues missing any of the six canonical backbone atoms are
-    /// dropped from `residues` with a `log::warn!`; their atoms
-    /// remain in `atoms` but are unreferenced.
+    /// `P, O5', C5', C4', C3', O3', base heavy..., hydrogens...` (the 5'
+    /// terminus may omit the leading `P`). Residues missing any required
+    /// canonical backbone atom are dropped from `residues` with a
+    /// `log::warn!`; their atoms remain in `atoms` but are unreferenced.
     ///
     /// Construction is pure: the atom set is assembled exactly as given
     /// and no missing-atom completion runs. To fabricate missing atoms at
@@ -366,16 +369,31 @@ fn build_na(
 /// this indicate a backbone break.
 const MAX_PHOSPHATE_BOND_DIST: f32 = 8.0;
 
-/// Compute segment break indices from P(i)->P(i+1) distances.
+/// Whether a kept residue carries a 5'-phosphate, i.e. its canonical
+/// first atom is `P`. Canonicalize places `P` at local offset 0 for every
+/// kept residue that has one; only the 5'-terminal residue may lack it (a
+/// free 5'-OH nucleotide), in which case offset 0 is a sugar atom instead.
+fn residue_has_phosphate(atoms: &[Atom], r: &Residue) -> bool {
+    r.atom_range.start < atoms.len()
+        && trimmed_atom_name(&atoms[r.atom_range.start].name) == b"P"
+}
+
+/// Compute segment break indices from P(i-1)->P(i) distances.
 ///
-/// Relies on canonical atom ordering: kept residues have `P` at
-/// local offset 0.
+/// `P` sits at local offset 0 of every kept residue that has one; a
+/// P-less 5'-terminal residue has a sugar atom there instead. A pair
+/// whose earlier residue lacks `P` cannot have a P-P distance measured,
+/// so it is left unbroken: the 5' terminus is the chain start and carries
+/// no break of its own.
 fn compute_na_segment_breaks(
     atoms: &[Atom],
     residues: &[Residue],
 ) -> Vec<usize> {
     let mut breaks = Vec::new();
     for i in 1..residues.len() {
+        if !residue_has_phosphate(atoms, &residues[i - 1]) {
+            continue;
+        }
         let prev_p = atoms[residues[i - 1].atom_range.start].position;
         let curr_p = atoms[residues[i].atom_range.start].position;
         if prev_p.distance(curr_p) > MAX_PHOSPHATE_BOND_DIST {
@@ -390,11 +408,14 @@ const NA_BACKBONE_NAMES: [&[u8]; 6] =
     [b"P", b"O5'", b"C5'", b"C4'", b"C3'", b"O3'"];
 
 /// Reorganize NA atoms into canonical per-residue order and drop
-/// residues missing any of the six canonical backbone atoms.
+/// residues missing a required canonical backbone atom. `P` is required
+/// except at the 5'-terminal residue, where a free 5'-OH nucleotide
+/// legitimately carries no phosphate.
 ///
 /// Layout for kept residues: `P, O5', C5', C4', C3', O3', base
-/// heavy..., hydrogens...`. Dropped residues' atoms are appended in
-/// input order and left unreferenced.
+/// heavy..., hydrogens...` (the 5' terminus may omit the leading `P`).
+/// Dropped residues' atoms are appended in input order and left
+/// unreferenced.
 struct NaResiduePartition {
     backbone_slots: [Option<usize>; 6],
     base_heavy: Vec<usize>,
@@ -434,10 +455,26 @@ fn partition_na_residue(
     out
 }
 
-fn na_backbone_complete(slots: &[Option<usize>; 6]) -> Option<[usize; 6]> {
-    let mut out = [0usize; 6];
+/// Resolve the six canonical backbone slots into a kept layout.
+///
+/// All six (`P, O5', C5', C4', C3', O3'`) are required for an interior
+/// residue. At the 5'-terminal residue (`is_chain_first`) the `P` slot is
+/// optional: a free 5'-OH nucleotide carries the sugar/backbone atoms but
+/// no phosphate, and must be kept rather than dropped. The returned vec
+/// holds the present backbone atom indices in canonical order (length 5
+/// for a P-less 5' terminus, 6 otherwise); the remaining sugar/base atoms
+/// are not required and ride along separately.
+fn na_backbone_complete(
+    slots: &[Option<usize>; 6],
+    is_chain_first: bool,
+) -> Option<Vec<usize>> {
+    let mut out = Vec::with_capacity(6);
     for (i, slot) in slots.iter().enumerate() {
-        out[i] = (*slot)?;
+        match *slot {
+            Some(idx) => out.push(idx),
+            None if i == 0 && is_chain_first => {}
+            None => return None,
+        }
     }
     Some(out)
 }
@@ -450,12 +487,18 @@ fn canonicalize_na_residues(
     let mut new_atoms: Vec<Atom> = Vec::with_capacity(atoms.len());
     let mut new_residues: Vec<Residue> = Vec::new();
 
-    for residue in residues {
+    // Residues arrive in N->C sequence order, so index 0 is the 5'
+    // terminus (the same builder guarantee the completion pass relies on);
+    // the `P` slot is optional only there.
+    for (idx, residue) in residues.iter().enumerate() {
+        let is_chain_first = idx == 0;
         let range = residue.atom_range.clone();
         let start = new_atoms.len();
         let p = partition_na_residue(atoms, range.clone());
 
-        if let Some(bb) = na_backbone_complete(&p.backbone_slots) {
+        if let Some(bb) =
+            na_backbone_complete(&p.backbone_slots, is_chain_first)
+        {
             for &idx in &bb {
                 new_atoms.push(atoms[idx].clone());
             }
@@ -479,7 +522,8 @@ fn canonicalize_na_residues(
             let res_name = std::str::from_utf8(&residue.name).unwrap_or("???");
             log::warn!(
                 "NAEntity chain '{}': dropping residue {} (name {}); missing \
-                 backbone atoms (need P, O5', C5', C4', C3', O3')",
+                 backbone atoms (need O5', C5', C4', C3', O3'; P required \
+                 except at the 5' terminus)",
                 pdb_chain_id as char,
                 residue.label_seq_id,
                 res_name.trim(),
@@ -532,22 +576,26 @@ fn emit_na_residue_bonds(
     }
     // Phosphate terminal oxygens (OP1 / OP2 / OP3): emit only when
     // present. Not part of Nucleotide::bonds() because their PDB
-    // presence is variable (5' terminus, deprotonated forms).
-    let phosphate_idx = r.atom_range.start; // canonical P
-    for oxygen in [b"OP1", b"OP2", b"OP3"] {
-        let key = AtomName::from_bytes(oxygen);
-        if let Some(&ox_idx) = name_to_idx.get(&key) {
-            bonds.push(CovalentBond {
-                a: AtomId {
-                    entity: entity_id,
-                    index: phosphate_idx as u32,
-                },
-                b: AtomId {
-                    entity: entity_id,
-                    index: ox_idx as u32,
-                },
-                order: BondOrder::Single,
-            });
+    // presence is variable (5' terminus, deprotonated forms). A P-less
+    // 5'-terminal residue has no phosphate at offset 0 and no OP oxygens,
+    // so it gets no phosphate bonds.
+    if residue_has_phosphate(atoms, r) {
+        let phosphate_idx = r.atom_range.start; // canonical P
+        for oxygen in [b"OP1", b"OP2", b"OP3"] {
+            let key = AtomName::from_bytes(oxygen);
+            if let Some(&ox_idx) = name_to_idx.get(&key) {
+                bonds.push(CovalentBond {
+                    a: AtomId {
+                        entity: entity_id,
+                        index: phosphate_idx as u32,
+                    },
+                    b: AtomId {
+                        entity: entity_id,
+                        index: ox_idx as u32,
+                    },
+                    order: BondOrder::Single,
+                });
+            }
         }
     }
 }
@@ -570,7 +618,11 @@ fn build_na_bonds(
         emit_na_residue_bonds(entity_id, atoms, r, &mut bonds);
     }
 
-    // Inter-residue phosphodiester bonds: O3'(i) -> P(i+1) where no break.
+    // Inter-residue phosphodiester bonds: O3'(i-1) -> P(i) where no break.
+    // O3' is the last of the canonical backbone slots, at offset 5 of a
+    // P-bearing residue but offset 4 of a P-less 5'-terminal residue (its
+    // backbone is one atom shorter). `P(i)` is always present: only the
+    // 5'-terminal residue may lack one, and it is never a `curr` here.
     let breaks: HashSet<usize> = segment_breaks.iter().copied().collect();
     for i in 1..residues.len() {
         if breaks.contains(&i) {
@@ -578,10 +630,15 @@ fn build_na_bonds(
         }
         let prev = &residues[i - 1];
         let curr = &residues[i];
+        let o3_prime_offset = if residue_has_phosphate(atoms, prev) {
+            5
+        } else {
+            4
+        };
         bonds.push(CovalentBond {
             a: AtomId {
                 entity: entity_id,
-                index: (prev.atom_range.start + 5) as u32, // O3'
+                index: (prev.atom_range.start + o3_prime_offset) as u32, // O3'
             },
             b: AtomId {
                 entity: entity_id,

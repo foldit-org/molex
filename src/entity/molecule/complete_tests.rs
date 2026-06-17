@@ -69,13 +69,20 @@ fn residue_atom_names(atoms: &[Atom], r: &Residue) -> Vec<String> {
         .collect()
 }
 
-/// The in-scope completion target set for an amino acid: template atoms
-/// that are neither leaving nor terminus-only.
+/// The all-atom completion target set for an amino acid built as a single
+/// residue, i.e. both chain termini. Interior body atoms plus the
+/// terminus-only atoms admitted at a terminus (the C-terminal carboxylate
+/// OXT/HXT and the extra N-terminal proton); leaving atoms that are not a
+/// terminus extra stay excluded.
 fn in_scope_template_names(aa: AminoAcid) -> BTreeSet<String> {
     aa.template()
         .atoms
         .iter()
-        .filter(|a| !a.is_leaving && !a.is_n_terminal && !a.is_c_terminal)
+        .filter(|a| {
+            let interior =
+                !a.is_leaving && !a.is_n_terminal && !a.is_c_terminal;
+            interior || a.is_c_terminal || a.is_n_terminal
+        })
         .map(|a| a.name.as_str().to_owned())
         .collect()
 }
@@ -103,17 +110,19 @@ fn placed_from_template(aa: AminoAcid, name: &str, element: Element) -> Atom {
     atom_at(name, element, sample_transform(t.ideal))
 }
 
-/// Heavy-atom subset of [`in_scope_template_names`]: the in-scope set with
-/// hydrogens removed, i.e. what the default heavy-only path fabricates.
+/// Heavy-atom subset of [`in_scope_template_names`]: the same single-residue
+/// (both-termini) set with hydrogens removed, i.e. what the default
+/// heavy-only path fabricates. The C-terminal carboxylate OXT survives
+/// (heavy); HXT and the N-terminal protons drop as hydrogens.
 fn in_scope_heavy_template_names(aa: AminoAcid) -> BTreeSet<String> {
     aa.template()
         .atoms
         .iter()
         .filter(|a| {
-            !a.is_leaving
-                && !a.is_n_terminal
-                && !a.is_c_terminal
-                && a.element != Element::H
+            let interior =
+                !a.is_leaving && !a.is_n_terminal && !a.is_c_terminal;
+            let kept = interior || a.is_c_terminal || a.is_n_terminal;
+            kept && a.element != Element::H
         })
         .map(|a| a.name.as_str().to_owned())
         .collect()
@@ -308,9 +317,12 @@ fn already_complete_residue_gains_no_atoms() {
         atom_at("HB2", Element::H, Vec3::new(1.6, -2.1, 0.3)),
         atom_at("HB3", Element::H, Vec3::new(2.1, -1.3, 1.7)),
     ];
-    // Also add the terminus atoms a complete chain end might carry; the
-    // pass must still not duplicate the in-scope atoms.
+    // Add the terminus atoms a complete chain end carries: the N-terminal
+    // proton and the C-terminal carboxylate OXT (this single residue is
+    // both chain termini, so heavy-only completion would otherwise build
+    // OXT). The pass must still not duplicate the in-scope atoms.
     atoms.push(atom_at("H", Element::H, Vec3::new(-0.5, 0.5, 0.0)));
+    atoms.push(atom_at("OXT", Element::O, Vec3::new(3.3, 1.4, 0.0)));
     let before = atoms.len();
     let protein = build_protein("ALA", atoms);
     let r = &protein.residues[0];
@@ -361,6 +373,63 @@ fn backbone_missing_residue_still_drops() {
         0,
         "backbone-incomplete, unanchorable residue must drop"
     );
+}
+
+#[test]
+fn c_terminal_oxt_only_on_last_residue() {
+    // Three backbone-only ALA residues in N->C order. Heavy-only completion
+    // must fabricate the C-terminal carboxylate OXT on the last residue
+    // only; the two interior residues must not gain OXT.
+    let backbone = |offset: f32| {
+        let shift = Vec3::new(offset, 0.0, 0.0);
+        vec![
+            atom_at("N", Element::N, sample_transform(Vec3::ZERO) + shift),
+            atom_at(
+                "CA",
+                Element::C,
+                sample_transform(Vec3::new(1.46, 0.0, 0.0)) + shift,
+            ),
+            atom_at(
+                "C",
+                Element::C,
+                sample_transform(Vec3::new(2.0, 1.4, 0.0)) + shift,
+            ),
+            atom_at(
+                "O",
+                Element::O,
+                sample_transform(Vec3::new(1.3, 2.4, 0.0)) + shift,
+            ),
+        ]
+    };
+    let mut atoms = Vec::new();
+    let mut residues = Vec::new();
+    for (i, offset) in [0.0f32, 20.0, 40.0].into_iter().enumerate() {
+        let start = atoms.len();
+        atoms.extend(backbone(offset));
+        residues.push(Residue {
+            name: res_bytes("ALA"),
+            label_seq_id: i32::try_from(i).unwrap() + 1,
+            auth_seq_id: None,
+            auth_comp_id: None,
+            ins_code: None,
+            atom_range: start..atoms.len(),
+            variants: Vec::new(),
+        });
+    }
+    let (out_atoms, out_res) =
+        complete_protein_residues(&atoms, &residues, CompletionMode::HeavyOnly);
+    let has_oxt = |r: &Residue| {
+        residue_atom_names(&out_atoms, r).iter().any(|n| n == "OXT")
+    };
+    assert!(
+        !has_oxt(&out_res[0]),
+        "interior residue 0 must not gain OXT"
+    );
+    assert!(
+        !has_oxt(&out_res[1]),
+        "interior residue 1 must not gain OXT"
+    );
+    assert!(has_oxt(&out_res[2]), "C-terminal residue must gain OXT");
 }
 
 #[test]
@@ -438,6 +507,106 @@ fn na_all_atom_fills_dna_base_and_hydrogens() {
         .clone()
         .any(|i| out_atoms[i].element == Element::H);
     assert!(has_h, "all-atom NA completion must fabricate hydrogens");
+}
+
+/// Build a DA residue from real template ideal geometry, keeping every
+/// in-scope heavy atom whose name passes `keep`. Used to seed a free
+/// 5'-OH nucleotide (drop the phosphate group) at coordinates a correct
+/// rigid fit can recover.
+fn da_heavy_atoms(keep: impl Fn(&str) -> bool) -> Vec<Atom> {
+    let template = Nucleotide::A.template(MoleculeType::DNA).unwrap();
+    template
+        .atoms
+        .iter()
+        .filter(|a| a.element != Element::H && !a.is_leaving)
+        .filter(|a| keep(a.name.as_str()))
+        .map(|a| atom_at(a.name.as_str(), a.element, a.ideal))
+        .collect()
+}
+
+#[test]
+fn na_five_prime_oh_fabricates_no_phosphate() {
+    // A free 5'-OH DA: real sugar/backbone + base, but no P/OP1/OP2. As
+    // the chain-first residue, the absent 5'-phosphate group must NOT be
+    // fabricated (additive policy: never forge a terminus the structure
+    // lacks). Base atoms missing from the parse still complete normally.
+    let phosphate = |n: &str| matches!(n, "P" | "OP1" | "OP2" | "OP3");
+    let atoms = da_heavy_atoms(|n| !phosphate(n) && n != "N6");
+    let n = atoms.len();
+    let (out_atoms, out_res) = complete_na_residues(
+        &atoms,
+        &[residue("DA", 0..n)],
+        CompletionMode::HeavyOnly,
+        MoleculeType::DNA,
+    );
+    let r = &out_res[0];
+    let names: BTreeSet<String> =
+        residue_atom_names(&out_atoms, r).into_iter().collect();
+
+    for forged in ["P", "OP1", "OP2", "OP3"] {
+        assert!(
+            !names.contains(forged),
+            "5'-OH residue must not fabricate {forged}; got {names:?}"
+        );
+    }
+    // The interior base atom that was absent still completes.
+    assert!(names.contains("N6"), "absent base atom N6 should complete");
+}
+
+#[test]
+fn na_five_prime_partial_phosphate_completes() {
+    // A 5'-phosphate that IS present but missing one OP oxygen: because P
+    // is present, the phosphate group is real and the missing OP2
+    // completes normally (the skip applies only when the whole group is
+    // absent).
+    let atoms = da_heavy_atoms(|n| n != "OP2");
+    let n = atoms.len();
+    let (out_atoms, out_res) = complete_na_residues(
+        &atoms,
+        &[residue("DA", 0..n)],
+        CompletionMode::HeavyOnly,
+        MoleculeType::DNA,
+    );
+    let r = &out_res[0];
+    let names: BTreeSet<String> =
+        residue_atom_names(&out_atoms, r).into_iter().collect();
+    assert!(
+        names.contains("OP2"),
+        "a present phosphate must complete its missing OP2; got {names:?}"
+    );
+    assert!(names.contains("P") && names.contains("OP1"));
+}
+
+#[test]
+fn na_five_prime_skip_does_not_apply_to_interior_residue() {
+    // The phosphate-group skip is gated on the chain-first residue. An
+    // interior P-less residue (idx > 0) still has its phosphate
+    // fabricated, since the rule keys only on the 5' terminus.
+    let phosphate = |n: &str| matches!(n, "P" | "OP1" | "OP2" | "OP3");
+    let first = da_heavy_atoms(|_| true); // full 5' residue (has P)
+    let second = da_heavy_atoms(|n| !phosphate(n)); // P-less interior
+    let first_len = first.len();
+    let mut atoms = first;
+    atoms.extend(second);
+    let residues = vec![
+        residue("DA", 0..first_len),
+        residue("DA", first_len..atoms.len()),
+    ];
+    let (out_atoms, out_res) = complete_na_residues(
+        &atoms,
+        &residues,
+        CompletionMode::HeavyOnly,
+        MoleculeType::DNA,
+    );
+    let interior_names: BTreeSet<String> =
+        residue_atom_names(&out_atoms, &out_res[1])
+            .into_iter()
+            .collect();
+    assert!(
+        interior_names.contains("P"),
+        "interior P-less residue must still gain its phosphate; got \
+         {interior_names:?}"
+    );
 }
 
 #[test]

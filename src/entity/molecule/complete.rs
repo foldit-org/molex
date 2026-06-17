@@ -10,8 +10,11 @@
 //!
 //! The pass is purely additive. Parsed atoms keep their coordinates;
 //! only absent atoms are created, with chemically sane (not
-//! bit-identical) positions. Terminal and leaving atoms (`OXT`,
-//! terminus-only hydrogens) are out of scope and never fabricated.
+//! bit-identical) positions. Protein C-termini gain their carboxylate
+//! `OXT` (and, under all-atom, `HXT`). Leaving atoms and the N-terminal
+//! extra protons stay out of scope and are never fabricated. A free
+//! 5'-OH nucleotide keeps its absent 5'-phosphate group (`P`/`OP1`/`OP2`)
+//! absent rather than having a phantom phosphate forged.
 //!
 //! Residues that do not resolve to a template, that resolve to a base
 //! with no template in their strand (RNA thymine, DNA uridine), that
@@ -76,6 +79,16 @@ pub enum CompletionMode {
     AllAtom,
 }
 
+/// What a single residue's completion is allowed to fabricate: the
+/// fabrication `mode` plus which polymer end the residue sits at (a lone
+/// residue is both termini at once). Decided by [`in_scope`].
+#[derive(Clone, Copy)]
+struct Scope {
+    mode: CompletionMode,
+    is_chain_first: bool,
+    is_chain_last: bool,
+}
+
 /// Complete missing atoms in protein residues against amino-acid
 /// templates.
 ///
@@ -130,7 +143,16 @@ fn complete_residues(
     let mut new_atoms: Vec<Atom> = Vec::with_capacity(atoms.len());
     let mut new_residues: Vec<Residue> = Vec::with_capacity(residues.len());
 
-    for residue in residues {
+    // The completing path receives residues in true N->C sequence order
+    // (the builder sorts by `(label_seq_id, ins_code)` and the flatten
+    // preserves it), so the first and last residues are the polymer
+    // termini. Terminus-only completion keys off these indices.
+    for (idx, residue) in residues.iter().enumerate() {
+        let scope = Scope {
+            mode,
+            is_chain_first: idx == 0,
+            is_chain_last: idx + 1 == residues.len(),
+        };
         let start = new_atoms.len();
 
         // Always carry the parsed atoms through unchanged.
@@ -144,7 +166,7 @@ fn complete_residues(
                     atoms,
                     residue.atom_range.clone(),
                     template,
-                    mode,
+                    scope,
                     &mut new_atoms,
                 );
             }
@@ -166,18 +188,22 @@ fn complete_residues(
 }
 
 /// Rigid-fit `template` onto the parsed atoms in `range` and append each
-/// missing non-terminal template atom to `out`. No-op when there is
+/// missing in-scope template atom to `out`. No-op when there is
 /// nothing missing, when fewer than [`MIN_ANCHOR_ATOMS`] atoms match, or
 /// when the matched anchors are collinear. `kabsch_alignment` itself has
 /// no rank check (it only rejects length mismatch or `< 3` points), so
 /// the collinear case is screened here at the call site: a unique
 /// rotation needs the anchors to span at least two dimensions, and the
 /// only way `>= 3` points fail that is by lying on one line.
+///
+/// `scope` carries the fabrication mode and which polymer end this
+/// residue sits at, so [`in_scope`] can admit the terminus-only atoms
+/// there.
 fn append_missing_atoms(
     atoms: &[Atom],
     range: std::ops::Range<usize>,
     template: &ResidueTemplate,
-    mode: CompletionMode,
+    scope: Scope,
     out: &mut Vec<Atom>,
 ) {
     // Matched: template atoms whose name is present in the parse, paired
@@ -187,13 +213,32 @@ fn append_missing_atoms(
     let mut template_matched: Vec<Vec3> = Vec::new();
     let mut missing: Vec<&TemplateAtom> = Vec::new();
 
+    // A free 5'-OH nucleotide carries no phosphate, and the 5'-phosphate
+    // group (P/OP1/OP2, identifiable only by name) must not be invented
+    // there: fabricating it would forge a terminus the structure does not
+    // have. Detect the group's presence by `P`; when it is present (a real
+    // 5' phosphate, even a partial one) the rest of the group completes
+    // normally. Protein templates name no P/OP1/OP2, so this is inert for
+    // them.
+    let phosphate_present =
+        present_position(atoms, range.clone(), AtomName::from_bytes(b"P"))
+            .is_some();
+
     for t in template.atoms {
+        if scope.is_chain_first
+            && !phosphate_present
+            && is_five_prime_phosphate_atom(t.name)
+        {
+            continue;
+        }
         match present_position(atoms, range.clone(), t.name) {
             Some(pos) => {
                 parsed_matched.push(pos);
                 template_matched.push(t.ideal);
             }
-            None if in_scope(t, mode) => missing.push(t),
+            None if in_scope(t, scope) => {
+                missing.push(t);
+            }
             None => {}
         }
     }
@@ -288,14 +333,47 @@ fn is_collinear(points: &[Vec3]) -> bool {
     max_perp < COLLINEAR_TOLERANCE * axis_len
 }
 
-/// Whether a template atom is in scope for completion: a real atom of
-/// the linked-residue body, not a leaving or terminus-only atom. Under
-/// [`CompletionMode::HeavyOnly`] hydrogens are also excluded.
-fn in_scope(t: &TemplateAtom, mode: CompletionMode) -> bool {
-    if mode == CompletionMode::HeavyOnly && t.element == Element::H {
+/// Whether a template atom is one of the three 5'-terminal phosphate-group
+/// atoms (`P`, `OP1`, `OP2`). These carry no CCD terminus flag, so the
+/// group is recognized by name alone. Used to suppress fabricating a
+/// 5'-phosphate that a free 5'-OH nucleotide does not carry.
+fn is_five_prime_phosphate_atom(name: AtomName) -> bool {
+    name == AtomName::from_bytes(b"P")
+        || name == AtomName::from_bytes(b"OP1")
+        || name == AtomName::from_bytes(b"OP2")
+}
+
+/// Whether a template atom is in scope for completion. Interior body
+/// atoms are always in scope. Terminus-only atoms are admitted only at
+/// the matching polymer end: C-terminal atoms when `is_chain_last`,
+/// N-terminal atoms when `is_chain_first`. Leaving atoms are never
+/// fabricated, and under [`CompletionMode::HeavyOnly`] hydrogens are
+/// excluded.
+///
+/// In practice, on a protein C-terminus under `HeavyOnly` the only NEW
+/// heavy atom this admits is the carboxylate `OXT`: the C-terminal C and
+/// O carry `is_c_terminal` but are present in every residue (matched as
+/// anchors, never reaching the missing list), and `HXT` is dropped as a
+/// hydrogen. N-terminal extras are all hydrogens, so the N-terminus is a
+/// heavy no-op. Under `AllAtom` the same rule additionally places `HXT`
+/// and the N-terminal protons, consistently.
+///
+/// The NA 5'-terminal phosphate group is handled separately in
+/// [`append_missing_atoms`] (it carries no CCD flag this could key on).
+fn in_scope(t: &TemplateAtom, scope: Scope) -> bool {
+    if scope.mode == CompletionMode::HeavyOnly && t.element == Element::H {
         return false;
     }
-    !t.is_leaving && !t.is_n_terminal && !t.is_c_terminal
+    if !t.is_leaving && !t.is_n_terminal && !t.is_c_terminal {
+        return true;
+    }
+    if t.is_c_terminal && scope.is_chain_last {
+        return true;
+    }
+    if t.is_n_terminal && scope.is_chain_first {
+        return true;
+    }
+    false
 }
 
 /// Position of the parsed atom named `name` within `range`, if present.

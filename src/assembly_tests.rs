@@ -289,15 +289,21 @@ fn deserialize_assembly_is_ss_free() {
 // -- All-atom projection --
 
 /// Assert every source heavy atom survives the all-atom projection
-/// unchanged: per residue, the projected residue's non-hydrogen atoms
-/// match the source's by name and position, in order.
+/// unchanged: per residue, the projected residue's source heavy atoms
+/// match by name and position, in order. The projection may additionally
+/// fabricate the C-terminal carboxylate OXT on the last residue (the one
+/// new heavy atom completion adds), so the projected heavy set is the
+/// source heavy set with an optional trailing OXT.
 fn assert_heavy_atoms_preserved(
     heavy: &ProteinEntity,
     all_atom: &ProteinEntity,
 ) {
     use crate::entity::molecule::protein::trimmed_atom_name;
 
-    for (h_res, a_res) in heavy.residues.iter().zip(&all_atom.residues) {
+    let last = all_atom.residues.len().saturating_sub(1);
+    for (ri, (h_res, a_res)) in
+        heavy.residues.iter().zip(&all_atom.residues).enumerate()
+    {
         let heavy_atoms: Vec<_> =
             h_res.atom_range.clone().map(|i| &heavy.atoms[i]).collect();
         let aa_heavy: Vec<_> = a_res
@@ -306,11 +312,7 @@ fn assert_heavy_atoms_preserved(
             .map(|i| &all_atom.atoms[i])
             .filter(|a| a.element != Element::H)
             .collect();
-        assert_eq!(
-            heavy_atoms.len(),
-            aa_heavy.len(),
-            "heavy-atom count per residue must be unchanged by projection"
-        );
+        // Source heavy atoms come first, preserved by name and position.
         for (ha, aa) in heavy_atoms.iter().zip(&aa_heavy) {
             assert_eq!(
                 trimmed_atom_name(&ha.name),
@@ -320,6 +322,23 @@ fn assert_heavy_atoms_preserved(
             assert_eq!(
                 ha.position, aa.position,
                 "heavy atom position must be preserved"
+            );
+        }
+        // The only extra heavy atom the projection may add is OXT, and
+        // only on the C-terminal residue.
+        let extra: Vec<_> = aa_heavy[heavy_atoms.len()..]
+            .iter()
+            .map(|a| trimmed_atom_name(&a.name))
+            .collect();
+        if ri == last {
+            assert!(
+                extra.is_empty() || extra == [b"OXT".as_slice()],
+                "C-terminal residue may gain only OXT, got {extra:?}"
+            );
+        } else {
+            assert!(
+                extra.is_empty(),
+                "interior residue must gain no heavy atoms, got {extra:?}"
             );
         }
     }

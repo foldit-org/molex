@@ -182,6 +182,150 @@ fn rna_residue_completes_with_ribose_o2_prime() {
     );
 }
 
+/// DA heavy atoms at real DNA-template ideal geometry, keeping every
+/// in-scope heavy atom whose name passes `keep`. Real coordinates let the
+/// completion rigid fit anchor (so base atoms fill) and give the
+/// canonicalize/bond stages chemically sane positions.
+fn da_heavy_atoms(keep: impl Fn(&str) -> bool) -> Vec<Atom> {
+    use crate::chemistry::nucleotides::Nucleotide;
+    let template = Nucleotide::A.template(MoleculeType::DNA).unwrap();
+    template
+        .atoms
+        .iter()
+        .filter(|a| a.element != Element::H && !a.is_leaving)
+        .filter(|a| keep(a.name.as_str()))
+        .map(|a| {
+            let mut name = [b' '; 4];
+            for (i, b) in a.name.as_str().bytes().take(4).enumerate() {
+                name[i] = b;
+            }
+            Atom {
+                position: a.ideal,
+                occupancy: 1.0,
+                b_factor: 0.0,
+                element: a.element,
+                name,
+                formal_charge: 0,
+            }
+        })
+        .collect()
+}
+
+fn na_residue(name: &str, range: std::ops::Range<usize>, seq: i32) -> Residue {
+    Residue {
+        name: res_name_bytes(name),
+        label_seq_id: seq,
+        auth_seq_id: None,
+        auth_comp_id: None,
+        ins_code: None,
+        atom_range: range,
+        variants: Vec::new(),
+    }
+}
+
+#[test]
+fn na_five_prime_oh_residue_is_kept() {
+    // A free 5'-OH DA (sugar + base, no P/OP1/OP2): canonicalize must KEEP
+    // it as the 5'-terminal residue rather than dropping it for the
+    // missing P, and no phantom phosphate appears in its atom set.
+    let phosphate = |n: &str| matches!(n, "P" | "OP1" | "OP2" | "OP3");
+    let atoms = da_heavy_atoms(|n| !phosphate(n));
+    let n = atoms.len();
+    let mut alloc = EntityIdAllocator::new();
+    let id = alloc.allocate();
+    let na = NAEntity::new_normalized(
+        id,
+        MoleculeType::DNA,
+        atoms,
+        vec![na_residue("DA", 0..n, 1)],
+        b'A',
+        None,
+        CompletionMode::HeavyOnly,
+    );
+    assert_eq!(na.residues.len(), 1, "5'-OH residue must be kept");
+    let r = &na.residues[0];
+    let names: Vec<&str> = r
+        .atom_range
+        .clone()
+        .map(|i| std::str::from_utf8(&na.atoms[i].name).unwrap().trim())
+        .collect();
+    for forged in ["P", "OP1", "OP2", "OP3"] {
+        assert!(
+            !names.contains(&forged),
+            "kept 5'-OH residue must carry no fabricated {forged}: {names:?}"
+        );
+    }
+    // The kept backbone starts at O5' (no leading P).
+    assert_eq!(names[0], "O5'", "P-less 5' residue starts at O5'");
+
+    // No bond names a (nonexistent) phosphate or its OP oxygens.
+    for bond in &na.bonds {
+        for aid in [bond.a, bond.b] {
+            let nm = std::str::from_utf8(&na.atoms[aid.index as usize].name)
+                .unwrap()
+                .trim();
+            assert!(
+                !matches!(nm, "P" | "OP1" | "OP2" | "OP3"),
+                "no phosphate bond for a 5'-OH residue, found {nm}"
+            );
+        }
+    }
+    // No spurious segment break introduced (single residue).
+    assert!(na.segment_breaks.is_empty());
+}
+
+#[test]
+fn na_five_prime_oh_then_phosphodiester_to_next() {
+    // 5'-OH DA (no phosphate) followed by a normal phosphate-bearing DA.
+    // The phosphodiester bond O3'(0) -> P(1) must still form, using the
+    // P-less residue's shorter (5-atom) backbone offset for O3'.
+    let phosphate = |n: &str| matches!(n, "P" | "OP1" | "OP2" | "OP3");
+    let first = da_heavy_atoms(|n| !phosphate(n));
+    // Shift the second residue along x so its P sits within bonding range
+    // of the first residue's O3' (the ideal frames otherwise overlap).
+    let mut second = da_heavy_atoms(|_| true);
+    for a in &mut second {
+        a.position += Vec3::new(6.0, 0.0, 0.0);
+    }
+    let first_len = first.len();
+    let mut atoms = first;
+    atoms.extend(second);
+    let residues = vec![
+        na_residue("DA", 0..first_len, 1),
+        na_residue("DA", first_len..atoms.len(), 2),
+    ];
+    let mut alloc = EntityIdAllocator::new();
+    let id = alloc.allocate();
+    let na = NAEntity::new_normalized(
+        id,
+        MoleculeType::DNA,
+        atoms,
+        residues,
+        b'A',
+        None,
+        CompletionMode::HeavyOnly,
+    );
+    assert_eq!(na.residues.len(), 2, "both residues kept");
+    let name_of = |aid: AtomId| {
+        std::str::from_utf8(&na.atoms[aid.index as usize].name)
+            .unwrap()
+            .trim()
+            .to_owned()
+    };
+    let pairs: Vec<(String, String)> = na
+        .bonds
+        .iter()
+        .map(|b| (name_of(b.a), name_of(b.b)))
+        .collect();
+    assert!(
+        pairs.iter().any(|(a, b)| {
+            (a == "O3'" && b == "P") || (a == "P" && b == "O3'")
+        }),
+        "O3'(0)->P(1) phosphodiester must form across the 5'-OH terminus; got \
+         {pairs:?}"
+    );
+}
+
 #[test]
 fn na_drops_residue_missing_backbone() {
     // Residue with only P and O5': missing four backbone atoms.

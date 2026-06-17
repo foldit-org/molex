@@ -350,7 +350,7 @@ fn build_na(
     let (atoms, residues) =
         complete_na_residues(&atoms, &residues, mode, na_type);
     let (atoms, residues) =
-        canonicalize_na_residues(&atoms, &residues, pdb_chain_id);
+        canonicalize_na_residues(&atoms, &residues, pdb_chain_id, na_type);
     let segment_breaks = compute_na_segment_breaks(&atoms, &residues);
     let bonds = build_na_bonds(id, &atoms, &residues, &segment_breaks);
     NAEntity {
@@ -479,10 +479,39 @@ fn na_backbone_complete(
     Some(out)
 }
 
+/// Canonical residue name for the rosetta-bridge contract: two-char
+/// `DA`/`DC`/`DG`/`DT` for DNA, single-char `A`/`C`/`G`/`U` for RNA. The
+/// raw parsed name (single-char DNA, three-letter alias, ...) is mapped
+/// to this form so the bridge accepts the residue. A name that does not
+/// resolve to a known base is left verbatim.
+///
+/// A DNA `U`/`DU` has no deoxy base type and is canonicalized to `DT`
+/// here only if it parses to thymine; a true DNA uracil round-trips
+/// through ribose-uracil chemistry elsewhere and is out of this map.
+fn canonical_na_name(raw: [u8; 3], na_type: MoleculeType) -> [u8; 3] {
+    let Some(nt) = Nucleotide::from_code(raw) else {
+        return raw;
+    };
+    let name: &[u8] = match (na_type, nt) {
+        (MoleculeType::DNA, Nucleotide::A) => b"DA",
+        (MoleculeType::DNA, Nucleotide::C) => b"DC",
+        (MoleculeType::DNA, Nucleotide::G) => b"DG",
+        (MoleculeType::DNA, Nucleotide::T | Nucleotide::U) => b"DT",
+        (_, Nucleotide::A) => b"A",
+        (_, Nucleotide::C) => b"C",
+        (_, Nucleotide::G) => b"G",
+        (_, Nucleotide::T | Nucleotide::U) => b"U",
+    };
+    let mut out = [b' '; 3];
+    out[..name.len()].copy_from_slice(name);
+    out
+}
+
 fn canonicalize_na_residues(
     atoms: &[Atom],
     residues: &[Residue],
     pdb_chain_id: u8,
+    na_type: MoleculeType,
 ) -> (Vec<Atom>, Vec<Residue>) {
     let mut new_atoms: Vec<Atom> = Vec::with_capacity(atoms.len());
     let mut new_residues: Vec<Residue> = Vec::new();
@@ -510,7 +539,7 @@ fn canonicalize_na_residues(
             }
             let end = new_atoms.len();
             new_residues.push(Residue {
-                name: residue.name,
+                name: canonical_na_name(residue.name, na_type),
                 label_seq_id: residue.label_seq_id,
                 auth_seq_id: residue.auth_seq_id,
                 auth_comp_id: residue.auth_comp_id,

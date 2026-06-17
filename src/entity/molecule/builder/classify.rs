@@ -163,8 +163,10 @@ fn emit_non_polymer_chain(residues: &[ResidueAccum], ctx: &mut ChainCtx) {
 )]
 enum UnknownBucket {
     Protein,
-    DNA,
-    RNA,
+    /// A nucleic-acid residue. DNA vs RNA is decided once per chain by a
+    /// chemistry tally (see [`chain_na_type`]), not per residue, so a
+    /// single chain never splits across both.
+    NucleicAcid,
     Water,
     Solvent,
     Small(MoleculeType),
@@ -174,8 +176,7 @@ fn assign_unknown_bucket(r: &ResidueAccum, has_protein: bool) -> UnknownBucket {
     let mol_type = classify_residue(trim_res_name(&r.label_comp_id));
     match mol_type {
         MoleculeType::Protein => UnknownBucket::Protein,
-        MoleculeType::DNA => UnknownBucket::DNA,
-        MoleculeType::RNA => UnknownBucket::RNA,
+        MoleculeType::DNA | MoleculeType::RNA => UnknownBucket::NucleicAcid,
         MoleculeType::Water => UnknownBucket::Water,
         MoleculeType::Solvent => UnknownBucket::Solvent,
         MoleculeType::Ligand
@@ -184,11 +185,112 @@ fn assign_unknown_bucket(r: &ResidueAccum, has_protein: bool) -> UnknownBucket {
         | MoleculeType::Lipid => {
             if has_protein && residue_has_protein_backbone(r) {
                 UnknownBucket::Protein
+            } else if residue_has_na_backbone(r)
+                && !matches!(
+                    residue_sugar_chemistry(r),
+                    SugarChemistry::Indeterminate
+                )
+            {
+                // Legacy single-char names that the residue-name map mis-
+                // sorts (bare `T` -> Ligand) but whose sugar-phosphate
+                // chemistry is unambiguously nucleic acid.
+                UnknownBucket::NucleicAcid
             } else {
                 UnknownBucket::Small(mol_type)
             }
         }
     }
+}
+
+/// True if the residue carries the NA sugar-phosphate backbone atoms the
+/// canonicalize partition requires (`O5'`, `C5'`, `C4'`, `C3'`, `O3'`;
+/// `P` optional for a 5'-terminal residue). Names are v3-normalized at
+/// the builder choke point, so this matches the apostrophe-prime form.
+fn residue_has_na_backbone(r: &ResidueAccum) -> bool {
+    const REQUIRED: [&[u8]; 5] = [b"O5'", b"C5'", b"C4'", b"C3'", b"O3'"];
+    REQUIRED
+        .iter()
+        .all(|want| r.atoms.keys().any(|name| trim_atom_key(name) == *want))
+}
+
+/// Per-residue sugar chemistry: a `C2'`-bearing residue with `O2'`
+/// present is a ribose (RNA); `C2'` present and `O2'` absent is a
+/// deoxyribose (DNA). Atom names are already v3-normalized at the
+/// builder choke point, so the probe matches the canonical `O2'`/`C2'`.
+#[derive(Clone, Copy)]
+enum SugarChemistry {
+    Ribose,
+    Deoxyribose,
+    Indeterminate,
+}
+
+fn residue_sugar_chemistry(r: &ResidueAccum) -> SugarChemistry {
+    sugar_chemistry_from_keys(r.atoms.keys())
+}
+
+fn sugar_chemistry_from_keys<'a>(
+    keys: impl IntoIterator<Item = &'a [u8; 4]>,
+) -> SugarChemistry {
+    let mut has_o2prime = false;
+    let mut has_c2prime = false;
+    for name in keys {
+        match trim_atom_key(name) {
+            b"O2'" => has_o2prime = true,
+            b"C2'" => has_c2prime = true,
+            _ => {}
+        }
+    }
+    if has_o2prime {
+        SugarChemistry::Ribose
+    } else if has_c2prime {
+        SugarChemistry::Deoxyribose
+    } else {
+        SugarChemistry::Indeterminate
+    }
+}
+
+/// Decide a single `na_type` for a chain's nucleic-acid residues.
+///
+/// Counts ribose- vs deoxyribose-bearing residues across the selected
+/// residues and picks the majority (ties favor DNA: a deoxyribose strand
+/// must not gain a spurious 2'-OH). Falls back to the residue-name vote
+/// only when no residue carries a probeable sugar atom (e.g. a base-only
+/// parse), where chemistry is silent.
+fn chain_na_type(selected: &[&ResidueAccum]) -> MoleculeType {
+    let mut ribose = 0usize;
+    let mut deoxy = 0usize;
+    for r in selected {
+        match residue_sugar_chemistry(r) {
+            SugarChemistry::Ribose => ribose += 1,
+            SugarChemistry::Deoxyribose => deoxy += 1,
+            SugarChemistry::Indeterminate => {}
+        }
+    }
+    if ribose == 0 && deoxy == 0 {
+        let name_votes_dna = selected.iter().any(|r| {
+            classify_residue(trim_res_name(&r.label_comp_id))
+                == MoleculeType::DNA
+        });
+        return if name_votes_dna {
+            MoleculeType::DNA
+        } else {
+            MoleculeType::RNA
+        };
+    }
+    if ribose > deoxy {
+        MoleculeType::RNA
+    } else {
+        MoleculeType::DNA
+    }
+}
+
+/// 4-byte atom-name key trimmed of trailing space / NUL padding.
+fn trim_atom_key(name: &[u8; 4]) -> &[u8] {
+    let end = name
+        .iter()
+        .rposition(|&b| b != b' ' && b != b'\0')
+        .map_or(0, |i| i + 1);
+    &name[..end]
 }
 
 /// Full residue-name heuristic with the protein-merge logic: a residue
@@ -209,15 +311,8 @@ fn emit_unknown_chain(
         .map(|r| assign_unknown_bucket(r, has_protein))
         .collect();
 
-    emit_unknown_polymer(
-        UnknownBucket::Protein,
-        residues,
-        &buckets,
-        chain,
-        ctx,
-    );
-    emit_unknown_polymer(UnknownBucket::DNA, residues, &buckets, chain, ctx);
-    emit_unknown_polymer(UnknownBucket::RNA, residues, &buckets, chain, ctx);
+    emit_unknown_protein(residues, &buckets, chain, ctx);
+    emit_unknown_nucleic_acid(residues, &buckets, chain, ctx);
 
     for (r, bucket) in residues.iter().zip(buckets.iter()) {
         match bucket {
@@ -226,76 +321,70 @@ fn emit_unknown_chain(
             UnknownBucket::Small(mt) => {
                 emit_single_residue_small_molecule(r, *mt, ctx);
             }
-            UnknownBucket::Protein
-            | UnknownBucket::DNA
-            | UnknownBucket::RNA => {}
+            UnknownBucket::Protein | UnknownBucket::NucleicAcid => {}
         }
     }
 }
 
-fn emit_unknown_polymer(
+fn select_bucket<'a>(
+    residues: &'a [ResidueAccum],
+    buckets: &[UnknownBucket],
     target: UnknownBucket,
+) -> Vec<&'a ResidueAccum> {
+    residues
+        .iter()
+        .zip(buckets.iter())
+        .filter(|(_, b)| **b == target)
+        .map(|(r, _)| r)
+        .collect()
+}
+
+fn emit_unknown_protein(
     residues: &[ResidueAccum],
     buckets: &[UnknownBucket],
     chain: ChainBytes,
     ctx: &mut ChainCtx,
 ) {
-    let selected: Vec<&ResidueAccum> = residues
-        .iter()
-        .zip(buckets.iter())
-        .filter(|(_, b)| **b == target)
-        .map(|(r, _)| r)
-        .collect();
+    let selected = select_bucket(residues, buckets, UnknownBucket::Protein);
     if selected.is_empty() {
         return;
     }
     let (atoms, res_vec) = flatten_residues(selected.iter().copied());
     let id = ctx.allocator.allocate();
-    match target {
-        UnknownBucket::Protein => {
-            ctx.out.push(MoleculeEntity::Protein(
-                ProteinEntity::new_normalized(
-                    id,
-                    atoms,
-                    res_vec,
-                    chain.pdb_chain_id,
-                    chain.auth_asym_id,
-                    CompletionMode::HeavyOnly,
-                ),
-            ));
-        }
-        UnknownBucket::DNA => {
-            ctx.out.push(MoleculeEntity::NucleicAcid(
-                NAEntity::new_normalized(
-                    id,
-                    MoleculeType::DNA,
-                    atoms,
-                    res_vec,
-                    chain.pdb_chain_id,
-                    chain.auth_asym_id,
-                    CompletionMode::HeavyOnly,
-                ),
-            ));
-        }
-        UnknownBucket::RNA => {
-            ctx.out.push(MoleculeEntity::NucleicAcid(
-                NAEntity::new_normalized(
-                    id,
-                    MoleculeType::RNA,
-                    atoms,
-                    res_vec,
-                    chain.pdb_chain_id,
-                    chain.auth_asym_id,
-                    CompletionMode::HeavyOnly,
-                ),
-            ));
-        }
-        UnknownBucket::Water
-        | UnknownBucket::Solvent
-        | UnknownBucket::Small(_) => {
-            unreachable!("emit_unknown_polymer called with non-polymer bucket")
-        }
+    ctx.out
+        .push(MoleculeEntity::Protein(ProteinEntity::new_normalized(
+            id,
+            atoms,
+            res_vec,
+            chain.pdb_chain_id,
+            chain.auth_asym_id,
+            CompletionMode::HeavyOnly,
+        )));
+}
+
+fn emit_unknown_nucleic_acid(
+    residues: &[ResidueAccum],
+    buckets: &[UnknownBucket],
+    chain: ChainBytes,
+    ctx: &mut ChainCtx,
+) {
+    let selected = select_bucket(residues, buckets, UnknownBucket::NucleicAcid);
+    if selected.is_empty() {
+        return;
     }
+    let na_type = chain_na_type(&selected);
+    let (atoms, res_vec) = flatten_residues(selected.iter().copied());
+    let id = ctx.allocator.allocate();
+    ctx.out
+        .push(MoleculeEntity::NucleicAcid(NAEntity::new_normalized(
+            id,
+            na_type,
+            atoms,
+            res_vec,
+            chain.pdb_chain_id,
+            chain.auth_asym_id,
+            CompletionMode::HeavyOnly,
+        )));
 }
 
 fn trim_res_name(name: &[u8; 3]) -> &str {
@@ -350,4 +439,50 @@ fn flatten_residues<'a>(
         });
     }
     (atoms, out_residues)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key(s: &str) -> [u8; 4] {
+        let mut b = [b' '; 4];
+        for (i, c) in s.bytes().take(4).enumerate() {
+            b[i] = c;
+        }
+        b
+    }
+
+    #[test]
+    fn ribose_keys_classify_as_rna() {
+        let keys = [key("C2'"), key("O2'"), key("C1'")];
+        assert!(matches!(
+            sugar_chemistry_from_keys(keys.iter()),
+            SugarChemistry::Ribose
+        ));
+    }
+
+    #[test]
+    fn deoxyribose_keys_classify_as_dna() {
+        let keys = [key("C2'"), key("C1'"), key("O4'")];
+        assert!(matches!(
+            sugar_chemistry_from_keys(keys.iter()),
+            SugarChemistry::Deoxyribose
+        ));
+    }
+
+    #[test]
+    fn no_sugar_atoms_is_indeterminate() {
+        let keys = [key("N1"), key("C2"), key("N3")];
+        assert!(matches!(
+            sugar_chemistry_from_keys(keys.iter()),
+            SugarChemistry::Indeterminate
+        ));
+    }
+
+    #[test]
+    fn trim_atom_key_strips_padding() {
+        assert_eq!(trim_atom_key(&key("O2'")), b"O2'");
+        assert_eq!(trim_atom_key(&key("P")), b"P");
+    }
 }

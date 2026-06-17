@@ -18,8 +18,10 @@ use super::id::EntityIdAllocator;
 use super::{MoleculeEntity, MoleculeType};
 use crate::element::Element;
 
+mod atom_name_alias;
 mod classify;
 
+use atom_name_alias::normalize_legacy_atom_name;
 use classify::classify_chain;
 
 /// Maximum number of distinct chains the builder accepts. Matches the
@@ -186,8 +188,17 @@ impl EntityBuilder {
         clippy::needless_pass_by_value,
         reason = "AtomRow is moved into builder state in mmCIF / BCIF callers"
     )]
-    pub(crate) fn push_atom(&mut self, row: AtomRow) -> Result<(), BuildError> {
+    pub(crate) fn push_atom(
+        &mut self,
+        mut row: AtomRow,
+    ) -> Result<(), BuildError> {
         validate_coords(&row)?;
+        // Single choke point: rewriting both atom-name fields here feeds
+        // the v3 name into the residue HashMap key (`row.label_atom_id`),
+        // the classification atom-set probe, and the flattened
+        // `Atom.name` (`AtomChoice` carries both label and auth).
+        row.label_atom_id = normalize_legacy_atom_name(row.label_atom_id);
+        row.auth_atom_id = row.auth_atom_id.map(normalize_legacy_atom_name);
         self.ensure_chain(&row)?;
         let Some(chain) = self.chains.get_mut(&row.label_asym_id) else {
             unreachable!("chain inserted by ensure_chain");
@@ -507,6 +518,8 @@ fn resolve_auth_chain_byte(
 
 #[cfg(test)]
 mod completion_tests;
+#[cfg(test)]
+mod na_legacy_tests;
 #[cfg(test)]
 mod roundtrip_tests;
 #[cfg(test)]

@@ -327,6 +327,27 @@ fn na_five_prime_oh_then_phosphodiester_to_next() {
 }
 
 #[test]
+fn canonical_na_name_maps_to_bridge_contract() {
+    let nm = |s: &str, t: MoleculeType| {
+        std::str::from_utf8(&canonical_na_name(res_name_bytes(s), t))
+            .unwrap()
+            .trim()
+            .to_owned()
+    };
+    // DNA: single-char and alias forms collapse to the two-char contract.
+    assert_eq!(nm("A", MoleculeType::DNA), "DA");
+    assert_eq!(nm("DA", MoleculeType::DNA), "DA");
+    assert_eq!(nm("T", MoleculeType::DNA), "DT");
+    assert_eq!(nm("DG", MoleculeType::DNA), "DG");
+    // RNA: collapses to the single-char contract.
+    assert_eq!(nm("A", MoleculeType::RNA), "A");
+    assert_eq!(nm("U", MoleculeType::RNA), "U");
+    assert_eq!(nm("ADE", MoleculeType::RNA), "A");
+    // Unknown base name passes through verbatim.
+    assert_eq!(nm("XYZ", MoleculeType::DNA), "XYZ");
+}
+
+#[test]
 fn na_drops_residue_missing_backbone() {
     // Residue with only P and O5': missing four backbone atoms.
     // Two present atoms are below the rigid-fit anchor minimum, so

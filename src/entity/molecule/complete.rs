@@ -79,6 +79,17 @@ pub enum CompletionMode {
     AllAtom,
 }
 
+/// Whether canonicalize should carry parsed hydrogens through into the
+/// output entity. Only [`CompletionMode::HeavyOnly`] strips them: it is
+/// the file-ingest mode, where the host and rosetta consume heavy atoms
+/// only, so a fully-protonated input PDB must not leak its hydrogens into
+/// the canonical entity. `None` and `AllAtom` keep them (the former by
+/// preserving the parse verbatim, the latter because hydrogens are part
+/// of the all-atom model).
+pub(super) fn keep_hydrogens(mode: CompletionMode) -> bool {
+    mode != CompletionMode::HeavyOnly
+}
+
 /// What a single residue's completion is allowed to fabricate: the
 /// fabrication `mode` plus which polymer end the residue sits at (a lone
 /// residue is both termini at once). Decided by [`in_scope`].

@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use glam::Vec3;
 
 use super::atom::Atom;
-use super::complete::{complete_na_residues, CompletionMode};
+use super::complete::{complete_na_residues, keep_hydrogens, CompletionMode};
 use super::id::EntityId;
 use super::protein::trimmed_atom_name;
 use super::traits::{Entity, Polymer};
@@ -349,8 +349,13 @@ fn build_na(
 ) -> NAEntity {
     let (atoms, residues) =
         complete_na_residues(&atoms, &residues, mode, na_type);
-    let (atoms, residues) =
-        canonicalize_na_residues(&atoms, &residues, pdb_chain_id, na_type);
+    let (atoms, residues) = canonicalize_na_residues(
+        &atoms,
+        &residues,
+        pdb_chain_id,
+        na_type,
+        keep_hydrogens(mode),
+    );
     let segment_breaks = compute_na_segment_breaks(&atoms, &residues);
     let bonds = build_na_bonds(id, &atoms, &residues, &segment_breaks);
     NAEntity {
@@ -416,6 +421,10 @@ const NA_BACKBONE_NAMES: [&[u8]; 6] =
 /// heavy..., hydrogens...` (the 5' terminus may omit the leading `P`).
 /// Dropped residues' atoms are appended in input order and left
 /// unreferenced.
+///
+/// When `keep_hydrogens` is false (the heavy-only file-ingest mode), the
+/// parsed hydrogen bucket is dropped from every kept residue, yielding a
+/// heavy-only entity from a protonated input.
 struct NaResiduePartition {
     backbone_slots: [Option<usize>; 6],
     base_heavy: Vec<usize>,
@@ -512,6 +521,7 @@ fn canonicalize_na_residues(
     residues: &[Residue],
     pdb_chain_id: u8,
     na_type: MoleculeType,
+    keep_hydrogens: bool,
 ) -> (Vec<Atom>, Vec<Residue>) {
     let mut new_atoms: Vec<Atom> = Vec::with_capacity(atoms.len());
     let mut new_residues: Vec<Residue> = Vec::new();
@@ -534,8 +544,10 @@ fn canonicalize_na_residues(
             for idx in p.base_heavy {
                 new_atoms.push(atoms[idx].clone());
             }
-            for idx in p.hydrogens {
-                new_atoms.push(atoms[idx].clone());
+            if keep_hydrogens {
+                for idx in p.hydrogens {
+                    new_atoms.push(atoms[idx].clone());
+                }
             }
             let end = new_atoms.len();
             new_residues.push(Residue {

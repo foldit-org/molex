@@ -304,8 +304,10 @@ fn truncated_leucine_builds_to_full_in_scope_set() {
 
 #[test]
 fn already_complete_residue_gains_no_atoms() {
-    // Provide every in-scope ALA atom; completion must add nothing and
-    // must not duplicate.
+    // Provide every in-scope ALA heavy atom plus the input hydrogens a
+    // protonated parse carries; heavy-only completion must fabricate
+    // nothing, must not duplicate, and must STRIP the input hydrogens
+    // (the file-ingest entity is heavy-only).
     let mut atoms = vec![
         atom_at("N", Element::N, Vec3::new(0.0, 0.0, 0.0)),
         atom_at("CA", Element::C, Vec3::new(1.46, 0.0, 0.0)),
@@ -320,21 +322,87 @@ fn already_complete_residue_gains_no_atoms() {
     // Add the terminus atoms a complete chain end carries: the N-terminal
     // proton and the C-terminal carboxylate OXT (this single residue is
     // both chain termini, so heavy-only completion would otherwise build
-    // OXT). The pass must still not duplicate the in-scope atoms.
+    // OXT).
     atoms.push(atom_at("H", Element::H, Vec3::new(-0.5, 0.5, 0.0)));
     atoms.push(atom_at("OXT", Element::O, Vec3::new(3.3, 1.4, 0.0)));
-    let before = atoms.len();
     let protein = build_protein("ALA", atoms);
     let r = &protein.residues[0];
+    // The six heavy atoms survive (N, CA, C, O, CB, OXT); every input
+    // hydrogen is dropped under heavy-only.
+    let names = residue_atom_names(&protein.atoms, r);
+    let kept: BTreeSet<&String> = names.iter().collect();
+    let expected: BTreeSet<String> = ["N", "CA", "C", "O", "CB", "OXT"]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
     assert_eq!(
-        r.atom_range.len(),
-        before,
-        "no atoms added to an already-complete residue"
+        kept,
+        expected.iter().collect(),
+        "heavy-only keeps exactly the heavy atoms, no fabrication"
+    );
+    assert!(
+        r.atom_range
+            .clone()
+            .all(|i| protein.atoms[i].element != Element::H),
+        "no hydrogen survives heavy-only ingest"
     );
     // No duplicated names within the residue.
-    let names = residue_atom_names(&protein.atoms, r);
-    let unique: BTreeSet<&String> = names.iter().collect();
-    assert_eq!(unique.len(), names.len(), "no duplicate atom names");
+    assert_eq!(kept.len(), names.len(), "no duplicate atom names");
+}
+
+#[test]
+fn protonated_input_strips_h_heavy_only_keeps_h_all_atom() {
+    // A protonated ALA parse (backbone + CB + the variously-named input
+    // protons): under HeavyOnly the canonical entity must carry NO
+    // hydrogen, and under AllAtom the same input keeps/places them.
+    let protonated = || {
+        vec![
+            atom_at("N", Element::N, Vec3::new(0.0, 0.0, 0.0)),
+            atom_at("CA", Element::C, Vec3::new(1.46, 0.0, 0.0)),
+            atom_at("C", Element::C, Vec3::new(2.0, 1.4, 0.0)),
+            atom_at("O", Element::O, Vec3::new(1.3, 2.4, 0.0)),
+            atom_at("CB", Element::C, Vec3::new(2.0, -1.2, 0.6)),
+            atom_at("HA", Element::H, Vec3::new(0.6, -0.7, 0.0)),
+            atom_at("HB1", Element::H, Vec3::new(2.9, -1.1, 0.0)),
+            // Numeric-prefix proton (e.g. `1H`): the parser's `H`-first /
+            // element-H rule classifies it as a hydrogen all the same.
+            atom_at("1H", Element::H, Vec3::new(-0.5, 0.5, 0.0)),
+        ]
+    };
+    let n = protonated().len();
+    let id = EntityIdAllocator::new().allocate();
+
+    let heavy = ProteinEntity::new_normalized(
+        id,
+        protonated(),
+        vec![residue("ALA", 0..n)],
+        b'A',
+        None,
+        CompletionMode::HeavyOnly,
+    );
+    let r = &heavy.residues[0];
+    assert!(
+        r.atom_range
+            .clone()
+            .all(|i| heavy.atoms[i].element != Element::H),
+        "heavy-only ingest strips every input hydrogen"
+    );
+
+    let all = ProteinEntity::new_normalized(
+        id,
+        protonated(),
+        vec![residue("ALA", 0..n)],
+        b'A',
+        None,
+        CompletionMode::AllAtom,
+    );
+    let r = &all.residues[0];
+    assert!(
+        r.atom_range
+            .clone()
+            .any(|i| all.atoms[i].element == Element::H),
+        "all-atom keeps/places hydrogens for the same input"
+    );
 }
 
 #[test]

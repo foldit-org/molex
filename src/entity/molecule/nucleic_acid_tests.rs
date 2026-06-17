@@ -327,6 +327,55 @@ fn na_five_prime_oh_then_phosphodiester_to_next() {
 }
 
 #[test]
+fn protonated_na_strips_h_heavy_only_keeps_h_otherwise() {
+    // A protonated DA parse (every heavy atom at real ideal geometry plus
+    // an input base proton H8): under HeavyOnly the canonical entity must
+    // carry NO hydrogen; the pure `new` path (CompletionMode::None) keeps
+    // the input proton verbatim.
+    let protonated = || {
+        let mut atoms = da_heavy_atoms(|_| true);
+        atoms.push(atom_with("H8", Element::H, 50.0));
+        atoms
+    };
+    let n = protonated().len();
+    let mut alloc = EntityIdAllocator::new();
+    let id = alloc.allocate();
+
+    let heavy = NAEntity::new_normalized(
+        id,
+        MoleculeType::DNA,
+        protonated(),
+        vec![na_residue("DA", 0..n, 1)],
+        b'A',
+        None,
+        CompletionMode::HeavyOnly,
+    );
+    let r = &heavy.residues[0];
+    assert!(
+        r.atom_range
+            .clone()
+            .all(|i| heavy.atoms[i].element != Element::H),
+        "heavy-only NA ingest strips every input hydrogen"
+    );
+
+    let kept = NAEntity::new(
+        id,
+        MoleculeType::DNA,
+        protonated(),
+        vec![na_residue("DA", 0..n, 1)],
+        b'A',
+        None,
+    );
+    let r = &kept.residues[0];
+    assert!(
+        r.atom_range
+            .clone()
+            .any(|i| kept.atoms[i].element == Element::H),
+        "the pure (None) path keeps the input hydrogen"
+    );
+}
+
+#[test]
 fn canonical_na_name_maps_to_bridge_contract() {
     let nm = |s: &str, t: MoleculeType| {
         std::str::from_utf8(&canonical_na_name(res_name_bytes(s), t))

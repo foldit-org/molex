@@ -6,7 +6,9 @@
 use glam::Vec3;
 
 use super::atom::Atom;
-use super::complete::{complete_protein_residues, CompletionMode};
+use super::complete::{
+    complete_protein_residues, keep_hydrogens, CompletionMode,
+};
 use super::id::EntityId;
 use super::traits::{Entity, Polymer};
 use super::{MoleculeType, Residue};
@@ -435,8 +437,12 @@ fn build_protein(
     continuous: bool,
 ) -> ProteinEntity {
     let (atoms, residues) = complete_protein_residues(&atoms, &residues, mode);
-    let (atoms, residues) =
-        canonicalize_protein_residues(&atoms, &residues, pdb_chain_id);
+    let (atoms, residues) = canonicalize_protein_residues(
+        &atoms,
+        &residues,
+        pdb_chain_id,
+        keep_hydrogens(mode),
+    );
     let segment_breaks = if continuous {
         Vec::new()
     } else {
@@ -464,6 +470,11 @@ fn build_protein(
 /// Residues missing any of the four backbone atoms are dropped from
 /// the returned `Vec<Residue>`; their atoms are appended to the output
 /// `Vec<Atom>` in input order and are left unreferenced.
+///
+/// When `keep_hydrogens` is false (the heavy-only file-ingest mode), the
+/// parsed hydrogen bucket is dropped from every kept residue, so a
+/// protonated input yields a heavy-only entity. Dropped residues still
+/// carry all their atoms through unreferenced regardless.
 struct ProteinResiduePartition {
     n: Option<usize>,
     ca: Option<usize>,
@@ -508,6 +519,7 @@ fn canonicalize_protein_residues(
     atoms: &[Atom],
     residues: &[Residue],
     pdb_chain_id: u8,
+    keep_hydrogens: bool,
 ) -> (Vec<Atom>, Vec<Residue>) {
     let mut new_atoms: Vec<Atom> = Vec::with_capacity(atoms.len());
     let mut new_residues: Vec<Residue> = Vec::new();
@@ -530,8 +542,10 @@ fn canonicalize_protein_residues(
             for idx in p.sidechain_heavy {
                 new_atoms.push(atoms[idx].clone());
             }
-            for idx in p.hydrogens {
-                new_atoms.push(atoms[idx].clone());
+            if keep_hydrogens {
+                for idx in p.hydrogens {
+                    new_atoms.push(atoms[idx].clone());
+                }
             }
             let end = new_atoms.len();
             new_residues.push(Residue {

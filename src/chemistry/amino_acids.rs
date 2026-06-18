@@ -110,6 +110,33 @@ impl AminoAcid {
         }
     }
 
+    /// 1-letter amino acid code (uppercase ASCII).
+    #[must_use]
+    pub const fn one_letter(self) -> u8 {
+        match self {
+            Self::Ala => b'A',
+            Self::Arg => b'R',
+            Self::Asn => b'N',
+            Self::Asp => b'D',
+            Self::Cys => b'C',
+            Self::Gln => b'Q',
+            Self::Glu => b'E',
+            Self::Gly => b'G',
+            Self::His => b'H',
+            Self::Ile => b'I',
+            Self::Leu => b'L',
+            Self::Lys => b'K',
+            Self::Met => b'M',
+            Self::Phe => b'F',
+            Self::Pro => b'P',
+            Self::Ser => b'S',
+            Self::Thr => b'T',
+            Self::Trp => b'W',
+            Self::Tyr => b'Y',
+            Self::Val => b'V',
+        }
+    }
+
     /// Heavy-atom intra-residue bonds beyond the universal N-CA, CA-C,
     /// and C=O backbone bonds.
     ///

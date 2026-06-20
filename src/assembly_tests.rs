@@ -267,6 +267,53 @@ fn recompute_ss_populates_secondary_structure() {
 }
 
 #[test]
+fn carry_ss_from_copies_matching_entities() {
+    // A fresh (SS-free) snapshot over the same entity set inherits the
+    // source's SS for entities whose residue count matches, leaving its
+    // own ss_types entry populated without running DSSP.
+    let mut alloc = EntityIdAllocator::new();
+    let protein = make_dipeptide(&mut alloc, b'A', Vec3::ZERO);
+    let id = protein.id();
+
+    let mut src = Assembly::new(vec![protein.clone()]);
+    src.recompute_ss();
+    assert_eq!(src.ss_types(id).len(), 2);
+
+    let mut dst = Assembly::new(vec![protein]);
+    assert!(dst.ss_types(id).is_empty());
+
+    dst.carry_ss_from(&src);
+    assert_eq!(
+        dst.ss_types(id),
+        src.ss_types(id),
+        "matching-length entity must inherit the source SS"
+    );
+}
+
+#[test]
+fn carry_ss_from_skips_residue_count_mismatch() {
+    // A length mismatch (a different entity in the source, or an indel)
+    // leaves the target's entry untouched: a stale SS can never be carried
+    // onto the wrong residues.
+    let mut alloc = EntityIdAllocator::new();
+    let dst_protein = make_dipeptide(&mut alloc, b'A', Vec3::ZERO);
+    let id = dst_protein.id();
+
+    // Source has SS under the SAME id but a different (single-residue)
+    // length, so the guard must reject it.
+    let src_protein = cys_residue_with_sg_with_id(id, b'A', Vec3::ZERO);
+    let mut src = Assembly::new(vec![src_protein]);
+    src.recompute_ss();
+
+    let mut dst = Assembly::new(vec![dst_protein]);
+    dst.carry_ss_from(&src);
+    assert!(
+        dst.ss_types(id).is_empty(),
+        "a residue-count mismatch must leave ss_types empty"
+    );
+}
+
+#[test]
 fn deserialize_assembly_is_ss_free() {
     // The wire path (serialize -> deserialize_assembly -> Assembly::new)
     // is the per-frame streaming hot path; it must not run DSSP. Every

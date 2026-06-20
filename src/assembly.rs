@@ -235,6 +235,33 @@ impl Assembly {
         self.ss_types.get(&id).map_or(&[], |ss| ss.as_slice())
     }
 
+    /// Copy per-entity secondary structure from `src` onto `self`, in place,
+    /// for every entity `self` and `src` share whose SS vector length matches.
+    ///
+    /// Lets a freshly built coordinate-only snapshot inherit the secondary
+    /// structure of an earlier snapshot without re-running DSSP (the streaming
+    /// render path: a mid-edit frame carries the last committed SS forward so
+    /// the cartoon keeps its helices/sheets while coordinates animate).
+    ///
+    /// For each entity present in `self`, the source `ss_types` entry is copied
+    /// only when its length equals the length [`Assembly::recompute_ss`] would
+    /// produce for that entity here (the per-entity backbone-residue count).
+    /// A mismatch (an indel, a backbone-completeness change, a non-protein, or
+    /// no source entry) leaves `self`'s entry untouched (empty unless already
+    /// set), so a stale SS can never be indexed against the wrong residues.
+    /// The `Arc<Vec<SSType>>` is shared, not deep-copied.
+    pub fn carry_ss_from(&mut self, src: &Assembly) {
+        for entity in &self.entities {
+            let id = entity.id();
+            let Some(src_ss) = src.ss_types.get(&id) else {
+                continue;
+            };
+            if src_ss.len() == ss_len_for_entity(entity.as_ref()) {
+                let _ = self.ss_types.insert(id, Arc::clone(src_ss));
+            }
+        }
+    }
+
     /// Current rendering connections, keyed by category.
     #[must_use]
     pub fn connections(&self) -> &HashMap<ConnectionType, Vec<AtomLink>> {
@@ -380,6 +407,15 @@ impl Assembly {
     fn after_mutation(&mut self) {
         self.generation = self.generation.saturating_add(1);
     }
+}
+
+/// Length the `ss_types` entry for `entity` would have after
+/// [`Assembly::recompute_ss`]: the count of residues with a complete
+/// backbone (`0` for a non-protein or a protein with no complete backbone
+/// residues). Mirrors the sizing in [`compute_per_entity_ss`] so the
+/// `carry_ss_from` length guard uses the same notion of "residue count".
+fn ss_len_for_entity(entity: &MoleculeEntity) -> usize {
+    entity.as_protein().map_or(0, |p| p.to_backbone().len())
 }
 
 fn compute_per_entity_ss<E: std::borrow::Borrow<MoleculeEntity>>(

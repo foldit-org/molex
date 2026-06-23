@@ -8,6 +8,10 @@ pub mod pdb;
 
 #[cfg(feature = "python")]
 pub mod atomworks;
+#[cfg(feature = "python")]
+pub mod ml;
+#[cfg(feature = "python")]
+pub(crate) mod reconstruct;
 
 // Entity-first re-exports.
 pub use bcif::{

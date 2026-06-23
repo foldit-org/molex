@@ -103,6 +103,12 @@ fn molex(_py: Python, m: &Bound<PyModule>) -> PyResult<()> {
         m
     )?)?;
     m.add_function(wrap_pyfunction!(adapters::atomworks::parse_file_full, m)?)?;
+    // ML model output -> entities: build directly from host numpy columns of a
+    // Boltz Structure (folding-model plugins), no Biotite AtomArray in between.
+    m.add_function(wrap_pyfunction!(
+        adapters::ml::boltz_structure_to_entities,
+        m
+    )?)?;
 
     // Object graph: Assembly -> Entity -> Residue (the default Python
     // navigation surface; atoms via `to_arrays`).

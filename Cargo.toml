@@ -49,9 +49,6 @@ c-api = ["dep:cbindgen"]
 criterion = { version = "0.5", features = ["html_reports"] }
 testing_logger = "0.1"
 
-[package.metadata.cargo-machete]
-ignored = ["numpy"]
-
 [[bench]]
 name = "parsing"
 harness = false

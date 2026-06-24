@@ -78,11 +78,37 @@ class Assembly:
     def recompute_ss(self) -> None:
         """Recompute per-entity secondary structure in place (opt-in DSSP)."""
         ...
+    def secondary_structure(self) -> list[str]:
+        """Per-entity Q3 secondary structure, one string per entity aligned to
+        `entities()` order. Each protein entity's string has one char per
+        residue: `'H'` (helix), `'E'` (sheet), `'C'` (coil); non-protein
+        entities get `""`. Reads the SS from `recompute_ss`; call that first,
+        otherwise every protein string is all-`'C'`."""
+        ...
+    def sasa(self, probe_radius: float = 1.4) -> float:
+        """Total Shrake-Rupley solvent-accessible surface area (Angstrom^2)
+        over protein atoms. Water, ions, ligands, and nucleic acids are
+        excluded (freesasa/biotite protein-scope convention). Uses Bondi van
+        der Waals radii and ~960 test points per atom; `probe_radius` is the
+        solvent radius in Angstroms (1.4 for water)."""
+        ...
     def entities(self) -> list[Entity]:
         """The assembly's entities, in order."""
         ...
     def to_arrays(self) -> AtomArrays:
         """Every atom as per-atom numpy columns (Biotite-free)."""
+        ...
+    def covalent_bonds(self) -> list[tuple[int, int]]:
+        """Distance-based covalent bonds over the whole assembly, as atom-index
+        pairs `(i, j)` (with `i < j`) in `to_arrays()` flat order. Same
+        distance/covalent-radius perception molex uses for ligands, run across
+        every atom, so it bonds across residue and entity boundaries.
+        Hydrogen-to-hydrogen contacts are not bonded."""
+        ...
+    def disulfides(self) -> list[tuple[int, int]]:
+        """Cys SG-SG disulfide bonds within the disulfide distance band, intra-
+        and inter-chain alike, as atom-index pairs in `to_arrays()` flat
+        order."""
         ...
     def __len__(self) -> int:
         """Number of entities in the assembly."""
@@ -135,6 +161,14 @@ class Entity:
         ...
     def residues(self) -> list[Residue]:
         """The entity's residues, in order. Empty for a non-polymer entity."""
+        ...
+    def phi_psi(self) -> list[tuple[float | None, float | None]]:
+        """Backbone (phi, psi) torsion angles per residue, in degrees, in
+        residue order (aligned 1:1 with `residues()`). Each element is `None`
+        at a chain terminus or break, or when the residue (or its neighbour)
+        lacks a complete N/CA/C backbone: `phi` is `None` for the first
+        residue, `psi` for the last. Angles are in `(-180, 180]`. Empty list
+        for a non-protein entity."""
         ...
     def to_arrays(self) -> AtomArrays:
         """This entity's atoms as per-atom numpy columns (Biotite-free)."""
@@ -374,6 +408,18 @@ class SetVariantsView:
     entity_id: int
     residue_idx: int
     variants: list[Variant]
+
+# ---------------------------------------------------------------------------
+# Scalar analysis free functions
+# ---------------------------------------------------------------------------
+
+def rmsd(a: Any, b: Any) -> float:
+    """Optimal-superposition RMSD between two `(N, 3)` coordinate sets. Each
+    argument is an array-like of shape `(N, 3)`: a numpy array or a sequence of
+    `(x, y, z)` tuples. Superposes `a` onto `b` with the Kabsch algorithm and
+    returns the scalar RMSD, invariant to any rigid motion of either set. Raises
+    `ValueError` if the sets differ in length or have fewer than three points."""
+    ...
 
 # ---------------------------------------------------------------------------
 # Transport / serialization free functions

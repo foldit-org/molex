@@ -368,13 +368,20 @@ fn decode_atom_site(
         if label_asym.is_empty() {
             continue;
         }
+        let auth_seq = opt_int_at(auth_seq_id.as_ref(), i);
         #[allow(
             clippy::cast_possible_truncation,
             reason = "BCIF doubles narrow to f32 for storage"
         )]
         out.push(AtomSiteRow {
             label_asym_id: label_asym,
-            label_seq_id: int_at_default(label_seq_id.as_ref(), i, 0),
+            // Waters/non-polymer rows carry an absent `label_seq_id`; their
+            // per-instance discriminator lives in `auth_seq_id`. Mirror the
+            // PDB path (author number into the seq slot) so each gets a
+            // distinct residue key instead of all collapsing onto 0.
+            label_seq_id: opt_int_at(label_seq_id.as_ref(), i)
+                .or(auth_seq)
+                .unwrap_or(0),
             label_comp_id: string_at(&label_comp_id, i),
             label_atom_id: string_at(&label_atom_id, i),
             label_entity_id: opt_string_at(label_entity_id.as_ref(), i),
@@ -382,7 +389,7 @@ fn decode_atom_site(
                 .and_then(|s| s.bytes().next())
                 .filter(|&b| b != b' '),
             auth_asym_id: opt_string_at(auth_asym_id.as_ref(), i),
-            auth_seq_id: opt_int_at(auth_seq_id.as_ref(), i),
+            auth_seq_id: auth_seq,
             auth_comp_id: opt_string_at(auth_comp_id.as_ref(), i),
             auth_atom_id: opt_string_at(auth_atom_id.as_ref(), i),
             ins_code: opt_string_at(pdb_ins_code.as_ref(), i)
@@ -719,14 +726,6 @@ fn float_at_default(s: &Floats, i: usize, default: f64) -> f64 {
 
 fn float_at_opt(s: Option<&Floats>, i: usize, default: f64) -> f64 {
     s.map_or(default, |s| float_at_default(s, i, default))
-}
-
-fn int_at_default(s: Option<&Ints>, i: usize, default: i32) -> i32 {
-    let Some(s) = s else { return default };
-    if cell_masked(s.mask.as_ref(), i) {
-        return default;
-    }
-    s.data.get(i).copied().unwrap_or(default)
 }
 
 fn opt_string_at(s: Option<&Strings>, i: usize) -> Option<String> {

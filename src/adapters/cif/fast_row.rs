@@ -94,11 +94,18 @@ impl RowValues {
                 .filter(|&b| b != b' ')
         };
 
+        let auth_seq_id = opt_int(values, cols.auth_seq_id);
         Self {
             label_atom_id: take(cols.label_atom_id),
             label_comp_id: take(cols.label_comp_id),
             label_asym_id: take(cols.label_asym_id),
-            label_seq_id: opt_int(values, cols.label_seq_id).unwrap_or(0),
+            // Waters/non-polymer rows carry `label_seq_id = "."`; their
+            // per-instance discriminator lives in `auth_seq_id`. Mirror the
+            // PDB path (author number into the seq slot) so each gets a
+            // distinct residue key instead of all collapsing onto 0.
+            label_seq_id: opt_int(values, cols.label_seq_id)
+                .or(auth_seq_id)
+                .unwrap_or(0),
             label_entity_id: opt_str(cols.label_entity_id),
             label_alt_id: opt_byte(cols.label_alt_id),
             cartn_x: values.get(cols.cartn_x).and_then(|s| parse_cif_float(s)),
@@ -113,7 +120,7 @@ impl RowValues {
                 .and_then(|n| i8::try_from(n).ok())
                 .unwrap_or(0),
             auth_asym_id: opt_str(cols.auth_asym_id),
-            auth_seq_id: opt_int(values, cols.auth_seq_id),
+            auth_seq_id,
             auth_comp_id: opt_str(cols.auth_comp_id),
             auth_atom_id: opt_str(cols.auth_atom_id),
         }

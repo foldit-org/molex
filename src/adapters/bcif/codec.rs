@@ -572,13 +572,29 @@ fn decode_delta(input: ColData, enc: &MsgVal) -> Result<ColData, AdapterError> {
     Ok(ColData::IntArray(ints))
 }
 
+/// Continuation sentinels for an IntegerPacking width.
+///
+/// BinaryCIF has two distinct IntegerPacking variants. Unsigned packing
+/// saturates only at an upper limit (`0xFF`/`0xFFFF` for byteCount 1/2); a
+/// `0` is a legitimate value, never a continuation marker. Signed packing
+/// saturates at both an upper (`0x7F`/`0x7FFF`) and a lower
+/// (`-upper - 1`, i.e. `-0x80`/`-0x8000`) limit. A token equal to a sentinel
+/// means "this width's max magnitude was reached, keep accumulating."
+struct PackingLimits {
+    upper: i32,
+    /// `None` for unsigned widths, which have no lower sentinel.
+    lower: Option<i32>,
+}
+
 /// Extract integer-packing parameters from a BinaryCIF encoding node.
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
     reason = "byteCount and srcSize are small non-negative per spec"
 )]
-fn int_packing_params(enc: &MsgVal) -> Result<(usize, i32, i32), AdapterError> {
+fn int_packing_params(
+    enc: &MsgVal,
+) -> Result<(usize, PackingLimits), AdapterError> {
     let byte_count =
         enc.get("byteCount")
             .and_then(MsgVal::as_i64)
@@ -598,20 +614,38 @@ fn int_packing_params(enc: &MsgVal) -> Result<(usize, i32, i32), AdapterError> {
         .and_then(MsgVal::as_bool)
         .unwrap_or(false);
 
-    let (upper, lower) = match (is_unsigned, byte_count) {
-        (true, 1) => (0xFF_i32, 0_i32),
-        (true, 2) => (0xFFFF_i32, 0_i32),
-        (true, 4) => (i32::MAX, 0_i32),
-        (false, 1) => (0x7F_i32, -0x7F_i32),
-        (false, 2) => (0x7FFF_i32, -0x7FFF_i32),
-        (false, 4) => (i32::MAX, -i32::MAX),
+    let limits = match (is_unsigned, byte_count) {
+        (true, 1) => PackingLimits {
+            upper: 0xFF,
+            lower: None,
+        },
+        (true, 2) => PackingLimits {
+            upper: 0xFFFF,
+            lower: None,
+        },
+        (true, 4) => PackingLimits {
+            upper: i32::MAX,
+            lower: None,
+        },
+        (false, 1) => PackingLimits {
+            upper: 0x7F,
+            lower: Some(-0x80),
+        },
+        (false, 2) => PackingLimits {
+            upper: 0x7FFF,
+            lower: Some(-0x8000),
+        },
+        (false, 4) => PackingLimits {
+            upper: i32::MAX,
+            lower: Some(i32::MIN),
+        },
         _ => {
             return Err(AdapterError::InvalidFormat(format!(
                 "IntegerPacking unsupported byteCount={byte_count}"
             )))
         }
     };
-    Ok((src_size, upper, lower))
+    Ok((src_size, limits))
 }
 
 fn decode_integer_packing(
@@ -624,14 +658,15 @@ fn decode_integer_packing(
         ));
     };
 
-    let (src_size, upper_limit, lower_limit) = int_packing_params(enc)?;
+    let (src_size, limits) = int_packing_params(enc)?;
+    let is_sentinel = |t: i32| t == limits.upper || limits.lower == Some(t);
     let mut result = Vec::with_capacity(src_size);
     let mut i = 0;
 
     while i < packed.len() && result.len() < src_size {
         let mut value: i32 = 0;
         let mut t = packed[i];
-        while t == upper_limit || t == lower_limit {
+        while is_sentinel(t) {
             value += t;
             i += 1;
             if i >= packed.len() {
@@ -757,4 +792,38 @@ fn build_encoded_data(bytes: &[u8], encodings: &[MsgVal]) -> MsgVal {
             MsgVal::Array(encodings.to_vec()),
         ),
     ])
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
+mod tests {
+    use std::path::PathBuf;
+
+    use crate::adapters::bcif::bcif_to_entities;
+    use crate::entity::molecule::MoleculeEntity;
+
+    /// Real RCSB `.bcif` exercises unsigned IntegerPacking (`auth_seq_id`,
+    /// `label_seq_id`). A leading `0` data byte must decode as the value `0`,
+    /// not as a continuation sentinel; getting that wrong shifts the decoded
+    /// array by one and trips the downstream RunLength validators, which is
+    /// how this file used to fail to decode at all. 1UBQ is 660 atoms
+    /// (biotite) including 58 waters.
+    #[test]
+    fn rcsb_1ubq_decodes_660_atoms() {
+        let path: PathBuf = [
+            env!("CARGO_MANIFEST_DIR"),
+            "tests",
+            "data",
+            "bcif",
+            "1ubq.bcif",
+        ]
+        .iter()
+        .collect();
+
+        let bytes = std::fs::read(&path).expect("read 1ubq.bcif fixture");
+        let entities = bcif_to_entities(&bytes).expect("1ubq.bcif must decode");
+        let atoms: usize =
+            entities.iter().map(MoleculeEntity::atom_count).sum();
+        assert_eq!(atoms, 660);
+    }
 }

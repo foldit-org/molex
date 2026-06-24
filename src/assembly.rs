@@ -235,6 +235,24 @@ impl Assembly {
         self.ss_types.get(&id).map_or(&[], |ss| ss.as_slice())
     }
 
+    /// Per-residue secondary structure for a protein entity, aligned to its
+    /// full residue list.
+    ///
+    /// Returns one [`SSType`] per residue (`Vec` length ==
+    /// `entity.residue_count()`), in residue order, or `None` for a
+    /// non-protein entity. The stored [`Self::ss_types`] vector only covers
+    /// backbone-complete residues (the ones DSSP assigns); this spreads it
+    /// back across every residue, emitting [`SSType::Coil`] for the
+    /// backbone-incomplete residues DSSP skips, so the result indexes 1:1
+    /// against the entity's residues. Without a prior
+    /// [`Self::recompute_ss`] the stored vector is empty, so every residue
+    /// reports `Coil`.
+    #[must_use]
+    pub fn ss_per_residue(&self, id: EntityId) -> Option<Vec<SSType>> {
+        let protein = self.entity(id)?.as_protein()?;
+        Some(protein.ss_per_residue(self.ss_types(id)))
+    }
+
     /// Copy per-entity secondary structure from `src` onto `self`, in place,
     /// for every entity `self` and `src` share whose SS vector length matches.
     ///

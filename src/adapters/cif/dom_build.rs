@@ -338,19 +338,26 @@ fn decode_row(cols: &AtomSiteCols, row: &DomRow) -> Option<AtomRow> {
         .and_then(|n| i8::try_from(n).ok())
         .unwrap_or(0);
 
+    let auth_seq_id = cols.auth_seq_id.and_then(cell).and_then(Value::as_i32);
+
     #[allow(clippy::cast_possible_truncation)]
     Some(AtomRow {
         label_asym_id: label_asym.to_owned(),
+        // Waters/non-polymer rows carry `label_seq_id = "."`; their
+        // per-instance discriminator lives in `auth_seq_id`. Mirror the
+        // PDB path (author number into the seq slot) so each gets a
+        // distinct residue key instead of all collapsing onto 0.
         label_seq_id: cols
             .label_seq_id
             .and_then(cell)
             .and_then(Value::as_i32)
+            .or(auth_seq_id)
             .unwrap_or(0),
         label_comp_id: name_to_bytes::<3>(label_comp),
         label_atom_id: name_to_bytes::<4>(label_atom),
         label_entity_id: cell_str(cols.label_entity_id).map(str::to_owned),
         auth_asym_id: cell_str(cols.auth_asym_id).map(str::to_owned),
-        auth_seq_id: cols.auth_seq_id.and_then(cell).and_then(Value::as_i32),
+        auth_seq_id,
         auth_comp_id: cell_str(cols.auth_comp_id).map(name_to_bytes::<3>),
         auth_atom_id: cell_str(cols.auth_atom_id).map(name_to_bytes::<4>),
         alt_loc: cell_str(cols.label_alt_id)

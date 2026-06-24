@@ -19,6 +19,7 @@ use super::resolve_index;
 use super::walk::{entity_kind_str, molecule_type_str};
 use crate::adapters::atomworks::collect_atom_data;
 use crate::entity::molecule::polymer::Residue;
+use crate::entity::molecule::protein::ProteinEntity;
 use crate::entity::molecule::MoleculeEntity;
 
 /// Python handle for one entity in an `Assembly`. Reads through the
@@ -100,6 +101,19 @@ impl PyEntity {
                     .filter_map(|i| PyResidue::new(Arc::clone(&self.inner), i))
                     .collect()
             })
+            .unwrap_or_default()
+    }
+
+    /// Backbone (φ, ψ) torsion angles per residue, in degrees, in residue
+    /// order: one `(phi, psi)` tuple per residue, aligned 1:1 with
+    /// `residues()`. Either element is `None` at a terminus or chain break,
+    /// or when the residue (or its neighbour) lacks a complete N/CA/C
+    /// backbone. Empty for a non-protein entity.
+    #[must_use]
+    pub fn phi_psi(&self) -> Vec<(Option<f32>, Option<f32>)> {
+        self.inner
+            .as_protein()
+            .map(ProteinEntity::phi_psi)
             .unwrap_or_default()
     }
 

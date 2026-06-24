@@ -12,7 +12,7 @@ use super::complete::{
 use super::id::EntityId;
 use super::traits::{Entity, Polymer};
 use super::{MoleculeType, Residue};
-use crate::analysis::BondOrder;
+use crate::analysis::{BondOrder, SSType};
 use crate::atom_id::AtomId;
 use crate::bond::CovalentBond;
 use crate::chemistry::amino_acids::AminoAcid;
@@ -361,6 +361,77 @@ impl ProteinEntity {
         self.residues
             .iter()
             .filter_map(|r| extract_backbone_from_residue(&self.atoms, r))
+            .collect()
+    }
+
+    /// Spread a per-backbone-residue secondary-structure vector across all
+    /// residues, in residue order.
+    ///
+    /// `backbone_ss` holds one entry per backbone-complete residue, in the
+    /// order [`Self::to_backbone`] yields them. This walks every residue
+    /// through the same backbone-completeness predicate `to_backbone` uses,
+    /// consuming one `backbone_ss` entry per complete residue and emitting
+    /// [`SSType::Coil`] for residues `to_backbone` drops. The result has one
+    /// entry per residue (`residues.len()`), so it indexes 1:1 against the
+    /// residue list. Excess `backbone_ss` entries are ignored; if it runs
+    /// short the remaining complete residues also fall back to `Coil`.
+    #[must_use]
+    pub(crate) fn ss_per_residue(&self, backbone_ss: &[SSType]) -> Vec<SSType> {
+        let mut next = backbone_ss.iter();
+        self.residues
+            .iter()
+            .map(|r| {
+                if residue_has_backbone(&self.atoms, r) {
+                    next.next().copied().unwrap_or(SSType::Coil)
+                } else {
+                    SSType::Coil
+                }
+            })
+            .collect()
+    }
+
+    /// Backbone (φ, ψ) torsion angles per residue, in degrees, in residue
+    /// order, one entry per residue (`residues.len()`).
+    ///
+    /// - φ(i) = dihedral( C(i-1), N(i), CA(i), C(i) )
+    /// - ψ(i) = dihedral( N(i), CA(i), C(i), N(i+1) )
+    ///
+    /// An angle is `None` when an input atom is unavailable: φ at the first
+    /// residue (no preceding C), ψ at the last (no following N), either side of
+    /// a segment break (no peptide bond across it), and for any residue (or its
+    /// neighbour) lacking a complete N/CA/C backbone — the same completeness
+    /// notion [`extract_backbone_from_residue`] enforces. Results are in
+    /// (−180, 180].
+    #[must_use]
+    pub fn phi_psi(&self) -> Vec<(Option<f32>, Option<f32>)> {
+        let n = self.residues.len();
+        let bb: Vec<Option<ResidueBackbone>> = self
+            .residues
+            .iter()
+            .map(|r| extract_backbone_from_residue(&self.atoms, r))
+            .collect();
+        let breaks: std::collections::HashSet<usize> =
+            self.segment_breaks.iter().copied().collect();
+
+        (0..n)
+            .map(|i| {
+                let curr = bb[i].as_ref();
+                let phi = (i > 0 && !breaks.contains(&i))
+                    .then(|| (bb[i - 1].as_ref(), curr))
+                    .and_then(|(prev, curr)| {
+                        let prev = prev?;
+                        let curr = curr?;
+                        Some(dihedral_deg(prev.c, curr.n, curr.ca, curr.c))
+                    });
+                let psi = (i + 1 < n && !breaks.contains(&(i + 1)))
+                    .then(|| (curr, bb[i + 1].as_ref()))
+                    .and_then(|(curr, next)| {
+                        let curr = curr?;
+                        let next = next?;
+                        Some(dihedral_deg(curr.n, curr.ca, curr.c, next.n))
+                    });
+                (phi, psi)
+            })
             .collect()
     }
 
@@ -731,6 +802,9 @@ fn find_atom_by_name(
 }
 
 /// Extract backbone atom positions (N, CA, C, O) from a single residue.
+///
+/// Returns `None` for exactly the residues [`residue_has_backbone`] rejects:
+/// the two share one notion of a complete backbone (N, CA, C, and O or OXT).
 fn extract_backbone_from_residue(
     atoms: &[Atom],
     residue: &Residue,
@@ -742,6 +816,31 @@ fn extract_backbone_from_residue(
         o: find_atom_by_name(atoms, residue, "O")
             .or_else(|| find_atom_by_name(atoms, residue, "OXT"))?,
     })
+}
+
+/// `true` when `residue` carries a complete DSSP backbone: N, CA, C, and O
+/// (or its OXT terminal substitute). The single source for which residues
+/// receive a secondary-structure assignment; [`extract_backbone_from_residue`]
+/// returns `Some` for exactly these residues.
+pub(crate) fn residue_has_backbone(atoms: &[Atom], residue: &Residue) -> bool {
+    extract_backbone_from_residue(atoms, residue).is_some()
+}
+
+/// Signed dihedral angle about the `p1->p2` bond for the four points
+/// `p0, p1, p2, p3`, in degrees in the range (−180, 180].
+///
+/// Uses the IUPAC-sign convention (`atan2` of the two bond-normal cross
+/// products), so φ/ψ match the standard structural-biology definitions.
+fn dihedral_deg(p0: Vec3, p1: Vec3, p2: Vec3, p3: Vec3) -> f32 {
+    let b1 = p1 - p0;
+    let b2 = p2 - p1;
+    let b3 = p3 - p2;
+    let n1 = b1.cross(b2);
+    let n2 = b2.cross(b3);
+    let m1 = b2.normalize().cross(n1);
+    let x = n1.dot(n2);
+    let y = m1.dot(n2);
+    y.atan2(x).to_degrees()
 }
 
 #[cfg(test)]

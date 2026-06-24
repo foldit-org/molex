@@ -123,3 +123,88 @@ pub fn mmcif_file_to_all_models(
     })?;
     mmcif_str_to_all_models(&content)
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
+mod parity_tests {
+    use crate::adapters::pdb::pdb_str_to_entities;
+    use crate::entity::molecule::{MoleculeEntity, MoleculeType};
+
+    fn atom_count(entities: &[MoleculeEntity]) -> usize {
+        entities.iter().map(MoleculeEntity::atom_count).sum()
+    }
+
+    fn water_atom_count(entities: &[MoleculeEntity]) -> usize {
+        entities
+            .iter()
+            .filter(|e| e.molecule_type() == MoleculeType::Water)
+            .map(MoleculeEntity::atom_count)
+            .sum()
+    }
+
+    /// RCSB mmCIF gives waters/non-polymer rows `label_seq_id = "."` and puts
+    /// their per-instance discriminator in `auth_seq_id`; the PDB equivalent
+    /// puts the same author number into the residue-sequence column. The CIF
+    /// reader must fall back to `auth_seq_id` so each water keys to a distinct
+    /// residue, exactly as the PDB path already does — otherwise the four
+    /// waters here collapse onto a single `O` atom. The two formats describe
+    /// the identical structure, so their atom counts must agree.
+    #[test]
+    fn cif_and_pdb_agree_on_waters_with_absent_label_seq_id() {
+        const CIF: &str = "\
+data_TEST
+#
+loop_
+_atom_site.group_PDB
+_atom_site.id
+_atom_site.label_atom_id
+_atom_site.label_comp_id
+_atom_site.label_asym_id
+_atom_site.label_seq_id
+_atom_site.auth_asym_id
+_atom_site.auth_seq_id
+_atom_site.Cartn_x
+_atom_site.Cartn_y
+_atom_site.Cartn_z
+_atom_site.occupancy
+_atom_site.B_iso_or_equiv
+_atom_site.type_symbol
+ATOM   1 N  ALA A 1 A 1   0.000 0.000 0.000 1.00 0.00 N
+ATOM   2 CA ALA A 1 A 1   1.000 0.000 0.000 1.00 0.00 C
+ATOM   3 C  ALA A 1 A 1   1.500 1.000 0.000 1.00 0.00 C
+ATOM   4 O  ALA A 1 A 1   1.000 2.000 0.000 1.00 0.00 O
+HETATM 5 O  HOH B . B 101 5.000 0.000 0.000 1.00 0.00 O
+HETATM 6 O  HOH B . B 102 6.000 0.000 0.000 1.00 0.00 O
+HETATM 7 O  HOH B . B 103 7.000 0.000 0.000 1.00 0.00 O
+HETATM 8 O  HOH B . B 104 8.000 0.000 0.000 1.00 0.00 O
+#
+";
+        const PDB: &str = "\
+ATOM      1  N   ALA A   1       0.000   0.000   0.000  1.00  0.00           N
+ATOM      2  CA  ALA A   1       1.000   0.000   0.000  1.00  0.00           C
+ATOM      3  C   ALA A   1       1.500   1.000   0.000  1.00  0.00           C
+ATOM      4  O   ALA A   1       1.000   2.000   0.000  1.00  0.00           O
+TER       5      ALA A   1
+HETATM    6  O   HOH B 101       5.000   0.000   0.000  1.00  0.00           O
+HETATM    7  O   HOH B 102       6.000   0.000   0.000  1.00  0.00           O
+HETATM    8  O   HOH B 103       7.000   0.000   0.000  1.00  0.00           O
+HETATM    9  O   HOH B 104       8.000   0.000   0.000  1.00  0.00           O
+END
+";
+        let cif = super::mmcif_str_to_entities(CIF).expect("cif parses");
+        let pdb = pdb_str_to_entities(PDB).expect("pdb parses");
+
+        let cif_atoms = atom_count(&cif);
+        let pdb_atoms = atom_count(&pdb);
+        assert_eq!(
+            cif_atoms, pdb_atoms,
+            "cif {cif_atoms} != pdb {pdb_atoms} atoms"
+        );
+        assert_eq!(
+            water_atom_count(&cif),
+            4,
+            "four waters must survive, not collapse to one"
+        );
+        assert_eq!(water_atom_count(&cif), water_atom_count(&pdb));
+    }
+}

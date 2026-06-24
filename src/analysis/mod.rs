@@ -4,6 +4,8 @@
 pub mod aabb;
 /// Bond detection: covalent, hydrogen, and disulfide.
 pub mod bonds;
+/// Shrake-Rupley solvent-accessible surface area.
+pub mod sasa;
 /// Secondary structure detection and parsing.
 pub mod ss;
 /// Volumetric analysis: voxel grids, SDFs, cavity detection, surfaces.
@@ -14,6 +16,7 @@ pub use bonds::{
     detect_disulfides, infer_bonds, BondOrder, HBond, InferredBond,
     DEFAULT_TOLERANCE,
 };
+pub use sasa::{assembly_sasa, shrake_rupley};
 pub use volumetric::{
     binary_to_sdf, compute_gaussian_field, compute_ses_sdf, detect_cavities,
     detect_cavity_mask, edt_1d, edt_3d, voxelize_sas, DetectedCavity,

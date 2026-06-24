@@ -4,7 +4,7 @@ mod alignment;
 mod extract;
 
 pub use alignment::{
-    align_to_reference, kabsch_alignment, kabsch_alignment_with_scale,
+    align_to_reference, kabsch_alignment, kabsch_alignment_with_scale, rmsd,
     transform_entities, transform_entities_with_scale,
 };
 pub use extract::{

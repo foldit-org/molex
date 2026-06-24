@@ -318,6 +318,103 @@ fn no_segment_break_for_close_residues() {
     );
 }
 
+// -- phi/psi dihedrals --
+
+/// A geometry with a known +90-degree dihedral about the p1->p2 bond: p0 and
+/// p3 sit on perpendicular axes either side of a z-aligned central bond, so
+/// the two bond half-planes are a quarter turn apart in the IUPAC-sign sense
+/// (the convention validated against 1UBQ in the oracle gate).
+#[test]
+fn dihedral_known_ninety_degrees() {
+    let angle = dihedral_deg(
+        Vec3::new(1.0, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        Vec3::new(0.0, 1.0, 1.0),
+    );
+    assert!((angle - 90.0).abs() < 1e-3, "expected +90 deg, got {angle}");
+}
+
+/// Mirroring p3 across the dihedral plane flips the sign.
+#[test]
+fn dihedral_sign_flips_with_mirror() {
+    let angle = dihedral_deg(
+        Vec3::new(1.0, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        Vec3::new(0.0, -1.0, 1.0),
+    );
+    assert!((angle + 90.0).abs() < 1e-3, "expected -90 deg, got {angle}");
+}
+
+#[test]
+fn phi_psi_len_equals_residue_count_and_termini_none() {
+    let protein = two_residue_protein_with_break();
+    let pp = protein.phi_psi();
+    assert_eq!(pp.len(), protein.residues.len());
+    // First residue has no preceding C -> phi None.
+    assert!(pp[0].0.is_none(), "first phi must be None");
+    // Last residue has no following N -> psi None.
+    assert!(pp[1].1.is_none(), "last psi must be None");
+    // The two residues are separated by a segment break, so the bond-
+    // crossing angles (psi of res 0, phi of res 1) are also None.
+    assert!(pp[0].1.is_none(), "psi across a break must be None");
+    assert!(pp[1].0.is_none(), "phi across a break must be None");
+}
+
+/// Three residues placed at ideal trans-peptide backbone coordinates so the
+/// middle residue has a computable (phi, psi). The coordinates are the
+/// canonical N/CA/C/O positions of three consecutive residues of an extended
+/// strand, giving phi/psi near the beta region.
+#[test]
+fn phi_psi_middle_residue_is_computable() {
+    // Backbone atoms for three peptide-bonded residues. Positions are taken
+    // from a real extended-strand backbone (close C->N spacing so no segment
+    // break falls between them).
+    let atoms = vec![
+        // residue 1
+        atom_at("N", Element::N, 0.0, 0.0, 0.0),
+        atom_at("CA", Element::C, 1.458, 0.0, 0.0),
+        atom_at("C", Element::C, 2.009, 1.420, 0.0),
+        atom_at("O", Element::O, 1.251, 2.390, 0.0),
+        // residue 2
+        atom_at("N", Element::N, 3.332, 1.512, 0.0),
+        atom_at("CA", Element::C, 3.988, 2.806, 0.0),
+        atom_at("C", Element::C, 5.486, 2.651, 0.183),
+        atom_at("O", Element::O, 5.983, 1.531, 0.300),
+        // residue 3
+        atom_at("N", Element::N, 6.201, 3.770, 0.197),
+        atom_at("CA", Element::C, 7.649, 3.770, 0.351),
+        atom_at("C", Element::C, 8.121, 5.209, 0.500),
+        atom_at("O", Element::O, 7.369, 6.180, 0.460),
+    ];
+    let residues = vec![
+        residue("ALA", 1, 0..4),
+        residue("ALA", 2, 4..8),
+        residue("ALA", 3, 8..12),
+    ];
+    let protein = build_protein(atoms, residues);
+    assert!(
+        protein.segment_breaks.is_empty(),
+        "residues must be peptide-bonded (no break)"
+    );
+    let pp = protein.phi_psi();
+    assert_eq!(pp.len(), 3);
+    // Termini: phi of first None, psi of last None.
+    assert!(pp[0].0.is_none());
+    assert!(pp[2].1.is_none());
+    // Middle residue has both a preceding C and a following N -> both Some,
+    // and they are finite, in-range angles.
+    let (phi, psi) = pp[1];
+    let phi = phi.unwrap();
+    let psi = psi.unwrap();
+    assert!(phi.is_finite() && phi > -180.0 && phi <= 180.0, "phi={phi}");
+    assert!(psi.is_finite() && psi > -180.0 && psi <= 180.0, "psi={psi}");
+    // First residue still has a psi (bond to residue 2 present); last has phi.
+    assert!(pp[0].1.is_some(), "first psi present (bonded to res 2)");
+    assert!(pp[2].0.is_some(), "last phi present (bonded from res 2)");
+}
+
 // -- to_interleaved_segments --
 
 #[test]

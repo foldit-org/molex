@@ -19,8 +19,11 @@
 use glam::Vec3;
 use pyo3::prelude::*;
 
-use self::arrays::entities_to_arrays;
+use self::arrays::{entities_to_arrays, flat_atoms};
 use crate::adapters::{bcif, cif, pdb};
+use crate::analysis::{
+    detect_disulfides, infer_bonds, SSType, DEFAULT_TOLERANCE,
+};
 use crate::assembly::Assembly;
 use crate::chemistry::variant::{ProtonationState, VariantTag};
 use crate::element::Element;
@@ -51,6 +54,56 @@ pub use self::views::{
 
 fn value_err<E: std::fmt::Display>(e: E) -> PyErr {
     PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
+}
+
+fn ss_char(ss: SSType) -> char {
+    match ss {
+        SSType::Helix => 'H',
+        SSType::Sheet => 'E',
+        SSType::Coil => 'C',
+    }
+}
+
+/// Read an `(N, 3)` array-like (numpy array or sequence of 3-tuples) into a
+/// `Vec<Vec3>`. Indexes each row's three components, so it accepts a numpy
+/// `(N, 3)` float array or a Python list of `(x, y, z)` tuples alike.
+fn read_coords_nx3(arr: &Bound<'_, PyAny>) -> PyResult<Vec<Vec3>> {
+    let n = arr.len()?;
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        let row = arr.get_item(i)?;
+        let x: f32 = row.get_item(0)?.extract()?;
+        let y: f32 = row.get_item(1)?.extract()?;
+        let z: f32 = row.get_item(2)?.extract()?;
+        out.push(Vec3::new(x, y, z));
+    }
+    Ok(out)
+}
+
+/// Optimal-superposition RMSD between two `(N, 3)` coordinate sets.
+///
+/// Each argument is an array-like of shape `(N, 3)`: a numpy array or a
+/// sequence of `(x, y, z)` tuples. Superposes `a` onto `b` with the Kabsch
+/// algorithm and returns the scalar root-mean-square deviation, invariant to
+/// any rigid motion of either set.
+///
+/// # Errors
+///
+/// `PyValueError` if the two sets differ in length, have fewer than three
+/// points, or cannot be read as `(N, 3)` numeric arrays.
+#[pyfunction]
+pub fn rmsd(a: &Bound<'_, PyAny>, b: &Bound<'_, PyAny>) -> PyResult<f32> {
+    let a = read_coords_nx3(a)?;
+    let b = read_coords_nx3(b)?;
+    if a.len() != b.len() {
+        return Err(value_err(format!(
+            "rmsd: length mismatch (a={}, b={})",
+            a.len(),
+            b.len()
+        )));
+    }
+    crate::ops::transform::rmsd(&a, &b)
+        .ok_or_else(|| value_err("rmsd: need at least 3 points to superpose"))
 }
 
 /// Resolve a Python `__getitem__` index against a container of length `len`,
@@ -174,6 +227,43 @@ impl PyAssembly {
         self.inner.recompute_ss();
     }
 
+    /// Per-entity Q3 secondary structure, one string per entity aligned to
+    /// `entities()` order. Each protein entity's string has one character per
+    /// residue: `'H'` (helix), `'E'` (sheet), or `'C'` (coil). Non-protein
+    /// entities get an empty string.
+    ///
+    /// Reads the SS computed by `recompute_ss`; call that first. Without it the
+    /// stored SS is empty, so every protein string is all-`'C'`. Residues with
+    /// an incomplete backbone (no DSSP assignment) are reported as `'C'`.
+    #[must_use]
+    pub fn secondary_structure(&self) -> Vec<String> {
+        self.inner
+            .entities()
+            .iter()
+            .map(|entity| {
+                self.inner.ss_per_residue(entity.id()).map_or_else(
+                    String::new,
+                    |ss| ss.into_iter().map(ss_char).collect(),
+                )
+            })
+            .collect()
+    }
+
+    /// Total solvent-accessible surface area (Shrake-Rupley) in Angstrom^2
+    /// over the assembly's protein atoms. Water, ions, ligands, and nucleic
+    /// acids are excluded, matching the protein-scope convention of freesasa
+    /// and biotite. Uses Bondi van der Waals radii and ~960 test points per
+    /// atom. `probe_radius` is the solvent radius in Angstroms (1.4 for water).
+    #[must_use]
+    #[pyo3(signature = (probe_radius = crate::analysis::sasa::DEFAULT_PROBE_RADIUS))]
+    pub fn sasa(&self, probe_radius: f32) -> f32 {
+        crate::analysis::assembly_sasa(
+            &self.inner,
+            probe_radius,
+            crate::analysis::sasa::DEFAULT_N_POINTS,
+        )
+    }
+
     // Object navigation. The documented default for a normal caller: parse
     // with `from_pdb` / `from_mmcif` / `from_bcif`, then walk `entities()`
     // -> `Entity` -> `residues()` -> `Residue`, and read atoms as numpy
@@ -279,6 +369,48 @@ impl PyAssembly {
     /// `PyErr` if numpy is unavailable or a numpy operation fails.
     pub fn to_arrays(&self, py: Python) -> PyResult<AtomArrays> {
         entities_to_arrays(py, self.inner.entities())
+    }
+
+    /// Distance-based covalent bonds over the whole assembly, as atom-index
+    /// pairs in `to_arrays()` flat order.
+    ///
+    /// Runs the same distance/covalent-radius perception molex uses for
+    /// ligands (`infer_bonds`) across every atom in the assembly, so it bonds
+    /// across residue and entity boundaries. Each pair `(i, j)` indexes the
+    /// flat atom order of `to_arrays()` with `i < j`; correlate directly with
+    /// the coordinate rows. Hydrogen-to-hydrogen contacts are not bonded.
+    #[must_use]
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "flat atom indices fit in u32 for valid structures"
+    )]
+    pub fn covalent_bonds(&self) -> Vec<(u32, u32)> {
+        let flat = flat_atoms(self.inner.entities());
+        infer_bonds(&flat.atoms, DEFAULT_TOLERANCE)
+            .into_iter()
+            .map(|b| (b.atom_a as u32, b.atom_b as u32))
+            .collect()
+    }
+
+    /// Cys SG-SG disulfide bonds, as atom-index pairs in `to_arrays()` flat
+    /// order.
+    ///
+    /// Detects SG-SG pairs in CYS residues within the disulfide distance band
+    /// (`detect_disulfides`), intra- and inter-chain alike. Endpoints come back
+    /// as `(entity, per-entity atom index)`; both are mapped to the flat atom
+    /// order of `to_arrays()` so the returned indices line up with the
+    /// coordinate rows.
+    #[must_use]
+    pub fn disulfides(&self) -> Vec<(u32, u32)> {
+        let flat = flat_atoms(self.inner.entities());
+        detect_disulfides(self.inner.entities())
+            .into_iter()
+            .filter_map(|bond| {
+                let a = *flat.flat_of.get(&(bond.a.entity.raw(), bond.a.index))?;
+                let b = *flat.flat_of.get(&(bond.b.entity.raw(), bond.b.index))?;
+                Some((a, b))
+            })
+            .collect()
     }
 }
 

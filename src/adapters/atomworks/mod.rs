@@ -46,9 +46,10 @@ pub use to_array::{
     entities_to_atom_array, entities_to_atom_array_parsed,
     entities_to_atom_array_plus,
 };
-// The shared per-atom column collector. Used by the Biotite bridge in
-// `to_array.rs` and by the native numpy read path in `python::arrays`.
-pub(crate) use to_array::{collect_atom_data, AtomData};
+// The shared per-atom column collector and the canonical atom walk it drives.
+// Used by the Biotite bridge in `to_array.rs` and by the native numpy read
+// path in `python::arrays` (the walk also maps bond endpoints into flat space).
+pub(crate) use to_array::{collect_atom_data, for_each_flat_atom, AtomData};
 
 use crate::entity::molecule::MoleculeType;
 

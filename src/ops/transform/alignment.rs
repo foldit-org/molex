@@ -66,6 +66,29 @@ pub fn kabsch_alignment(
     Some((rotation, translation))
 }
 
+/// Optimal-superposition RMSD between two equal-length point sets.
+///
+/// Runs [`kabsch_alignment`] to find the rigid transform that best maps `a`
+/// onto `b`, applies it to `a`, and returns the root-mean-square deviation
+/// against `b`. The result is invariant to any rigid motion of either set.
+///
+/// Returns `None` when the sets differ in length or have fewer than three
+/// points (the same precondition [`kabsch_alignment`] enforces), so callers
+/// get a sentinel rather than a panic.
+#[must_use]
+pub fn rmsd(a: &[Vec3], b: &[Vec3]) -> Option<f32> {
+    let (rotation, translation) = kabsch_alignment(b, a)?;
+
+    #[allow(clippy::cast_precision_loss, reason = "point count fits in f32")]
+    let n = a.len() as f32;
+    let sum_sq: f32 = a
+        .iter()
+        .zip(b.iter())
+        .map(|(p, q)| (rotation * *p + translation - *q).length_squared())
+        .sum();
+    Some((sum_sq / n).sqrt())
+}
+
 /// Kabsch-Umeyama algorithm: find optimal rotation, translation, AND scale.
 #[must_use]
 #[allow(clippy::many_single_char_names)]
@@ -555,6 +578,28 @@ mod tests {
             );
         }
         assert!(t_rec.is_finite(), "translation has NaN/inf: {t_rec:?}");
+    }
+
+    /// RMSD onto a rigidly rotated + translated copy of a point set must be
+    /// ~0: the superposition undoes the planted motion exactly.
+    #[test]
+    fn test_rmsd_rigid_moved_self_is_zero() {
+        let a = asymmetric_cloud();
+        let rotation = known_rotation();
+        let translation = Vec3::new(12.3, -4.5, 7.8);
+        let b: Vec<Vec3> =
+            a.iter().map(|p| rotation * *p + translation).collect();
+
+        let r = rmsd(&a, &b).unwrap();
+        assert!(r <= 1e-4, "rmsd of rigid-moved self should be ~0, got {r}");
+    }
+
+    /// Length mismatch and fewer-than-three points return `None`, never panic.
+    #[test]
+    fn test_rmsd_invalid_inputs_return_none() {
+        let a = asymmetric_cloud();
+        assert!(rmsd(&a, &a[..a.len() - 1]).is_none());
+        assert!(rmsd(&a[..2], &a[..2]).is_none());
     }
 
     /// SCALE: the Kabsch-Umeyama variant must recover a planted uniform

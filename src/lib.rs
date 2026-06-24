@@ -94,6 +94,8 @@ fn molex(_py: Python, m: &Bound<PyModule>) -> PyResult<()> {
     // Native, Biotite-free read: per-atom columns as numpy arrays.
     m.add_function(wrap_pyfunction!(python::assembly_bytes_to_arrays, m)?)?;
     m.add_class::<python::AtomArrays>()?;
+    // Scalar analysis free functions.
+    m.add_function(wrap_pyfunction!(python::rmsd, m)?)?;
     m.add_function(wrap_pyfunction!(
         adapters::atomworks::entities_to_atom_array_parsed,
         m

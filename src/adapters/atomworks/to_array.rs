@@ -72,6 +72,102 @@ impl AtomData {
     }
 }
 
+/// One atom as visited by [`for_each_flat_atom`], with the per-atom
+/// residue/chain context the column build needs.
+///
+/// `entity_raw_id` and `raw_idx` together identify the atom within its entity;
+/// `flat` index space is just the order in which these are yielded. `chain_id`,
+/// `res_name`, and `res_num` are the residue-level values to stamp on this
+/// atom's columns (a non-polymer atom carries the entity's residue name, blank
+/// chain, and a synthetic per-atom or fixed residue number).
+pub(crate) struct FlatAtom<'a> {
+    pub entity_raw_id: u32,
+    pub raw_idx: usize,
+    pub atom: &'a Atom,
+    pub chain_id: u8,
+    pub res_name: [u8; 3],
+    pub res_num: i32,
+}
+
+/// Visit every atom of `entities` in the canonical `to_arrays()` order.
+///
+/// This is the single producer of `to_arrays()` index space: entities in slice
+/// order; within a polymer entity, atoms in residue order via each residue's
+/// `atom_range` (an atom not referenced by any range is skipped); within a
+/// non-polymer entity, raw atom order. Both the column build
+/// ([`collect_atom_data`]) and the flat bond-index map
+/// (`crate::python::arrays::flat_atoms`) drive this walk so the ordering rule
+/// lives in exactly one place.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    reason = "atom counts fit in i32/u32 for valid structures"
+)]
+pub(crate) fn for_each_flat_atom<E: std::borrow::Borrow<MoleculeEntity>>(
+    entities: &[E],
+    mut f: impl FnMut(FlatAtom<'_>),
+) {
+    for entity in entities {
+        let entity = entity.borrow();
+        let entity_raw_id = entity.id().raw();
+        let atoms = entity.atom_set();
+
+        match entity {
+            MoleculeEntity::Protein(e) => {
+                emit_polymer(&mut f, entity_raw_id, atoms, &e.residues, e.pdb_chain_id);
+            }
+            MoleculeEntity::NucleicAcid(e) => {
+                emit_polymer(&mut f, entity_raw_id, atoms, &e.residues, e.pdb_chain_id);
+            }
+            MoleculeEntity::SmallMolecule(e) => {
+                for (raw_idx, atom) in atoms.iter().enumerate() {
+                    f(FlatAtom {
+                        entity_raw_id,
+                        raw_idx,
+                        atom,
+                        chain_id: b' ',
+                        res_name: e.residue_name,
+                        res_num: 1,
+                    });
+                }
+            }
+            MoleculeEntity::Bulk(e) => {
+                for (raw_idx, atom) in atoms.iter().enumerate() {
+                    f(FlatAtom {
+                        entity_raw_id,
+                        raw_idx,
+                        atom,
+                        chain_id: b' ',
+                        res_name: e.residue_name,
+                        res_num: (raw_idx as i32) + 1,
+                    });
+                }
+            }
+        }
+    }
+}
+
+fn emit_polymer(
+    f: &mut impl FnMut(FlatAtom<'_>),
+    entity_raw_id: u32,
+    atoms: &[Atom],
+    residues: &[Residue],
+    chain_id: u8,
+) {
+    for residue in residues {
+        for raw_idx in residue.atom_range.clone() {
+            f(FlatAtom {
+                entity_raw_id,
+                raw_idx,
+                atom: &atoms[raw_idx],
+                chain_id,
+                res_name: residue.name,
+                res_num: residue.label_seq_id,
+            });
+        }
+    }
+}
+
 /// Collect per-atom annotation data from entities into flat vectors.
 pub(crate) fn collect_atom_data<E: std::borrow::Borrow<MoleculeEntity>>(
     entities: &[E],
@@ -82,7 +178,22 @@ pub(crate) fn collect_atom_data<E: std::borrow::Borrow<MoleculeEntity>>(
 
     for entity in entities {
         let entity = entity.borrow();
-        append_entity_atoms(&mut data, entity);
+        let mol_type = entity.molecule_type();
+        let ctx = EntityCtx {
+            entity_id: entity.id().raw().cast_signed(),
+            mol_type_str: molecule_type_to_mol_type_str(mol_type),
+            chain_type_id: i32::from(molecule_type_to_chain_type_id(mol_type)),
+        };
+        for_each_flat_atom(std::slice::from_ref(&entity), |fa| {
+            append_atom_row(
+                &mut data,
+                &ctx,
+                fa.atom,
+                fa.chain_id,
+                fa.res_name,
+                fa.res_num,
+            );
+        });
         append_entity_bonds(&mut data, entity, atom_offset);
         atom_offset += entity.atom_count();
     }
@@ -90,85 +201,10 @@ pub(crate) fn collect_atom_data<E: std::borrow::Borrow<MoleculeEntity>>(
     data
 }
 
-/// Append per-atom annotation fields for one entity.
-fn append_entity_atoms(data: &mut AtomData, entity: &MoleculeEntity) {
-    let mol_type = entity.molecule_type();
-    let entity_id = entity.id().raw().cast_signed();
-    let mol_type_str = molecule_type_to_mol_type_str(mol_type).to_owned();
-    let chain_type_id = i32::from(molecule_type_to_chain_type_id(mol_type));
-
-    let ctx = EntityCtx {
-        entity_id,
-        mol_type_str: &mol_type_str,
-        chain_type_id,
-    };
-
-    match entity {
-        MoleculeEntity::Protein(e) => append_polymer_atoms(
-            data,
-            &ctx,
-            &e.atoms,
-            &e.residues,
-            e.pdb_chain_id,
-        ),
-        MoleculeEntity::NucleicAcid(e) => append_polymer_atoms(
-            data,
-            &ctx,
-            &e.atoms,
-            &e.residues,
-            e.pdb_chain_id,
-        ),
-        MoleculeEntity::SmallMolecule(e) => {
-            for atom in &e.atoms {
-                append_atom_row(data, &ctx, atom, b' ', e.residue_name, 1);
-            }
-        }
-        MoleculeEntity::Bulk(e) =>
-        {
-            #[allow(
-                clippy::cast_possible_truncation,
-                clippy::cast_possible_wrap,
-                reason = "atom count fits in i32 for valid structures"
-            )]
-            for (i, atom) in e.atoms.iter().enumerate() {
-                append_atom_row(
-                    data,
-                    &ctx,
-                    atom,
-                    b' ',
-                    e.residue_name,
-                    (i as i32) + 1,
-                );
-            }
-        }
-    }
-}
-
 struct EntityCtx<'a> {
     entity_id: i32,
     mol_type_str: &'a str,
     chain_type_id: i32,
-}
-
-fn append_polymer_atoms(
-    data: &mut AtomData,
-    ctx: &EntityCtx<'_>,
-    atoms: &[Atom],
-    residues: &[Residue],
-    chain_id: u8,
-) {
-    for residue in residues {
-        for idx in residue.atom_range.clone() {
-            append_atom_row(
-                data,
-                ctx,
-                &atoms[idx],
-                chain_id,
-                residue.name,
-                residue.label_seq_id,
-            );
-        }
-    }
 }
 
 #[allow(

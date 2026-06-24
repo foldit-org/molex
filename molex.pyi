@@ -57,6 +57,12 @@ class Assembly:
     def to_assembly_bytes(self) -> bytes:
         """Emit the assembly as wire bytes."""
         ...
+    def to_mmcif(self) -> str:
+        """Emit the assembly as an mmCIF string (one `_atom_site` loop). The
+        honest write path for assemblies the legacy PDB writer refuses
+        (multi-character chains, >62 chains): every chain id is emitted verbatim
+        into `label_asym_id` and the output round-trips through `from_mmcif`."""
+        ...
     @property
     def generation(self) -> int:
         """Monotonic generation counter."""
@@ -143,9 +149,9 @@ class Entity:
         ...
     @property
     def chain_id(self) -> str | None:
-        """PDB chain id as a one-char string, or `None` when the entity has no
-        chain id (a non-polymer entity). A non-printable chain byte also yields
-        `None` as a safety fallback."""
+        """PDB chain id (the mmCIF `label_asym_id`, which may be multi-character
+        for large assemblies such as ribosomes and capsids), or `None` when the
+        entity has no chain id (a non-polymer entity)."""
         ...
     @property
     def label(self) -> str:

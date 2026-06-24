@@ -584,8 +584,7 @@ mod tests {
             id,
             ala_atoms(),
             residues,
-            b'A',
-            None,
+            "A".to_owned(),
         ));
         let assembly = Assembly::new(vec![protein]);
         let ptr = Box::into_raw(Box::new(assembly)).cast::<molex_Assembly>();

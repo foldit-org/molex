@@ -112,15 +112,59 @@ pub extern "C" fn molex_entity_kind(
         .map_or(molex_EntityKind::Bulk, |e| e.entity_kind().into())
 }
 
-/// PDB chain identifier byte for polymer entities. Returns -1 when the
-/// entity has no chain id (small molecule / bulk) or when `entity` is null.
+/// First PDB chain-identifier byte for polymer entities.
+///
+/// Returns -1 when the entity has no chain id (small molecule / bulk),
+/// when `entity` is null, or when the chain id is multi-character and so
+/// cannot be represented as a single byte.
+///
+/// Chain ids are arbitrary strings (mmCIF `label_asym_id`); ribosome and
+/// capsid assemblies use multi-character ids ("AA", "AB"). Use
+/// [`molex_entity_chain_id`] for the full string. This single-byte
+/// accessor is retained for ABI stability and returns the first byte only
+/// when the id is exactly one byte.
 #[no_mangle]
 pub extern "C" fn molex_entity_pdb_chain_id(
     entity: *const molex_Entity,
 ) -> i32 {
     entity_inner(entity)
         .and_then(MoleculeEntity::pdb_chain_id)
-        .map_or(-1, i32::from)
+        .and_then(|chain| {
+            let bytes = chain.as_bytes();
+            (bytes.len() == 1).then(|| i32::from(bytes[0]))
+        })
+        .unwrap_or(-1)
+}
+
+/// Pointer to this entity's full PDB chain-identifier UTF-8 bytes.
+///
+/// The chain id is the mmCIF `label_asym_id`. Writes the byte length to
+/// `out_len` on success. Returns null and writes 0 for a non-polymer
+/// entity (small molecule / bulk) or a null `entity`.
+///
+/// The pointer borrows the entity's owned chain string and is valid for
+/// the entity's lifetime; the buffer is not NUL-terminated, so callers
+/// must use `out_len`.
+#[no_mangle]
+pub extern "C" fn molex_entity_chain_id(
+    entity: *const molex_Entity,
+    out_len: *mut usize,
+) -> *const u8 {
+    let write_len = |len: usize| {
+        if !out_len.is_null() {
+            unsafe {
+                *out_len = len;
+            }
+        }
+    };
+    let Some(chain) =
+        entity_inner(entity).and_then(MoleculeEntity::pdb_chain_id)
+    else {
+        write_len(0);
+        return std::ptr::null();
+    };
+    write_len(chain.len());
+    chain.as_ptr()
 }
 
 /// Total atom count in this entity. Returns 0 if `entity` is null.
@@ -496,8 +540,7 @@ mod tests {
             alloc.allocate(),
             protein_atoms,
             residues,
-            b'A',
-            None,
+            "A".to_owned(),
         ));
 
         let ligand = MoleculeEntity::SmallMolecule(SmallMoleculeEntity::new(
@@ -561,6 +604,34 @@ mod tests {
         assert_eq!(molex_entity_pdb_chain_id(protein), i32::from(b'A'));
         assert_eq!(molex_entity_num_atoms(protein), 9);
         assert_eq!(molex_entity_num_residues(protein), 2);
+        molex_assembly_free(asm);
+    }
+
+    #[test]
+    fn entity_chain_id_string_accessor() {
+        let asm = make_assembly_handle();
+        let protein = molex_assembly_entity(asm, 0);
+        let mut len: usize = 0;
+        let ptr = molex_entity_chain_id(protein, &raw mut len);
+        assert!(!ptr.is_null());
+        assert_eq!(len, 1);
+        let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
+        assert_eq!(bytes, b"A");
+
+        // Non-polymer entity (ligand at index 1) has no chain id.
+        let ligand = molex_assembly_entity(asm, 1);
+        let mut lig_len: usize = 7;
+        let lig_ptr = molex_entity_chain_id(ligand, &raw mut lig_len);
+        assert!(lig_ptr.is_null());
+        assert_eq!(lig_len, 0);
+
+        // Null entity writes 0 and returns null.
+        let mut null_len: usize = 9;
+        let null_ptr =
+            molex_entity_chain_id(std::ptr::null(), &raw mut null_len);
+        assert!(null_ptr.is_null());
+        assert_eq!(null_len, 0);
+
         molex_assembly_free(asm);
     }
 

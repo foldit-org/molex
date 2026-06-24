@@ -461,7 +461,7 @@ fn ideal_helix_classifies_as_helix_via_real_geometry() {
     }
 
     let id = EntityIdAllocator::new().allocate();
-    let protein = ProteinEntity::new(id, atoms, residues, b'A', None);
+    let protein = ProteinEntity::new(id, atoms, residues, "A".to_owned());
     // No segment breaks: the chain must be one continuous helix or the
     // geometry isn't peptide-bonded.
     assert!(

@@ -116,7 +116,10 @@ mod tests {
         let residues = vec![residue("ALA", 1, 0..4), residue("GLY", 2, 4..8)];
         let id = EntityIdAllocator::new().allocate();
         vec![MoleculeEntity::Protein(ProteinEntity::new(
-            id, atoms, residues, b'A', None,
+            id,
+            atoms,
+            residues,
+            "A".to_owned(),
         ))]
     }
 

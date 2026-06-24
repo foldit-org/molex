@@ -161,15 +161,13 @@ mod tests {
             id_a,
             std::mem::take(&mut atoms_a),
             vec![res_a],
-            b'A',
-            None,
+            "A".to_owned(),
         );
         let ent_b = ProteinEntity::new(
             id_b,
             std::mem::take(&mut atoms_b),
             vec![res_b],
-            b'B',
-            None,
+            "B".to_owned(),
         );
         let entities = vec![
             MoleculeEntity::Protein(ent_a),
@@ -209,8 +207,7 @@ mod tests {
             id,
             std::mem::take(&mut atoms),
             vec![residue],
-            b'A',
-            None,
+            "A".to_owned(),
         );
         let entities = vec![MoleculeEntity::Protein(ent)];
         assert!(detect_disulfides(&entities).is_empty());

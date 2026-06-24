@@ -27,6 +27,7 @@ thiserror = "2"
 glam = "0.30"
 rmp = "0.8"
 flate2 = "1"
+rustc-hash = "2"
 log = "0.4"
 serde = { version = "1", features = ["derive"], optional = true }
 specta = { version = "=2.0.0-rc.25", features = ["derive"], optional = true }
@@ -63,6 +64,14 @@ harness = false
 
 [[bench]]
 name = "assembly_clone"
+harness = false
+
+[[bench]]
+name = "writing"
+harness = false
+
+[[bench]]
+name = "alloc"
 harness = false
 
 [lints.clippy]

@@ -123,6 +123,51 @@ pub fn structure_file_to_entities(
     }
 }
 
+impl crate::Assembly {
+    /// Build an `Assembly` from a PDB string, completing missing heavy atoms
+    /// ([`Completion::Heavy`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AdapterError`] if parsing fails or the input is a BeEM
+    /// split bundle.
+    pub fn from_pdb(pdb_str: &str) -> Result<Self, AdapterError> {
+        Ok(Self::new(pdb_str_to_entities(pdb_str)?))
+    }
+
+    /// Build an `Assembly` from a PDB string at the given completion `level`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AdapterError`] if parsing fails or the input is a BeEM
+    /// split bundle.
+    pub fn from_pdb_with(
+        pdb_str: &str,
+        level: Completion,
+    ) -> Result<Self, AdapterError> {
+        Ok(Self::new(pdb_str_to_entities_with(pdb_str, level)?))
+    }
+
+    /// Build an `Assembly` from a structure file (PDB or mmCIF, detected by
+    /// extension), completing missing heavy atoms ([`Completion::Heavy`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AdapterError`] if the file cannot be read or parsing fails.
+    pub fn from_file(path: &std::path::Path) -> Result<Self, AdapterError> {
+        Ok(Self::new(structure_file_to_entities(path)?))
+    }
+
+    /// Emit this assembly as a PDB-format string.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AdapterError`] if PDB serialization fails.
+    pub fn to_pdb(&self) -> Result<String, AdapterError> {
+        assembly_to_pdb(self)
+    }
+}
+
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;

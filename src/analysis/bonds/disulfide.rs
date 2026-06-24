@@ -98,6 +98,15 @@ fn trimmed_atom_name_bytes(name: &[u8; 4]) -> &[u8] {
     &name[start..end]
 }
 
+impl crate::Assembly {
+    /// Cys SG-SG disulfide bonds across this assembly. See
+    /// [`detect_disulfides`].
+    #[must_use]
+    pub fn disulfides(&self) -> Vec<CovalentBond> {
+        detect_disulfides(self.entities())
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {

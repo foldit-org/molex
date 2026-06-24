@@ -693,3 +693,32 @@ pub extern "C" fn molex_assembly_to_pdb(
         }
     }
 }
+
+/// Emit an `Assembly` as an mmCIF-format byte buffer.
+///
+/// On success returns [`MOLEX_OK`] and writes the heap-allocated buffer
+/// pointer + length to `out_buf` / `out_len`; the caller frees with
+/// [`molex_free_bytes`]. On failure (null argument) returns a nonzero
+/// status and the error message is available via
+/// [`molex_last_error_message`].
+#[no_mangle]
+pub extern "C" fn molex_assembly_to_mmcif(
+    assembly: *const molex_Assembly,
+    out_buf: *mut *mut u8,
+    out_len: *mut usize,
+) -> i32 {
+    if out_buf.is_null() || out_len.is_null() {
+        set_last_error(&"molex_assembly_to_mmcif: null pointer argument");
+        return MOLEX_ERR_NULL;
+    }
+    let Some(assembly) = assembly_inner(assembly) else {
+        set_last_error(&"molex_assembly_to_mmcif: null pointer argument");
+        return MOLEX_ERR_NULL;
+    };
+    clear_last_error();
+    vec_to_out_buffer(
+        cif::assembly_to_mmcif(assembly).into_bytes(),
+        out_buf,
+        out_len,
+    )
+}

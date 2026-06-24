@@ -21,10 +21,15 @@ use std::path::PathBuf;
 
 use criterion::{
     black_box, criterion_group, criterion_main, BenchmarkId, Criterion,
+    Throughput,
 };
 use molex::adapters::cif::{assembly_to_mmcif, mmcif_str_to_entities};
 use molex::adapters::pdb::assembly_to_pdb;
 use molex::Assembly;
+
+fn assembly_atoms(asm: &Assembly) -> u64 {
+    asm.entities().iter().map(|e| e.atom_count()).sum::<usize>() as u64
+}
 
 /// A structure parsed into an `Assembly`, with a flag for whether it fits the
 /// legacy PDB format (gates the PDB-write bench).
@@ -80,6 +85,8 @@ fn bench_write(c: &mut Criterion) {
     let fixtures = load_fixtures();
     let mut group = c.benchmark_group("write");
     for fx in &fixtures {
+        // Per-atom normalization: both writers emit the same atom set.
+        group.throughput(Throughput::Elements(assembly_atoms(&fx.assembly)));
         if fx.fits_pdb {
             group.bench_with_input(
                 BenchmarkId::new("pdb", fx.name),

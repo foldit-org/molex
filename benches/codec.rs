@@ -15,10 +15,15 @@ use std::path::PathBuf;
 
 use criterion::{
     black_box, criterion_group, criterion_main, BenchmarkId, Criterion,
+    Throughput,
 };
 use molex::adapters::cif::mmcif_str_to_entities;
 use molex::ops::wire::{deserialize_assembly, serialize_assembly};
 use molex::Assembly;
+
+fn assembly_atoms(asm: &Assembly) -> u64 {
+    asm.entities().iter().map(|e| e.atom_count()).sum::<usize>() as u64
+}
 
 fn committed_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("benches/data")
@@ -38,6 +43,9 @@ fn bench_assembly_roundtrip(c: &mut Criterion) {
     for name in ["1ubq", "4hhb"] {
         let assembly = load_assembly(name);
         let bytes = serialize_assembly(&assembly).unwrap();
+
+        // Per-atom normalization: both directions move the same atom set.
+        group.throughput(Throughput::Elements(assembly_atoms(&assembly)));
 
         group.bench_with_input(
             BenchmarkId::new("serialize", name),

@@ -293,6 +293,15 @@ pub fn assembly_sasa(
         .sum()
 }
 
+impl Assembly {
+    /// Total solvent-accessible surface area (Angstrom^2) of this assembly's
+    /// protein atoms. See [`assembly_sasa`] for scope and method.
+    #[must_use]
+    pub fn sasa(&self, probe_radius: f32, n_points: usize) -> f32 {
+        assembly_sasa(self, probe_radius, n_points)
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::float_cmp)]
 mod tests {

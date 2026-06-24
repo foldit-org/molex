@@ -11,6 +11,7 @@
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
     clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
     clippy::suboptimal_flops,
     clippy::format_push_string,
     clippy::uninlined_format_args
@@ -20,6 +21,7 @@ use std::path::PathBuf;
 
 use criterion::{
     black_box, criterion_group, criterion_main, BenchmarkId, Criterion,
+    Throughput,
 };
 use glam::Vec3;
 use molex::adapters::cif::mmcif_str_to_entities;
@@ -34,6 +36,8 @@ struct Fixture {
     name: &'static str,
     entities: Vec<MoleculeEntity>,
     assembly: Assembly,
+    /// Total atom count, for per-atom `Throughput` normalization.
+    atoms: u64,
 }
 
 fn committed_dir() -> PathBuf {
@@ -61,11 +65,16 @@ fn load_fixtures() -> Vec<Fixture> {
             continue;
         };
         let entities = mmcif_str_to_entities(&cif).unwrap();
+        let atoms = entities
+            .iter()
+            .map(MoleculeEntity::atom_count)
+            .sum::<usize>() as u64;
         let assembly = Assembly::new(entities.clone());
         out.push(Fixture {
             name,
             entities,
             assembly,
+            atoms,
         });
     }
 
@@ -76,6 +85,8 @@ fn bench_kabsch_alignment(c: &mut Criterion) {
     let mut group = c.benchmark_group("kabsch_alignment");
 
     for n_points in [10, 50, 200, 1000] {
+        // Synthetic, but point count is the natural element count here.
+        group.throughput(Throughput::Elements(n_points as u64));
         let reference: Vec<Vec3> = (0..n_points)
             .map(|i| {
                 let t = i as f32 * 0.1;
@@ -109,6 +120,7 @@ fn bench_kabsch_alignment(c: &mut Criterion) {
 fn bench_ca_extraction(c: &mut Criterion, fixtures: &[Fixture]) {
     let mut group = c.benchmark_group("ca_extraction");
     for fx in fixtures {
+        group.throughput(Throughput::Elements(fx.atoms));
         group.bench_with_input(
             BenchmarkId::new("extract_ca", fx.name),
             &fx.entities,
@@ -126,6 +138,7 @@ fn bench_sasa(c: &mut Criterion, fixtures: &[Fixture]) {
     // count so the group stays usable while still real.
     group.sample_size(20);
     for fx in fixtures {
+        group.throughput(Throughput::Elements(fx.atoms));
         group.bench_with_input(
             BenchmarkId::new("assembly_sasa", fx.name),
             &fx.assembly,
@@ -140,6 +153,7 @@ fn bench_sasa(c: &mut Criterion, fixtures: &[Fixture]) {
 fn bench_recompute_ss(c: &mut Criterion, fixtures: &[Fixture]) {
     let mut group = c.benchmark_group("recompute_ss");
     for fx in fixtures {
+        group.throughput(Throughput::Elements(fx.atoms));
         group.bench_with_input(
             BenchmarkId::new("recompute_ss", fx.name),
             &fx.assembly,
@@ -158,6 +172,7 @@ fn bench_recompute_ss(c: &mut Criterion, fixtures: &[Fixture]) {
 fn bench_phi_psi(c: &mut Criterion, fixtures: &[Fixture]) {
     let mut group = c.benchmark_group("phi_psi");
     for fx in fixtures {
+        group.throughput(Throughput::Elements(fx.atoms));
         group.bench_with_input(
             BenchmarkId::new("phi_psi", fx.name),
             &fx.assembly,
@@ -178,6 +193,7 @@ fn bench_phi_psi(c: &mut Criterion, fixtures: &[Fixture]) {
 fn bench_infer_bonds(c: &mut Criterion, fixtures: &[Fixture]) {
     let mut group = c.benchmark_group("infer_bonds");
     for fx in fixtures {
+        group.throughput(Throughput::Elements(fx.atoms));
         group.bench_with_input(
             BenchmarkId::new("infer_bonds", fx.name),
             &fx.assembly,

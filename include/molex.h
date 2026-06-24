@@ -589,6 +589,21 @@ int32_t molex_assembly_to_pdb(const molex_Assembly *assembly,
 ;
 
 /**
+ * Emit an `Assembly` as an mmCIF-format byte buffer.
+ *
+ * On success returns [`MOLEX_OK`] and writes the heap-allocated buffer
+ * pointer + length to `out_buf` / `out_len`; the caller frees with
+ * [`molex_free_bytes`]. On failure (null argument) returns a nonzero
+ * status and the error message is available via
+ * [`molex_last_error_message`].
+ */
+
+int32_t molex_assembly_to_mmcif(const molex_Assembly *assembly,
+                                uint8_t **out_buf,
+                                uintptr_t *out_len)
+;
+
+/**
  * Construct an empty edit list.
  */
 

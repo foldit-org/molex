@@ -143,6 +143,37 @@ pub fn mmcif_file_to_all_models(
     mmcif_str_to_all_models(&content)
 }
 
+impl crate::Assembly {
+    /// Build an `Assembly` from an mmCIF string, completing missing heavy
+    /// atoms ([`Completion::Heavy`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AdapterError`] if parsing fails.
+    pub fn from_mmcif(cif_str: &str) -> Result<Self, AdapterError> {
+        Ok(Self::new(mmcif_str_to_entities(cif_str)?))
+    }
+
+    /// Build an `Assembly` from an mmCIF string at the given completion
+    /// `level`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AdapterError`] if parsing fails.
+    pub fn from_mmcif_with(
+        cif_str: &str,
+        level: Completion,
+    ) -> Result<Self, AdapterError> {
+        Ok(Self::new(mmcif_str_to_entities_with(cif_str, level)?))
+    }
+
+    /// Emit this assembly as an mmCIF-format string.
+    #[must_use]
+    pub fn to_mmcif(&self) -> String {
+        assembly_to_mmcif(self)
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
 mod parity_tests {

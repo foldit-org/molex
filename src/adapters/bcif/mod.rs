@@ -91,3 +91,30 @@ pub fn bcif_file_to_all_models(
     })?;
     bcif_to_all_models(&bytes)
 }
+
+impl crate::Assembly {
+    /// Build an `Assembly` from BinaryCIF bytes, completing missing heavy
+    /// atoms ([`Completion::Heavy`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AdapterError`] if the bytes cannot be parsed as valid
+    /// BinaryCIF.
+    pub fn from_bcif(bytes: &[u8]) -> Result<Self, AdapterError> {
+        Ok(Self::new(bcif_to_entities(bytes)?))
+    }
+
+    /// Build an `Assembly` from BinaryCIF bytes at the given completion
+    /// `level`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AdapterError`] if the bytes cannot be parsed as valid
+    /// BinaryCIF.
+    pub fn from_bcif_with(
+        bytes: &[u8],
+        level: Completion,
+    ) -> Result<Self, AdapterError> {
+        Ok(Self::new(bcif_to_entities_with(bytes, level)?))
+    }
+}

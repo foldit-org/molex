@@ -355,6 +355,55 @@ fn writer_aligns_atom_name_by_element_symbol() {
     assert_eq!(&ca_line[12..16], " CA ");
 }
 
+/// Smoke-test the additive `impl Assembly` IO/analysis method surface:
+/// the constructors, writers, wire round-trip, and analysis wrappers all
+/// agree with the free fns they delegate to.
+#[test]
+fn assembly_io_methods_wire_through_to_free_fns() {
+    use crate::Assembly;
+
+    let asm = Assembly::from_pdb(MINIMAL_PDB).unwrap();
+    let expected = pdb_str_to_entities(MINIMAL_PDB).unwrap();
+    let asm_atoms: usize = asm.entities().iter().map(|e| e.atom_count()).sum();
+    let free_atoms: usize =
+        expected.iter().map(MoleculeEntity::atom_count).sum();
+    assert_eq!(asm_atoms, free_atoms);
+
+    // Writers round-trip: PDB and mmCIF re-parse to the same atom count.
+    let pdb_out = asm.to_pdb().unwrap();
+    assert_eq!(
+        Assembly::from_pdb(&pdb_out).unwrap().entities().len(),
+        asm.entities().len(),
+    );
+    let cif_out = asm.to_mmcif();
+    assert!(cif_out.contains("_atom_site"));
+    assert_eq!(
+        Assembly::from_mmcif(&cif_out)
+            .unwrap()
+            .entities()
+            .iter()
+            .map(|e| e.atom_count())
+            .sum::<usize>(),
+        asm_atoms,
+    );
+
+    // Wire round-trip preserves atom count.
+    let bytes = asm.to_bytes().unwrap();
+    let decoded = Assembly::from_bytes(&bytes).unwrap();
+    assert_eq!(
+        decoded
+            .entities()
+            .iter()
+            .map(|e| e.atom_count())
+            .sum::<usize>(),
+        asm_atoms,
+    );
+
+    // Analysis wrappers run and return sane values.
+    assert!(asm.sasa(1.4, 64).is_finite());
+    assert!(asm.disulfides().is_empty());
+}
+
 #[test]
 fn beem_bundle_detected_by_header_text() {
     let pdb = "\

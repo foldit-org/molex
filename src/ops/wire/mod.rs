@@ -68,6 +68,31 @@ pub fn assembly_bytes(
 pub use deserialize::deserialize_assembly;
 pub use serialize::serialize_assembly;
 
+impl crate::Assembly {
+    /// Decode an `Assembly` from the binary wire format.
+    ///
+    /// The result is secondary-structure-free: `ss_types` is empty until a
+    /// caller opts in via
+    /// [`Assembly::recompute_ss`](crate::Assembly::recompute_ss).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AdapterError`] if the bytes are malformed or truncated.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, AdapterError> {
+        deserialize_assembly(bytes)
+    }
+
+    /// Encode this assembly into the binary wire format.
+    ///
+    /// # Errors
+    ///
+    /// Currently infallible but returns `Result` for API consistency with
+    /// [`serialize_assembly`].
+    pub fn to_bytes(&self) -> Result<Vec<u8>, AdapterError> {
+        serialize_assembly(self)
+    }
+}
+
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;

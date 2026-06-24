@@ -20,10 +20,12 @@ use std::path::PathBuf;
 
 use criterion::{
     black_box, criterion_group, criterion_main, BenchmarkId, Criterion,
+    Throughput,
 };
 use molex::adapters::bcif::bcif_to_entities;
 use molex::adapters::cif::mmcif_str_to_entities;
 use molex::adapters::pdb::pdb_str_to_entities;
+use molex::MoleculeEntity;
 
 /// A structure's three serialized forms, as in-memory bytes/strings.
 struct Fixture {
@@ -35,6 +37,17 @@ struct Fixture {
     /// and `bcif` empty; `has_pdb`/`has_bcif` gate the per-format benches.
     has_pdb: bool,
     has_bcif: bool,
+    /// Atom count, parsed once at load time, to normalize each format's
+    /// timing per-atom via `Throughput::Elements`.
+    atoms: u64,
+}
+
+fn atom_count(cif: &str) -> u64 {
+    mmcif_str_to_entities(cif)
+        .unwrap()
+        .iter()
+        .map(MoleculeEntity::atom_count)
+        .sum::<usize>() as u64
 }
 
 fn committed_dir() -> PathBuf {
@@ -47,12 +60,14 @@ fn load_fixtures() -> Vec<Fixture> {
     let mut out = Vec::new();
     let dir = committed_dir();
     for name in ["1ubq", "4hhb"] {
+        let cif =
+            std::fs::read_to_string(dir.join(format!("{name}.cif"))).unwrap();
         out.push(Fixture {
             name,
             pdb: std::fs::read_to_string(dir.join(format!("{name}.pdb")))
                 .unwrap(),
-            cif: std::fs::read_to_string(dir.join(format!("{name}.cif")))
-                .unwrap(),
+            atoms: atom_count(&cif),
+            cif,
             bcif: std::fs::read(dir.join(format!("{name}.bcif"))).unwrap(),
             has_pdb: true,
             has_bcif: true,
@@ -70,6 +85,7 @@ fn load_fixtures() -> Vec<Fixture> {
             out.push(Fixture {
                 name: "6vxx",
                 pdb,
+                atoms: atom_count(&cif),
                 cif,
                 bcif,
                 has_pdb: true,
@@ -81,6 +97,7 @@ fn load_fixtures() -> Vec<Fixture> {
             out.push(Fixture {
                 name: "3j3q",
                 pdb: String::new(),
+                atoms: atom_count(&cif),
                 cif,
                 bcif: Vec::new(),
                 has_pdb: false,
@@ -96,6 +113,9 @@ fn bench_parse(c: &mut Criterion) {
     let fixtures = load_fixtures();
     let mut group = c.benchmark_group("parse");
     for fx in &fixtures {
+        // Per-atom normalization: every format of a fixture decodes the same
+        // atom set, so the count is shared across the three benches below.
+        group.throughput(Throughput::Elements(fx.atoms));
         if fx.has_pdb {
             group.bench_with_input(
                 BenchmarkId::new("pdb", fx.name),

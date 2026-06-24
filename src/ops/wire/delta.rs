@@ -14,7 +14,7 @@
 //!
 //! ```text
 //! 8 bytes  magic b"DELTA\0\0\0"
-//! 1 byte   version (currently 1)
+//! 1 byte   version (currently 2)
 //! 4 bytes  edit_count u32 BE
 //! per edit:
 //!   1 byte tag

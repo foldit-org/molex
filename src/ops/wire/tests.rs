@@ -490,12 +490,12 @@ fn version_one_payload_still_decodes() {
     bytes.extend_from_slice(b"ASSEMBLY");
     bytes.push(1); // version 1
     bytes.extend_from_slice(&1u32.to_be_bytes()); // 1 entity
-    // Entity header (v1): mol_type, atom_count, entity_id.
+                                                  // Entity header (v1): mol_type, atom_count, entity_id.
     bytes.push(0); // Protein
     bytes.extend_from_slice(&1u32.to_be_bytes()); // 1 atom
     bytes.extend_from_slice(&0u32.to_be_bytes()); // entity_id 0
-    // One v1 atom row (26 bytes): xyz, chain byte, res_name, res_num,
-    // atom_name, element symbol.
+                                                  // One v1 atom row (26 bytes): xyz, chain byte, res_name, res_num,
+                                                  // atom_name, element symbol.
     bytes.extend_from_slice(&0.0f32.to_be_bytes());
     bytes.extend_from_slice(&0.0f32.to_be_bytes());
     bytes.extend_from_slice(&0.0f32.to_be_bytes());
@@ -505,7 +505,7 @@ fn version_one_payload_still_decodes() {
     bytes.extend_from_slice(b"CA  "); // atom_name
     bytes.push(b'C'); // element symbol byte 0
     bytes.push(0); // element symbol byte 1
-    // Variants section: 1 entity, zero variant blocks.
+                   // Variants section: 1 entity, zero variant blocks.
     bytes.extend_from_slice(&0u32.to_be_bytes());
 
     let rt = deserialize_assembly(&bytes).unwrap();

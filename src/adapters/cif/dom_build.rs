@@ -1,8 +1,10 @@
 //! DOM-fallback path: walk a parsed [`Document`] and push atom rows into
-//! an [`EntityBuilder`]. Used when the fast path declines to handle an
+//! an [`EntityBuilder`]. Used when the scanner declines to handle an
 //! input.
 
 use std::collections::{HashMap, HashSet};
+
+use compact_str::CompactString;
 
 use super::dom::{Block, Document, Value};
 use super::hint::resolve_hint;
@@ -342,7 +344,7 @@ fn decode_row(cols: &AtomSiteCols, row: &DomRow) -> Option<AtomRow> {
 
     #[allow(clippy::cast_possible_truncation)]
     Some(AtomRow {
-        label_asym_id: label_asym.to_owned(),
+        label_asym_id: CompactString::new(label_asym),
         // Waters/non-polymer rows carry `label_seq_id = "."`; their
         // per-instance discriminator lives in `auth_seq_id`. Mirror the
         // PDB path (author number into the seq slot) so each gets a
@@ -355,8 +357,8 @@ fn decode_row(cols: &AtomSiteCols, row: &DomRow) -> Option<AtomRow> {
             .unwrap_or(0),
         label_comp_id: name_to_bytes::<3>(label_comp),
         label_atom_id: name_to_bytes::<4>(label_atom),
-        label_entity_id: cell_str(cols.label_entity_id).map(str::to_owned),
-        auth_asym_id: cell_str(cols.auth_asym_id).map(str::to_owned),
+        label_entity_id: cell_str(cols.label_entity_id).map(CompactString::new),
+        auth_asym_id: cell_str(cols.auth_asym_id).map(CompactString::new),
         auth_seq_id,
         auth_comp_id: cell_str(cols.auth_comp_id).map(name_to_bytes::<3>),
         auth_atom_id: cell_str(cols.auth_atom_id).map(name_to_bytes::<4>),

@@ -137,10 +137,7 @@ fn read_atom_array_row(
 }
 
 /// Extract chain ID string for atom `i`.
-fn extract_chain_id(
-    arrays: &AtomArrayRefs<'_>,
-    i: usize,
-) -> PyResult<String> {
+fn extract_chain_id(arrays: &AtomArrayRefs<'_>, i: usize) -> PyResult<String> {
     arrays.chain_id_arr.get_item(i)?.extract()
 }
 
@@ -310,10 +307,7 @@ fn build_all_entities(
         )?;
 
         entities.push(build_entity_from_indices(
-            &indices,
-            output_idx,
-            mol_type,
-            arrays,
+            &indices, output_idx, mol_type, arrays,
         )?);
     }
 

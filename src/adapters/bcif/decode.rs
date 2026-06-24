@@ -6,7 +6,11 @@
 use std::collections::HashMap;
 use std::io::Read;
 
-use super::codec::{decode_column, decode_msgpack, ColData, MsgVal};
+use compact_str::CompactString;
+
+use super::codec::{
+    decode_column, decode_msgpack, ColData, MsgVal, StringColumn,
+};
 use super::hint::resolve_hint;
 use super::refuse::multi_block_error;
 use crate::element::Element;
@@ -22,22 +26,24 @@ pub(super) fn decode_to_entities(
 ) -> Result<Vec<MoleculeEntity>, AdapterError> {
     let block = open_block(bytes)?;
     let atom_site = require_atom_site(&block)?;
-    let rows = decode_atom_site(&atom_site)?;
-    let target = smallest_model(&rows);
+    let cols = decode_atom_site(atom_site)?;
+    let target = cols.smallest_model();
 
     let mut builder = EntityBuilder::new();
     register_hints(&block, &mut builder)?;
 
     let mut any_atom = false;
-    for row in &rows {
+    for i in 0..cols.len() {
+        if !cols.is_emitted(i) {
+            continue;
+        }
         if let Some(target) = target {
-            if row.model.is_some_and(|m| m != target) {
+            if cols.model_at(i).is_some_and(|m| m != target) {
                 continue;
             }
         }
-        if push_row(&mut builder, row)? {
-            any_atom = true;
-        }
+        cols.push_row(&mut builder, i)?;
+        any_atom = true;
     }
     if !any_atom {
         return Err(AdapterError::InvalidFormat(
@@ -52,20 +58,23 @@ pub(super) fn decode_to_all_models(
 ) -> Result<Vec<Vec<MoleculeEntity>>, AdapterError> {
     let block = open_block(bytes)?;
     let atom_site = require_atom_site(&block)?;
-    let rows = decode_atom_site(&atom_site)?;
+    let cols = decode_atom_site(atom_site)?;
 
     let mut buckets: HashMap<i32, Vec<usize>> = HashMap::new();
     let mut order: Vec<i32> = Vec::new();
     let default_model: i32 = 1;
-    for (idx, row) in rows.iter().enumerate() {
-        let key = row.model.unwrap_or(default_model);
+    for i in 0..cols.len() {
+        if !cols.is_emitted(i) {
+            continue;
+        }
+        let key = cols.model_at(i).unwrap_or(default_model);
         buckets
             .entry(key)
             .or_insert_with(|| {
                 order.push(key);
                 Vec::new()
             })
-            .push(idx);
+            .push(i);
     }
     if buckets.is_empty() {
         return Err(AdapterError::InvalidFormat(
@@ -82,10 +91,9 @@ pub(super) fn decode_to_all_models(
         let mut builder = EntityBuilder::new();
         register_hints(&block, &mut builder)?;
         let mut any_atom = false;
-        for idx in indices {
-            if push_row(&mut builder, &rows[idx])? {
-                any_atom = true;
-            }
+        for i in indices {
+            cols.push_row(&mut builder, i)?;
+            any_atom = true;
         }
         if any_atom {
             out.push(builder.finish().map_err(|e| map_build_error(&e))?);
@@ -118,7 +126,6 @@ struct CategoryView {
     columns: HashMap<String, ColumnRaw>,
 }
 
-#[derive(Clone)]
 struct ColumnRaw {
     data: MsgVal,
     mask: Option<MsgVal>,
@@ -126,10 +133,10 @@ struct ColumnRaw {
 
 fn open_block(bytes: &[u8]) -> Result<BlockView, AdapterError> {
     let data = decompress_if_gzip(bytes)?;
-    let root = decode_msgpack(&data)?;
+    let mut root = decode_msgpack(&data)?;
     let blocks = root
-        .get("dataBlocks")
-        .and_then(MsgVal::as_array)
+        .take("dataBlocks")
+        .and_then(MsgVal::into_array)
         .ok_or_else(|| {
             AdapterError::InvalidFormat("Missing 'dataBlocks'".into())
         })?;
@@ -139,9 +146,12 @@ fn open_block(bytes: &[u8]) -> Result<BlockView, AdapterError> {
     if blocks.len() > 1 {
         return Err(multi_block_error(blocks.len()));
     }
-    let raw_categories = blocks[0]
-        .get("categories")
-        .and_then(MsgVal::as_array)
+    let Some(mut block) = blocks.into_iter().next() else {
+        return Err(AdapterError::InvalidFormat("No data blocks found".into()));
+    };
+    let raw_categories = block
+        .take("categories")
+        .and_then(MsgVal::into_array)
         .ok_or_else(|| {
             AdapterError::InvalidFormat(
                 "Missing 'categories' in data block".into(),
@@ -157,10 +167,13 @@ fn open_block(bytes: &[u8]) -> Result<BlockView, AdapterError> {
     Ok(BlockView { categories })
 }
 
-fn parse_category(cat: &MsgVal) -> Result<Option<CategoryView>, AdapterError> {
+fn parse_category(
+    mut cat: MsgVal,
+) -> Result<Option<CategoryView>, AdapterError> {
     let Some(name) = cat.get("name").and_then(MsgVal::as_str) else {
         return Ok(None);
     };
+    let name = name.to_owned();
     let raw_count =
         cat.get("rowCount")
             .and_then(MsgVal::as_i64)
@@ -175,26 +188,21 @@ fn parse_category(cat: &MsgVal) -> Result<Option<CategoryView>, AdapterError> {
         ))
     })?;
     let mut columns: HashMap<String, ColumnRaw> = HashMap::new();
-    if let Some(cols) = cat.get("columns").and_then(MsgVal::as_array) {
-        for col in cols {
+    if let Some(cols) = cat.take("columns").and_then(MsgVal::into_array) {
+        for mut col in cols {
             let Some(cname) = col.get("name").and_then(MsgVal::as_str) else {
                 continue;
             };
-            let Some(data) = col.get("data") else {
+            let cname = cname.to_owned();
+            let Some(data) = col.take("data") else {
                 continue;
             };
-            let mask = col.get("mask").cloned().filter(is_present_msg);
-            let _ = columns.insert(
-                cname.to_owned(),
-                ColumnRaw {
-                    data: data.clone(),
-                    mask,
-                },
-            );
+            let mask = col.take("mask").filter(is_present_msg);
+            let _ = columns.insert(cname, ColumnRaw { data, mask });
         }
     }
     Ok(Some(CategoryView {
-        name: name.to_owned(),
+        name,
         row_count,
         columns,
     }))
@@ -290,46 +298,130 @@ fn collect_entity_poly_table(
 
 // _atom_site row decode
 
-fn require_atom_site(block: &BlockView) -> Result<CategoryView, AdapterError> {
-    let cat = block.find_category("_atom_site").ok_or_else(|| {
+fn require_atom_site(block: &BlockView) -> Result<&CategoryView, AdapterError> {
+    block.find_category("_atom_site").ok_or_else(|| {
         AdapterError::InvalidFormat("No '_atom_site' category found".into())
-    })?;
-    Ok(CategoryView {
-        name: cat.name.clone(),
-        row_count: cat.row_count,
-        columns: cat.columns.clone(),
     })
 }
 
-struct AtomSiteRow {
-    label_asym_id: String,
-    label_seq_id: i32,
-    label_comp_id: String,
-    label_atom_id: String,
-    label_entity_id: Option<String>,
-    label_alt_id: Option<u8>,
-    auth_asym_id: Option<String>,
-    auth_seq_id: Option<i32>,
-    auth_comp_id: Option<String>,
-    auth_atom_id: Option<String>,
-    ins_code: Option<u8>,
-    type_symbol: Option<String>,
-    x: f32,
-    y: f32,
-    z: f32,
-    occupancy: f32,
-    b_factor: f32,
-    formal_charge: i8,
-    model: Option<i32>,
+/// Every `_atom_site` column decoded once into its native columnar buffer.
+///
+/// Numeric columns are typed `Vec`s; categorical columns are a unique-value
+/// set plus a per-row index ([`StringColumn`]). Rows are materialized into the
+/// builder by indexing these buffers — no intermediate per-row value tree and
+/// no per-cell `String`.
+struct AtomSiteColumns {
+    n: usize,
+    coord_mask: CoordMask,
+    x: Floats,
+    y: Floats,
+    z: Floats,
+    label_atom_id: Strings,
+    label_comp_id: Strings,
+    label_asym_id: Strings,
+    label_seq_id: Option<Ints>,
+    label_entity_id: Option<Strings>,
+    label_alt_id: Option<Strings>,
+    type_symbol: Option<Strings>,
+    occupancy: Option<Floats>,
+    b_iso: Option<Floats>,
+    pdb_ins_code: Option<Strings>,
+    pdb_model_num: Option<Ints>,
+    formal_charge: Option<Ints>,
+    auth_asym_id: Option<Strings>,
+    auth_seq_id: Option<Ints>,
+    auth_comp_id: Option<Strings>,
+    auth_atom_id: Option<Strings>,
 }
 
-#[allow(
-    clippy::too_many_lines,
-    reason = "single function colocates every _atom_site column extraction"
-)]
+impl AtomSiteColumns {
+    fn len(&self) -> usize {
+        self.n
+    }
+
+    /// Whether row `i` survives the row-level filters: coordinate-masked rows
+    /// and rows with an empty `label_asym_id` are dropped, as for the PDB path.
+    fn is_emitted(&self, i: usize) -> bool {
+        !self.coord_mask.is_masked(i)
+            && !string_at(&self.label_asym_id, i).is_empty()
+    }
+
+    fn model_at(&self, i: usize) -> Option<i32> {
+        opt_int_at(self.pdb_model_num.as_ref(), i)
+    }
+
+    fn smallest_model(&self) -> Option<i32> {
+        (0..self.n)
+            .filter(|&i| self.is_emitted(i))
+            .filter_map(|i| self.model_at(i))
+            .min()
+    }
+
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "BCIF doubles narrow to f32 for storage"
+    )]
+    fn push_row(
+        &self,
+        builder: &mut EntityBuilder,
+        i: usize,
+    ) -> Result<(), AdapterError> {
+        let label_atom_id = string_at(&self.label_atom_id, i);
+        let type_symbol = opt_string_at(self.type_symbol.as_ref(), i);
+        let element = resolve_element(type_symbol, label_atom_id);
+        let auth_seq = opt_int_at(self.auth_seq_id.as_ref(), i);
+        let atom_row = AtomRow {
+            label_asym_id: CompactString::new(string_at(
+                &self.label_asym_id,
+                i,
+            )),
+            // Waters/non-polymer rows carry an absent `label_seq_id`; their
+            // per-instance discriminator lives in `auth_seq_id`. Mirror the
+            // PDB path (author number into the seq slot) so each gets a
+            // distinct residue key instead of all collapsing onto 0.
+            label_seq_id: opt_int_at(self.label_seq_id.as_ref(), i)
+                .or(auth_seq)
+                .unwrap_or(0),
+            label_comp_id: name_to_bytes::<3>(string_at(
+                &self.label_comp_id,
+                i,
+            )),
+            label_atom_id: name_to_bytes::<4>(label_atom_id),
+            label_entity_id: opt_string_at(self.label_entity_id.as_ref(), i)
+                .map(CompactString::new),
+            auth_asym_id: opt_string_at(self.auth_asym_id.as_ref(), i)
+                .map(CompactString::new),
+            auth_seq_id: auth_seq,
+            auth_comp_id: opt_string_at(self.auth_comp_id.as_ref(), i)
+                .map(name_to_bytes::<3>),
+            auth_atom_id: opt_string_at(self.auth_atom_id.as_ref(), i)
+                .map(name_to_bytes::<4>),
+            alt_loc: opt_string_at(self.label_alt_id.as_ref(), i)
+                .and_then(|s| s.bytes().next())
+                .filter(|&b| b != b' '),
+            ins_code: opt_string_at(self.pdb_ins_code.as_ref(), i)
+                .and_then(|s| s.bytes().next())
+                .filter(|&b| b != b' '),
+            element,
+            x: float_at_default(&self.x, i, 0.0) as f32,
+            y: float_at_default(&self.y, i, 0.0) as f32,
+            z: float_at_default(&self.z, i, 0.0) as f32,
+            occupancy: float_at_opt(self.occupancy.as_ref(), i, 1.0) as f32,
+            b_factor: float_at_opt(self.b_iso.as_ref(), i, 0.0) as f32,
+            formal_charge: opt_int_at(self.formal_charge.as_ref(), i)
+                .and_then(|n| i8::try_from(n).ok())
+                .unwrap_or(0),
+        };
+        builder
+            .push_atom(atom_row)
+            .map_err(|e| map_build_error(&e))?;
+        Ok(())
+    }
+}
+
 fn decode_atom_site(
     atom_site: &CategoryView,
-) -> Result<Vec<AtomSiteRow>, AdapterError> {
+) -> Result<AtomSiteColumns, AdapterError> {
     let n = atom_site.row_count;
 
     let x = need_floats(atom_site, "Cartn_x")?;
@@ -342,108 +434,29 @@ fn decode_atom_site(
         n,
     );
 
-    let label_atom_id = need_strings(atom_site, "label_atom_id")?;
-    let label_comp_id = need_strings(atom_site, "label_comp_id")?;
-    let label_asym_id = need_strings(atom_site, "label_asym_id")?;
-    let label_seq_id = optional_ints(atom_site, "label_seq_id")?;
-    let label_entity_id = optional_strings(atom_site, "label_entity_id")?;
-    let label_alt_id = optional_strings(atom_site, "label_alt_id")?;
-    let type_symbol = optional_strings(atom_site, "type_symbol")?;
-    let occupancy = optional_floats(atom_site, "occupancy")?;
-    let b_iso = optional_floats(atom_site, "B_iso_or_equiv")?;
-    let pdb_ins_code = optional_strings(atom_site, "pdbx_PDB_ins_code")?;
-    let pdb_model_num = optional_ints(atom_site, "pdbx_PDB_model_num")?;
-    let formal_charge = optional_ints(atom_site, "pdbx_formal_charge")?;
-    let auth_asym_id = optional_strings(atom_site, "auth_asym_id")?;
-    let auth_seq_id = optional_ints(atom_site, "auth_seq_id")?;
-    let auth_comp_id = optional_strings(atom_site, "auth_comp_id")?;
-    let auth_atom_id = optional_strings(atom_site, "auth_atom_id")?;
-
-    let mut out: Vec<AtomSiteRow> = Vec::with_capacity(n);
-    for i in 0..n {
-        if coord_mask.is_masked(i) {
-            continue;
-        }
-        let label_asym = string_at(&label_asym_id, i);
-        if label_asym.is_empty() {
-            continue;
-        }
-        let auth_seq = opt_int_at(auth_seq_id.as_ref(), i);
-        #[allow(
-            clippy::cast_possible_truncation,
-            reason = "BCIF doubles narrow to f32 for storage"
-        )]
-        out.push(AtomSiteRow {
-            label_asym_id: label_asym,
-            // Waters/non-polymer rows carry an absent `label_seq_id`; their
-            // per-instance discriminator lives in `auth_seq_id`. Mirror the
-            // PDB path (author number into the seq slot) so each gets a
-            // distinct residue key instead of all collapsing onto 0.
-            label_seq_id: opt_int_at(label_seq_id.as_ref(), i)
-                .or(auth_seq)
-                .unwrap_or(0),
-            label_comp_id: string_at(&label_comp_id, i),
-            label_atom_id: string_at(&label_atom_id, i),
-            label_entity_id: opt_string_at(label_entity_id.as_ref(), i),
-            label_alt_id: opt_string_at(label_alt_id.as_ref(), i)
-                .and_then(|s| s.bytes().next())
-                .filter(|&b| b != b' '),
-            auth_asym_id: opt_string_at(auth_asym_id.as_ref(), i),
-            auth_seq_id: auth_seq,
-            auth_comp_id: opt_string_at(auth_comp_id.as_ref(), i),
-            auth_atom_id: opt_string_at(auth_atom_id.as_ref(), i),
-            ins_code: opt_string_at(pdb_ins_code.as_ref(), i)
-                .and_then(|s| s.bytes().next())
-                .filter(|&b| b != b' '),
-            type_symbol: opt_string_at(type_symbol.as_ref(), i),
-            x: float_at_default(&x, i, 0.0) as f32,
-            y: float_at_default(&y, i, 0.0) as f32,
-            z: float_at_default(&z, i, 0.0) as f32,
-            occupancy: float_at_opt(occupancy.as_ref(), i, 1.0) as f32,
-            b_factor: float_at_opt(b_iso.as_ref(), i, 0.0) as f32,
-            formal_charge: opt_int_at(formal_charge.as_ref(), i)
-                .and_then(|n| i8::try_from(n).ok())
-                .unwrap_or(0),
-            model: opt_int_at(pdb_model_num.as_ref(), i),
-        });
-    }
-    Ok(out)
-}
-
-fn smallest_model(rows: &[AtomSiteRow]) -> Option<i32> {
-    rows.iter().filter_map(|r| r.model).min()
-}
-
-fn push_row(
-    builder: &mut EntityBuilder,
-    row: &AtomSiteRow,
-) -> Result<bool, AdapterError> {
-    let element =
-        resolve_element(row.type_symbol.as_deref(), &row.label_atom_id);
-    let atom_row = AtomRow {
-        label_asym_id: row.label_asym_id.clone(),
-        label_seq_id: row.label_seq_id,
-        label_comp_id: name_to_bytes::<3>(&row.label_comp_id),
-        label_atom_id: name_to_bytes::<4>(&row.label_atom_id),
-        label_entity_id: row.label_entity_id.clone(),
-        auth_asym_id: row.auth_asym_id.clone(),
-        auth_seq_id: row.auth_seq_id,
-        auth_comp_id: row.auth_comp_id.as_deref().map(name_to_bytes::<3>),
-        auth_atom_id: row.auth_atom_id.as_deref().map(name_to_bytes::<4>),
-        alt_loc: row.label_alt_id,
-        ins_code: row.ins_code,
-        element,
-        x: row.x,
-        y: row.y,
-        z: row.z,
-        occupancy: row.occupancy,
-        b_factor: row.b_factor,
-        formal_charge: row.formal_charge,
-    };
-    builder
-        .push_atom(atom_row)
-        .map_err(|e| map_build_error(&e))?;
-    Ok(true)
+    Ok(AtomSiteColumns {
+        n,
+        coord_mask,
+        x,
+        y,
+        z,
+        label_atom_id: need_strings(atom_site, "label_atom_id")?,
+        label_comp_id: need_strings(atom_site, "label_comp_id")?,
+        label_asym_id: need_strings(atom_site, "label_asym_id")?,
+        label_seq_id: optional_ints(atom_site, "label_seq_id")?,
+        label_entity_id: optional_strings(atom_site, "label_entity_id")?,
+        label_alt_id: optional_strings(atom_site, "label_alt_id")?,
+        type_symbol: optional_strings(atom_site, "type_symbol")?,
+        occupancy: optional_floats(atom_site, "occupancy")?,
+        b_iso: optional_floats(atom_site, "B_iso_or_equiv")?,
+        pdb_ins_code: optional_strings(atom_site, "pdbx_PDB_ins_code")?,
+        pdb_model_num: optional_ints(atom_site, "pdbx_PDB_model_num")?,
+        formal_charge: optional_ints(atom_site, "pdbx_formal_charge")?,
+        auth_asym_id: optional_strings(atom_site, "auth_asym_id")?,
+        auth_seq_id: optional_ints(atom_site, "auth_seq_id")?,
+        auth_comp_id: optional_strings(atom_site, "auth_comp_id")?,
+        auth_atom_id: optional_strings(atom_site, "auth_atom_id")?,
+    })
 }
 
 fn resolve_element(type_symbol: Option<&str>, atom_name: &str) -> Element {
@@ -494,7 +507,7 @@ struct Ints {
 }
 
 struct Strings {
-    data: Vec<String>,
+    data: StringColumn,
     mask: Option<Vec<u8>>,
 }
 
@@ -567,7 +580,7 @@ fn strings_with_mask(
         if cell_masked(s.mask.as_ref(), i) {
             out.push(None);
         } else {
-            out.push(Some(s.data[i].clone()));
+            out.push(Some(s.data.at(i).to_owned()));
         }
     }
     Ok(Some(out))
@@ -618,9 +631,18 @@ fn decode_strings_data(
     data: &MsgVal,
     expected: usize,
     name: &str,
-) -> Result<Vec<String>, AdapterError> {
+) -> Result<StringColumn, AdapterError> {
     match decode_column(data)? {
-        ColData::StringArray(v) => check_len(v, expected, name),
+        ColData::StringArray(col) => {
+            if col.len() == expected {
+                Ok(col)
+            } else {
+                Err(AdapterError::InvalidFormat(format!(
+                    "Column '{name}': expected {expected} rows, got {}",
+                    col.len()
+                )))
+            }
+        }
         _ => Err(AdapterError::InvalidFormat(format!(
             "Column '{name}': expected string array"
         ))),
@@ -709,11 +731,11 @@ fn cell_masked(mask: Option<&Vec<u8>>, i: usize) -> bool {
     mask.is_some_and(|m| m.get(i).copied().unwrap_or(0) != 0)
 }
 
-fn string_at(s: &Strings, i: usize) -> String {
+fn string_at(s: &Strings, i: usize) -> &str {
     if cell_masked(s.mask.as_ref(), i) {
-        return String::new();
+        return "";
     }
-    s.data.get(i).cloned().unwrap_or_default()
+    s.data.at(i)
 }
 
 fn float_at_default(s: &Floats, i: usize, default: f64) -> f64 {
@@ -727,16 +749,16 @@ fn float_at_opt(s: Option<&Floats>, i: usize, default: f64) -> f64 {
     s.map_or(default, |s| float_at_default(s, i, default))
 }
 
-fn opt_string_at(s: Option<&Strings>, i: usize) -> Option<String> {
+fn opt_string_at(s: Option<&Strings>, i: usize) -> Option<&str> {
     let s = s?;
     if cell_masked(s.mask.as_ref(), i) {
         return None;
     }
-    let v = s.data.get(i)?;
+    let v = s.data.at(i);
     if v.is_empty() || v == "." || v == "?" {
         None
     } else {
-        Some(v.clone())
+        Some(v)
     }
 }
 

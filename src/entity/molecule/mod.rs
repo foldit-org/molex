@@ -402,10 +402,9 @@ impl MoleculeEntity {
 
 /// Format a polymer entity label from its PDB chain ID.
 fn polymer_label(entity: &MoleculeEntity, type_name: &str) -> String {
-    entity.pdb_chain_id().map_or_else(
-        || type_name.to_owned(),
-        |id| format!("{type_name} {id}"),
-    )
+    entity
+        .pdb_chain_id()
+        .map_or_else(|| type_name.to_owned(), |id| format!("{type_name} {id}"))
 }
 
 #[cfg(test)]

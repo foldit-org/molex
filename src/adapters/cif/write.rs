@@ -1,5 +1,5 @@
 //! Entity -> mmCIF `_atom_site` emission. The inverse of the cif reader:
-//! the emitted column set is exactly the one `fast_row::AtomSiteCols`
+//! the emitted column set is exactly the one `scan_row::AtomSiteCols`
 //! consumes, so output round-trips faithfully through `mmcif_str_to_entities`.
 //!
 //! Polymer atoms are `ATOM` rows carrying the residue's `label_seq_id`;
@@ -46,7 +46,7 @@ pub fn entities_to_mmcif<E: std::borrow::Borrow<MoleculeEntity>>(
 }
 
 /// The `_atom_site` column order, emitted once before the rows. Mirrors the
-/// fields `fast_row::AtomSiteCols` resolves so the loop round-trips.
+/// fields `scan_row::AtomSiteCols` resolves so the loop round-trips.
 const COLUMNS: &[&str] = &[
     "group_PDB",
     "id",
@@ -253,8 +253,8 @@ fn write_row(out: &mut String, f: &RowFields<'_>) {
     // structure builder requires this column to be present.
     let _ = writeln!(
         out,
-        "{group} {serial} {sym} {atom} . {comp} {asym} {lseq} \
-         {x:.3} {y:.3} {z:.3} {occ:.2} {b:.2} {charge} {ins} {aseq} {auth} 1",
+        "{group} {serial} {sym} {atom} . {comp} {asym} {lseq} {x:.3} {y:.3} \
+         {z:.3} {occ:.2} {b:.2} {charge} {ins} {aseq} {auth} 1",
         group = f.group,
         serial = f.serial,
         sym = atom.element.symbol(),

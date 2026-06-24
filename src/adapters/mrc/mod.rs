@@ -17,7 +17,7 @@ const MAP_MAGIC: &[u8; 4] = b"MAP ";
 fn word4(b: &[u8]) -> [u8; 4] {
     [b[0], b[1], b[2], b[3]]
 }
-fn hi32(b: &[u8], le: bool) -> i32 {
+fn read_i32_at(b: &[u8], le: bool) -> i32 {
     let w = word4(b);
     if le {
         i32::from_le_bytes(w)
@@ -25,7 +25,7 @@ fn hi32(b: &[u8], le: bool) -> i32 {
         i32::from_be_bytes(w)
     }
 }
-fn hf32(b: &[u8], le: bool) -> f32 {
+fn read_f32_at(b: &[u8], le: bool) -> f32 {
     let w = word4(b);
     if le {
         f32::from_le_bytes(w)
@@ -120,8 +120,8 @@ fn validate_axes(mapc: i32, mapr: i32, maps: i32) -> Result<(), DensityError> {
 #[allow(clippy::cast_sign_loss, reason = "validated positive")]
 fn parse_mrc_header(bytes: &[u8]) -> Result<MrcHeader, DensityError> {
     let (le, h) = validate_header(bytes)?;
-    let i = |off: usize| hi32(&h[off..off + 4], le);
-    let f = |off: usize| hf32(&h[off..off + 4], le);
+    let i = |off: usize| read_i32_at(&h[off..off + 4], le);
+    let f = |off: usize| read_f32_at(&h[off..off + 4], le);
     let (nc, nr, ns) = (i(0), i(4), i(8));
     require_positive([nc, nr, ns], "grid (NC, NR, NS)")?;
     let mode = i(12);

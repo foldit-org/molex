@@ -339,11 +339,9 @@ fn read_header_chain(
             "Truncated entity header (expected chain length)".to_owned(),
         )
     })?;
-    let len = usize::from(u16::from_be_bytes(
-        len_bytes.try_into().map_err(|_| {
-            AdapterError::InvalidFormat("Invalid chain length".to_owned())
-        })?,
-    ));
+    let len = usize::from(u16::from_be_bytes(len_bytes.try_into().map_err(
+        |_| AdapterError::InvalidFormat("Invalid chain length".to_owned()),
+    )?));
     let start = offset + 2;
     let chain_bytes = bytes.get(start..start + len).ok_or_else(|| {
         AdapterError::InvalidFormat(
@@ -453,8 +451,7 @@ pub(crate) fn deserialize_assembly_entities(
     let mut allocator = EntityIdAllocator::new();
 
     for header in headers {
-        let (rows, rest) =
-            read_atom_rows(cursor, header.atom_count, layout)?;
+        let (rows, rest) = read_atom_rows(cursor, header.atom_count, layout)?;
         cursor = rest;
         let id = allocator.from_raw(header.entity_id_raw);
         let chain_id = resolve_chain_id(header.chain_id.as_deref(), &rows);

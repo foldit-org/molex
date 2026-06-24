@@ -1,4 +1,4 @@
-//! Refusal helpers shared by the fast and DOM ingest paths.
+//! Refusal helpers shared by the scanner and DOM ingest paths.
 
 use crate::ops::codec::AdapterError;
 

@@ -149,12 +149,12 @@ impl RowBuilder {
 
     pub(super) fn build(self) -> AtomRow {
         AtomRow {
-            label_asym_id: self.chain,
+            label_asym_id: self.chain.into(),
             label_seq_id: self.seq,
             label_comp_id: self.comp,
             label_atom_id: self.atom,
-            label_entity_id: self.entity_id,
-            auth_asym_id: self.auth_chain,
+            label_entity_id: self.entity_id.map(Into::into),
+            auth_asym_id: self.auth_chain.map(Into::into),
             auth_seq_id: self.auth_seq,
             auth_comp_id: self.auth_comp,
             auth_atom_id: self.auth_atom,
@@ -650,10 +650,8 @@ fn over_ninety_chains_all_build() {
         push_protein_residue(&mut b, &format!("CH{i}"), 1, "ALA", 0.0, None);
     }
     let entities = b.finish().unwrap();
-    let chains: Vec<&str> = entities
-        .iter()
-        .filter_map(|e| e.pdb_chain_id())
-        .collect();
+    let chains: Vec<&str> =
+        entities.iter().filter_map(|e| e.pdb_chain_id()).collect();
     assert_eq!(chains.len(), 120);
     assert!(chains.contains(&"CH0"));
     assert!(chains.contains(&"CH119"));

@@ -179,14 +179,7 @@ impl ProteinEntity {
         pdb_chain_id: String,
         completion: CompletionMode,
     ) -> Self {
-        build_protein(
-            id,
-            atoms,
-            residues,
-            pdb_chain_id,
-            completion,
-            false,
-        )
+        build_protein(id, atoms, residues, pdb_chain_id, completion, false)
     }
 
     /// Construct a protein entity assuming a single continuous chain
@@ -385,7 +378,7 @@ impl ProteinEntity {
     /// residue (no preceding C), ψ at the last (no following N), either side of
     /// a segment break (no peptide bond across it), and for any residue (or its
     /// neighbour) lacking a complete N/CA/C backbone — the same completeness
-    /// notion [`extract_backbone_from_residue`] enforces. Results are in
+    /// notion `extract_backbone_from_residue` enforces. Results are in
     /// (−180, 180].
     #[must_use]
     pub fn phi_psi(&self) -> Vec<(Option<f32>, Option<f32>)> {

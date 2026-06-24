@@ -238,17 +238,22 @@ fn label_connected_components(
             continue;
         }
         let label = bboxes.len() as u32 + 1;
-        let bbox =
-            flood_fill((ix, iy, iz), label, cavity_mask, &mut labels, dims);
+        let bbox = label_component(
+            (ix, iy, iz),
+            label,
+            cavity_mask,
+            &mut labels,
+            dims,
+        );
         bboxes.push(bbox);
     }
 
     (labels, bboxes)
 }
 
-/// Flood-fill from `start`, marking every connected cavity voxel with
-/// `label` and returning the resulting bounding box.
-fn flood_fill(
+/// Label the connected component containing `start`, marking every
+/// connected cavity voxel with `label` and returning the bounding box.
+fn label_component(
     start: (usize, usize, usize),
     label: u32,
     cavity_mask: &[bool],

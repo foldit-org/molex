@@ -1,26 +1,28 @@
-//! Fast-path mmCIF scanner that feeds [`EntityBuilder`] without
+//! Streaming mmCIF scanner that feeds [`EntityBuilder`] without
 //! constructing the full DOM.
 //!
-//! Returns `None` for inputs containing constructs the fast path doesn't
+//! Returns `None` for inputs containing constructs the scanner doesn't
 //! handle confidently (unterminated quotes, missing required
 //! `_atom_site` columns). Callers fall back to the DOM path
 //! [`super::dom_build`].
 
 use std::collections::{HashMap, HashSet};
 
-use super::fast_row::{finish, push_row, AtomSiteCols, RowValues};
 use super::hint::resolve_hint;
 use super::refuse::multi_block_error;
+use super::scan_row::{
+    finish, push_row, push_slots, AtomSiteCols, RowSlots, RowValues,
+};
 use crate::entity::molecule::{EntityBuilder, MoleculeEntity};
 use crate::ops::codec::AdapterError;
 
-/// Result of a single-model fast-path parse.
-pub(super) type FastResult = Option<Result<Vec<MoleculeEntity>, AdapterError>>;
-/// Result of an all-models fast-path parse.
-pub(super) type FastModelsResult =
+/// Result of a single-model scan parse.
+pub(super) type ScanResult = Option<Result<Vec<MoleculeEntity>, AdapterError>>;
+/// Result of an all-models scan parse.
+pub(super) type ScanModelsResult =
     Option<Result<Vec<Vec<MoleculeEntity>>, AdapterError>>;
 
-pub(super) fn parse_mmcif_fast(input: &str) -> FastResult {
+pub(super) fn parse_mmcif_scan(input: &str) -> ScanResult {
     let mut scanner = Scanner::new(input);
     let pre = scanner.run_prepass()?;
     if let Some(err) = scanner.pending_error.take() {
@@ -39,13 +41,13 @@ pub(super) fn parse_mmcif_fast(input: &str) -> FastResult {
     register_hints(&pre, &mut builder);
 
     let mut any_atom = false;
-    let result = scanner.run_rows(&cols, |row| {
+    let result = scanner.run_rows(&cols, |slots, cols| {
         if let Some(target) = target {
-            if row.model.is_some_and(|m| m != target) {
+            if slots.model(cols).is_some_and(|m| m != target) {
                 return Ok(());
             }
         }
-        if push_row(&mut builder, &row)? {
+        if push_slots(&mut builder, slots, cols)? {
             any_atom = true;
         }
         Ok(())
@@ -64,7 +66,7 @@ pub(super) fn parse_mmcif_fast(input: &str) -> FastResult {
     Some(finish(builder))
 }
 
-pub(super) fn parse_mmcif_fast_to_all_models(input: &str) -> FastModelsResult {
+pub(super) fn parse_mmcif_scan_all_models(input: &str) -> ScanModelsResult {
     let mut scanner = Scanner::new(input);
     let pre = scanner.run_prepass()?;
     if let Some(err) = scanner.pending_error.take() {
@@ -86,7 +88,7 @@ pub(super) fn parse_mmcif_fast_to_all_models(input: &str) -> FastModelsResult {
         let Some(rows) = buckets.remove(model) else {
             continue;
         };
-        match build_model(&pre, &rows) {
+        match build_model(&pre, &rows, &cols) {
             Ok(Some(es)) => out.push(es),
             Ok(None) => {}
             Err(e) => return Some(Err(e)),
@@ -110,7 +112,8 @@ fn collect_model_buckets(
     let mut order: Vec<i32> = Vec::new();
     let default_model: i32 = 1;
 
-    scanner.run_rows(cols, |row| {
+    scanner.run_rows(cols, |slots, cols| {
+        let row = RowValues::from_slots(slots, cols);
         let key = row.model.unwrap_or(default_model);
         buckets
             .entry(key)
@@ -135,12 +138,13 @@ fn collect_model_buckets(
 fn build_model(
     pre: &PrePass,
     rows: &[RowValues],
+    cols: &AtomSiteCols,
 ) -> Result<Option<Vec<MoleculeEntity>>, AdapterError> {
     let mut builder = EntityBuilder::new();
     register_hints(pre, &mut builder);
     let mut any_atom = false;
     for row in rows {
-        if push_row(&mut builder, row)? {
+        if push_row(&mut builder, row, cols)? {
             any_atom = true;
         }
     }
@@ -160,12 +164,12 @@ struct PrePass {
 }
 
 fn pick_two_cells(
-    row: &[String],
+    row: &[&str],
     a: Option<usize>,
     b: Option<usize>,
 ) -> Option<(String, String)> {
-    let a = row.get(a?)?.clone();
-    let b = row.get(b?)?.clone();
+    let a = (*row.get(a?)?).to_owned();
+    let b = (*row.get(b?)?).to_owned();
     Some((a, b))
 }
 
@@ -211,8 +215,8 @@ fn register_hints(pre: &PrePass, builder: &mut EntityBuilder) {
 // Scanner state machine
 
 enum RowOutcome {
-    /// A complete row of values for the current loop.
-    Row(Vec<String>),
+    /// A complete row of values landed in `self.scratch`.
+    Row,
     /// The loop ended cleanly at this position.
     End,
     /// An unhandled construct mid-row; caller bails to DOM.
@@ -226,6 +230,9 @@ struct Scanner<'a> {
     seen_data_block: bool,
     at_line_start: bool,
     pending_error: Option<AdapterError>,
+    /// Per-row borrowed cells, reused across rows to avoid per-row
+    /// allocation. Slices point into `input`.
+    scratch: Vec<&'a str>,
 }
 
 impl<'a> Scanner<'a> {
@@ -237,6 +244,7 @@ impl<'a> Scanner<'a> {
             seen_data_block: false,
             at_line_start: true,
             pending_error: None,
+            scratch: Vec::new(),
         }
     }
 
@@ -332,9 +340,9 @@ impl<'a> Scanner<'a> {
         let stride = tags.len();
         loop {
             match self.read_loop_row(stride) {
-                RowOutcome::Row(row) => {
+                RowOutcome::Row => {
                     if let Some((id, etype)) =
-                        pick_two_cells(&row, id_idx, type_idx)
+                        pick_two_cells(&self.scratch, id_idx, type_idx)
                     {
                         out.push((id, etype));
                     }
@@ -359,9 +367,9 @@ impl<'a> Scanner<'a> {
         let stride = tags.len();
         loop {
             match self.read_loop_row(stride) {
-                RowOutcome::Row(row) => {
+                RowOutcome::Row => {
                     if let Some((id, ptype)) =
-                        pick_two_cells(&row, id_idx, type_idx)
+                        pick_two_cells(&self.scratch, id_idx, type_idx)
                     {
                         let _ = out.insert(id, ptype);
                     }
@@ -377,7 +385,7 @@ impl<'a> Scanner<'a> {
         let stride = tags.len();
         loop {
             match self.read_loop_row(stride) {
-                RowOutcome::Row(_) => {}
+                RowOutcome::Row => {}
                 RowOutcome::End => return Some(()),
                 RowOutcome::Bail => return None,
             }
@@ -404,9 +412,9 @@ impl<'a> Scanner<'a> {
         }
     }
 
-    /// Read one loop row of `stride` values.
+    /// Read one loop row of `stride` borrowed values into `self.scratch`.
     fn read_loop_row(&mut self, stride: usize) -> RowOutcome {
-        let mut row: Vec<String> = Vec::with_capacity(stride);
+        self.scratch.clear();
         for i in 0..stride {
             self.skip_whitespace_and_comments();
             if self.pos >= self.len() {
@@ -423,12 +431,12 @@ impl<'a> Scanner<'a> {
                     RowOutcome::Bail
                 };
             }
-            let Some(value) = self.scan_value() else {
+            let Some(value) = self.scan_value_borrowed() else {
                 return RowOutcome::Bail;
             };
-            row.push(value);
+            self.scratch.push(value);
         }
-        RowOutcome::Row(row)
+        RowOutcome::Row
     }
 
     fn is_loop_terminator(&self) -> bool {
@@ -507,8 +515,8 @@ impl<'a> Scanner<'a> {
             if self.pos >= self.len() || self.is_loop_terminator() {
                 break;
             }
-            let row = match self.read_loop_row(cols.ncols) {
-                RowOutcome::Row(r) => r,
+            match self.read_loop_row(cols.ncols) {
+                RowOutcome::Row => {}
                 RowOutcome::End => break,
                 RowOutcome::Bail => {
                     self.pos = save;
@@ -518,8 +526,8 @@ impl<'a> Scanner<'a> {
                             .into(),
                     ));
                 }
-            };
-            if let Some(s) = row.get(model_col) {
+            }
+            if let Some(s) = self.scratch.get(model_col) {
                 if let Ok(n) = s.parse::<i32>() {
                     min = Some(min.map_or(n, |cur| cur.min(n)));
                 }
@@ -535,7 +543,7 @@ impl<'a> Scanner<'a> {
         mut visit: F,
     ) -> Result<(), AdapterError>
     where
-        F: FnMut(RowValues) -> Result<(), AdapterError>,
+        F: FnMut(&RowSlots<'_, 'a>, &AtomSiteCols) -> Result<(), AdapterError>,
     {
         loop {
             self.skip_whitespace_and_comments();
@@ -548,17 +556,16 @@ impl<'a> Scanner<'a> {
             if self.is_loop_terminator() {
                 break;
             }
-            let row = self.scan_row(cols)?;
-            visit(row)?;
+            self.scan_row(cols)?;
+            let slots = RowSlots::new(&self.scratch);
+            visit(&slots, cols)?;
         }
         Ok(())
     }
 
-    fn scan_row(
-        &mut self,
-        cols: &AtomSiteCols,
-    ) -> Result<RowValues, AdapterError> {
-        let mut values: Vec<String> = Vec::with_capacity(cols.ncols);
+    /// Tokenize one `_atom_site` row into `self.scratch` as borrowed cells.
+    fn scan_row(&mut self, cols: &AtomSiteCols) -> Result<(), AdapterError> {
+        self.scratch.clear();
         for _ in 0..cols.ncols {
             self.skip_whitespace_and_comments();
             if self.pos >= self.len() {
@@ -566,14 +573,14 @@ impl<'a> Scanner<'a> {
                     "Unexpected end of CIF data in _atom_site loop".into(),
                 ));
             }
-            let v = self.scan_value().ok_or_else(|| {
+            let v = self.scan_value_borrowed().ok_or_else(|| {
                 AdapterError::InvalidFormat(
                     "Fast path: unable to tokenize _atom_site value".into(),
                 )
             })?;
-            values.push(v);
+            self.scratch.push(v);
         }
-        Ok(RowValues::from_values(cols, &values))
+        Ok(())
     }
 
     fn verify_no_extra_block(&mut self) -> Result<(), AdapterError> {
@@ -639,7 +646,14 @@ impl<'a> Scanner<'a> {
         unsafe { std::str::from_utf8_unchecked(&self.bytes[start..self.pos]) }
     }
 
-    fn scan_value(&mut self) -> Option<String> {
+    /// Tokenize one value as a borrowed slice into the input buffer.
+    ///
+    /// CIF values are taken verbatim: unquoted tokens, the text between
+    /// matching single/double quotes, and `;`-delimited multiline blocks all
+    /// reproduce a contiguous span of the source (CIF has no in-string escape
+    /// sequence — an embedded quote not followed by whitespace is literal), so
+    /// every value borrows without copying.
+    fn scan_value_borrowed(&mut self) -> Option<&'a str> {
         if self.pos >= self.len() {
             return None;
         }
@@ -650,13 +664,16 @@ impl<'a> Scanner<'a> {
         if b == b'\'' || b == b'"' {
             return self.scan_quoted(b);
         }
-        let tok = self.scan_unquoted_token();
-        Some(tok.to_owned())
+        Some(self.scan_unquoted_token())
+    }
+
+    fn scan_value(&mut self) -> Option<String> {
+        self.scan_value_borrowed().map(str::to_owned)
     }
 
     /// CIF rule: the closing quote must be followed by whitespace, `#`,
     /// or EOF. A quote followed by anything else is part of the string.
-    fn scan_quoted(&mut self, quote: u8) -> Option<String> {
+    fn scan_quoted(&mut self, quote: u8) -> Option<&'a str> {
         self.at_line_start = false;
         let start = self.pos + 1;
         let mut cursor = start;
@@ -664,7 +681,7 @@ impl<'a> Scanner<'a> {
             if self.bytes[cursor] == quote {
                 let next = self.bytes.get(cursor + 1).copied();
                 if next.is_none_or(|b| b.is_ascii_whitespace() || b == b'#') {
-                    let val = self.input[start..cursor].to_owned();
+                    let val = &self.input[start..cursor];
                     self.pos = cursor + 1;
                     return Some(val);
                 }
@@ -674,7 +691,7 @@ impl<'a> Scanner<'a> {
         None
     }
 
-    fn scan_semicolon_text(&mut self) -> Option<String> {
+    fn scan_semicolon_text(&mut self) -> Option<&'a str> {
         self.at_line_start = false;
         let start = self.pos + 1;
         let mut cursor = start;
@@ -688,7 +705,7 @@ impl<'a> Scanner<'a> {
             cursor += 1;
             if cursor < self.len() && self.bytes[cursor] == b';' {
                 let end = cursor - 1;
-                let text = self.input[start..end].to_owned();
+                let text = &self.input[start..end];
                 self.pos = cursor + 1;
                 return Some(text);
             }

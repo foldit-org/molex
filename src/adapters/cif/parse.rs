@@ -2,7 +2,7 @@
 //!
 //! Parses any valid CIF or STAR file into an untyped [`Document`] tree.
 //! Handles all value forms: unquoted, single/double-quoted, and semicolon
-//! text fields. Endianness and case conventions are preserved in tag names.
+//! text fields. The original case of tag names and values is preserved.
 
 use super::dom::{Block, Document, Loop, Value};
 

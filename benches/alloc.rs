@@ -22,7 +22,8 @@
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering::Relaxed;
 
 use molex::adapters::bcif::bcif_to_entities;
 use molex::adapters::cif::{assembly_to_mmcif, mmcif_str_to_entities};
@@ -305,7 +306,7 @@ fn main() {
     print_table("WRITE allocation metric", &writes);
 
     println!(
-        "\nAtom-count sanity: 1ubq=660, 4hhb=4779 (asserted above; \
-         parse aborts on mismatch)."
+        "\nAtom-count sanity: 1ubq=660, 4hhb=4779 (asserted above; parse \
+         aborts on mismatch)."
     );
 }

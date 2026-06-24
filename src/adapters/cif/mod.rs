@@ -1,16 +1,16 @@
 //! mmCIF text-format adapter.
 //!
-//! Two parser paths feed `EntityBuilder`: a hand-rolled streaming fast
+//! Two parser paths feed `EntityBuilder`: a hand-rolled streaming
 //! scanner and a DOM-backed fallback. The DOM types are exposed for
 //! untyped tag-based queries over a parsed [`Document`].
 
 pub mod dom;
 mod dom_build;
-mod fast;
-mod fast_row;
 mod hint;
 pub mod parse;
 mod refuse;
+mod scan;
+mod scan_row;
 mod write;
 
 use std::path::Path;
@@ -23,7 +23,7 @@ use crate::element::Element;
 use crate::entity::molecule::{BuildError, MoleculeEntity};
 use crate::ops::codec::AdapterError;
 
-// Helpers shared by the fast (`fast_row`) and DOM (`dom_build`) decode paths.
+// Helpers shared by the scan (`scan_row`) and DOM (`dom_build`) decode paths.
 
 /// Resolve an atom's [`Element`] from its CIF `type_symbol`, falling back
 /// to the atom name when the symbol is absent, blank, or unrecognised.
@@ -74,7 +74,7 @@ fn map_build_error(err: &BuildError) -> AdapterError {
 pub fn mmcif_str_to_entities(
     cif_str: &str,
 ) -> Result<Vec<MoleculeEntity>, AdapterError> {
-    if let Some(result) = fast::parse_mmcif_fast(cif_str) {
+    if let Some(result) = scan::parse_mmcif_scan(cif_str) {
         return result;
     }
     dom_build::parse_mmcif_dom_to_entities(cif_str)
@@ -104,7 +104,7 @@ pub fn mmcif_file_to_entities(
 pub fn mmcif_str_to_all_models(
     cif_str: &str,
 ) -> Result<Vec<Vec<MoleculeEntity>>, AdapterError> {
-    if let Some(result) = fast::parse_mmcif_fast_to_all_models(cif_str) {
+    if let Some(result) = scan::parse_mmcif_scan_all_models(cif_str) {
         return result;
     }
     dom_build::parse_mmcif_dom_to_all_models(cif_str)

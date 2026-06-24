@@ -94,6 +94,31 @@ impl MsgVal {
         }
         None
     }
+
+    /// Take ownership of the value for `key`, leaving [`MsgVal::Nil`] in its
+    /// slot. Lets the block walk move column sub-trees out of the decoded root
+    /// instead of deep-cloning each one.
+    pub(crate) fn take(&mut self, key: &str) -> Option<MsgVal> {
+        let MsgVal::Map(pairs) = self else {
+            return None;
+        };
+        for (k, v) in pairs {
+            if let MsgVal::Str(s) = k {
+                if s == key {
+                    return Some(std::mem::replace(v, MsgVal::Nil));
+                }
+            }
+        }
+        None
+    }
+
+    /// Consume this value as an array, if it is one.
+    pub(crate) fn into_array(self) -> Option<Vec<MsgVal>> {
+        match self {
+            MsgVal::Array(a) => Some(a),
+            _ => None,
+        }
+    }
 }
 
 // MessagePack decoder
@@ -261,8 +286,38 @@ fn read_map(
 pub(crate) enum ColData {
     IntArray(Vec<i32>),
     FloatArray(Vec<f64>),
-    StringArray(Vec<String>),
+    StringArray(StringColumn),
     Bytes(Vec<u8>),
+}
+
+/// A decoded BinaryCIF `StringArray` column kept in its native columnar shape:
+/// the small set of unique values decoded once, plus the per-row integer index
+/// into that set. Per-row access is an index, never a fresh `String`.
+#[derive(Debug)]
+pub(crate) struct StringColumn {
+    uniques: Vec<String>,
+    indices: Vec<i32>,
+}
+
+impl StringColumn {
+    /// Number of rows (the per-row index array length).
+    pub(crate) fn len(&self) -> usize {
+        self.indices.len()
+    }
+
+    /// Borrow row `i`'s value from the unique set. An index outside the set
+    /// maps to the empty string, matching the spec's absent-string slot.
+    pub(crate) fn at(&self, i: usize) -> &str {
+        let Some(&idx) = self.indices.get(i) else {
+            return "";
+        };
+        #[allow(
+            clippy::cast_sign_loss,
+            reason = "indices are non-negative by spec"
+        )]
+        let idx = idx as usize;
+        self.uniques.get(idx).map_or("", String::as_str)
+    }
 }
 
 pub(crate) fn decode_column(
@@ -304,31 +359,7 @@ pub(crate) fn decode_column(
         );
     }
 
-    let mut current = ColData::Bytes(raw_bytes.to_vec());
-    for enc in encodings.iter().rev() {
-        let kind =
-            enc.get("kind").and_then(MsgVal::as_str).ok_or_else(|| {
-                AdapterError::InvalidFormat("Encoding missing 'kind'".into())
-            })?;
-
-        current = match kind {
-            "ByteArray" => decode_byte_array(current, enc)?,
-            "FixedPoint" => decode_fixed_point(current, enc)?,
-            "IntervalQuantization" => {
-                decode_interval_quantization(current, enc)?
-            }
-            "RunLength" => decode_run_length(current, enc)?,
-            "Delta" => decode_delta(current, enc)?,
-            "IntegerPacking" => decode_integer_packing(current, enc)?,
-            other => {
-                return Err(AdapterError::InvalidFormat(format!(
-                    "Unknown encoding kind: {other}"
-                )))
-            }
-        };
-    }
-
-    Ok(current)
+    decode_chain(raw_bytes, encodings)
 }
 
 #[allow(
@@ -716,18 +747,16 @@ fn decode_string_array_column(
             )
         })?;
 
-    let offset_data_node = build_encoded_data(offset_bytes, offset_encoding);
-    let ColData::IntArray(offsets) = decode_column(&offset_data_node)? else {
+    let ColData::IntArray(offsets) =
+        decode_chain(offset_bytes, offset_encoding)?
+    else {
         return Err(AdapterError::InvalidFormat(
             "StringArray offsets must decode to int array".into(),
         ));
     };
 
-    let mut strings: Vec<&str> = Vec::with_capacity(if offsets.is_empty() {
-        0
-    } else {
-        offsets.len() - 1
-    });
+    let unique_count = offsets.len().saturating_sub(1);
+    let mut uniques: Vec<String> = Vec::with_capacity(unique_count);
     for w in offsets.windows(2) {
         #[allow(
             clippy::cast_sign_loss,
@@ -744,7 +773,7 @@ fn decode_string_array_column(
                 "StringArray offset out of bounds".into(),
             ));
         }
-        strings.push(&string_data[start..end]);
+        uniques.push(string_data[start..end].to_owned());
     }
 
     let data_encoding = sa_enc
@@ -758,40 +787,52 @@ fn decode_string_array_column(
     index_encodings.extend_from_slice(data_encoding);
     index_encodings.extend_from_slice(remaining_encodings);
 
-    let index_data_node = build_encoded_data(raw_bytes, &index_encodings);
-    let ColData::IntArray(indices) = decode_column(&index_data_node)? else {
+    let ColData::IntArray(indices) = decode_chain(raw_bytes, &index_encodings)?
+    else {
         return Err(AdapterError::InvalidFormat(
             "StringArray indices must decode to int array".into(),
         ));
     };
 
-    let result: Vec<String> = indices
-        .iter()
-        .map(|&idx| {
-            #[allow(
-                clippy::cast_sign_loss,
-                reason = "indices are non-negative by spec"
-            )]
-            let idx = idx as usize;
-            if idx < strings.len() {
-                strings[idx].to_owned()
-            } else {
-                String::new()
-            }
-        })
-        .collect();
-
-    Ok(ColData::StringArray(result))
+    Ok(ColData::StringArray(StringColumn { uniques, indices }))
 }
 
-fn build_encoded_data(bytes: &[u8], encodings: &[MsgVal]) -> MsgVal {
-    MsgVal::Map(vec![
-        (MsgVal::Str("data".into()), MsgVal::Bin(bytes.to_vec())),
-        (
-            MsgVal::Str("encoding".into()),
-            MsgVal::Array(encodings.to_vec()),
-        ),
-    ])
+/// Run an encoding chain over a raw byte slice without round-tripping through
+/// a synthetic `MsgVal` node. Used for the offset and index sub-arrays inside
+/// a `StringArray` column, neither of which is itself a `StringArray`.
+fn decode_chain(
+    bytes: &[u8],
+    encodings: &[MsgVal],
+) -> Result<ColData, AdapterError> {
+    if encodings.is_empty() {
+        return Ok(ColData::Bytes(bytes.to_vec()));
+    }
+
+    let mut current = ColData::Bytes(bytes.to_vec());
+    for enc in encodings.iter().rev() {
+        let kind =
+            enc.get("kind").and_then(MsgVal::as_str).ok_or_else(|| {
+                AdapterError::InvalidFormat("Encoding missing 'kind'".into())
+            })?;
+
+        current = match kind {
+            "ByteArray" => decode_byte_array(current, enc)?,
+            "FixedPoint" => decode_fixed_point(current, enc)?,
+            "IntervalQuantization" => {
+                decode_interval_quantization(current, enc)?
+            }
+            "RunLength" => decode_run_length(current, enc)?,
+            "Delta" => decode_delta(current, enc)?,
+            "IntegerPacking" => decode_integer_packing(current, enc)?,
+            other => {
+                return Err(AdapterError::InvalidFormat(format!(
+                    "Unknown encoding kind: {other}"
+                )))
+            }
+        };
+    }
+
+    Ok(current)
 }
 
 #[cfg(test)]

@@ -26,8 +26,8 @@ use crate::ops::codec::AdapterError;
 ///     Receivers reconstruct entities with the same id so cross-boundary edit
 ///     references resolve.
 ///   - 2 bytes: `chain_len` (`u16` BE)
-///   - `chain_len` bytes: the entity's chain id (UTF-8 `label_asym_id`).
-///     Empty for non-polymer entities.
+///   - `chain_len` bytes: the entity's chain id (UTF-8 `label_asym_id`). Empty
+///     for non-polymer entities.
 /// - Per atom (25 bytes):
 ///   - 12 bytes: x, y, z (`f32` BE x 3)
 ///   - 3 bytes:  `res_name`

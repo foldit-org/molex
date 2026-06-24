@@ -152,14 +152,7 @@ impl NAEntity {
         pdb_chain_id: String,
         completion: CompletionMode,
     ) -> Self {
-        build_na(
-            id,
-            na_type,
-            atoms,
-            residues,
-            pdb_chain_id,
-            completion,
-        )
+        build_na(id, na_type, atoms, residues, pdb_chain_id, completion)
     }
 
     /// Rebuild this entity with heavy-atom completion, fabricating the

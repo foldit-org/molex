@@ -36,8 +36,9 @@ pub(crate) fn build_entity(
     mol_type: MoleculeType,
     rows: Vec<ReconstructRow>,
 ) -> MoleculeEntity {
-    let pdb_chain_id =
-        rows.first().map_or_else(|| " ".to_owned(), |r| r.chain_id.clone());
+    let pdb_chain_id = rows
+        .first()
+        .map_or_else(|| " ".to_owned(), |r| r.chain_id.clone());
 
     match mol_type {
         MoleculeType::Protein => {

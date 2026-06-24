@@ -21,6 +21,7 @@ use pyo3::prelude::*;
 
 use self::arrays::{entities_to_arrays, flat_atoms};
 use crate::adapters::{bcif, cif, pdb};
+use crate::analysis::sasa::{DEFAULT_N_POINTS, DEFAULT_PROBE_RADIUS};
 use crate::analysis::{
     detect_disulfides, infer_bonds, SSType, DEFAULT_TOLERANCE,
 };
@@ -252,10 +253,11 @@ impl PyAssembly {
             .entities()
             .iter()
             .map(|entity| {
-                self.inner.ss_per_residue(entity.id()).map_or_else(
-                    String::new,
-                    |ss| ss.into_iter().map(ss_char).collect(),
-                )
+                self.inner
+                    .ss_per_residue(entity.id())
+                    .map_or_else(String::new, |ss| {
+                        ss.into_iter().map(ss_char).collect()
+                    })
             })
             .collect()
     }
@@ -266,12 +268,12 @@ impl PyAssembly {
     /// and biotite. Uses Bondi van der Waals radii and ~960 test points per
     /// atom. `probe_radius` is the solvent radius in Angstroms (1.4 for water).
     #[must_use]
-    #[pyo3(signature = (probe_radius = crate::analysis::sasa::DEFAULT_PROBE_RADIUS))]
+    #[pyo3(signature = (probe_radius = DEFAULT_PROBE_RADIUS))]
     pub fn sasa(&self, probe_radius: f32) -> f32 {
         crate::analysis::assembly_sasa(
             &self.inner,
             probe_radius,
-            crate::analysis::sasa::DEFAULT_N_POINTS,
+            DEFAULT_N_POINTS,
         )
     }
 
@@ -417,8 +419,10 @@ impl PyAssembly {
         detect_disulfides(self.inner.entities())
             .into_iter()
             .filter_map(|bond| {
-                let a = *flat.flat_of.get(&(bond.a.entity.raw(), bond.a.index))?;
-                let b = *flat.flat_of.get(&(bond.b.entity.raw(), bond.b.index))?;
+                let a =
+                    *flat.flat_of.get(&(bond.a.entity.raw(), bond.a.index))?;
+                let b =
+                    *flat.flat_of.get(&(bond.b.entity.raw(), bond.b.index))?;
                 Some((a, b))
             })
             .collect()

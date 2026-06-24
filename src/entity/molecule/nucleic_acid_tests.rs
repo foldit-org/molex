@@ -411,7 +411,8 @@ fn na_drops_residue_missing_backbone() {
     }];
     let mut alloc = EntityIdAllocator::new();
     let id = alloc.allocate();
-    let na = NAEntity::new(id, MoleculeType::DNA, atoms, residues, "A".to_owned());
+    let na =
+        NAEntity::new(id, MoleculeType::DNA, atoms, residues, "A".to_owned());
     assert_eq!(na.residues.len(), 0);
     // Atoms still present (carried through, unreferenced).
     assert_eq!(na.atoms.len(), 2);

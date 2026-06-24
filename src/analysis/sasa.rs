@@ -323,12 +323,8 @@ mod tests {
         let r = vdw + probe;
         let expected = 4.0 * std::f32::consts::PI * r * r;
 
-        let areas = shrake_rupley(
-            &[Vec3::ZERO],
-            &[vdw],
-            probe,
-            DEFAULT_N_POINTS,
-        );
+        let areas =
+            shrake_rupley(&[Vec3::ZERO], &[vdw], probe, DEFAULT_N_POINTS);
         assert_eq!(areas.len(), 1);
         let rel_err = (areas[0] - expected).abs() / expected;
         assert!(rel_err < 0.01, "area {} vs {expected}", areas[0]);
@@ -346,8 +342,7 @@ mod tests {
 
         let positions = [Vec3::ZERO, Vec3::new(2.0, 0.0, 0.0)];
         let radii = [vdw, vdw];
-        let areas =
-            shrake_rupley(&positions, &radii, probe, DEFAULT_N_POINTS);
+        let areas = shrake_rupley(&positions, &radii, probe, DEFAULT_N_POINTS);
         let total: f32 = areas.iter().sum();
 
         assert!(

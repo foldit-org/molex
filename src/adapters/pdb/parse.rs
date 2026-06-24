@@ -1,5 +1,7 @@
 //! Column-positional ATOM/HETATM scanner and MODEL/ENDMDL state machine.
 
+use compact_str::CompactString;
+
 use crate::element::Element;
 use crate::entity::molecule::{AtomRow, EntityBuilder, MoleculeEntity};
 use crate::ops::codec::AdapterError;
@@ -249,8 +251,8 @@ fn parse_f32_bytes(field: &[u8], default: f32) -> f32 {
     }
     #[allow(
         clippy::cast_precision_loss,
-        reason = "mant has <=8 significant digits in F8.3/F6.2 fields; the f64 \
-                  product is exact and the f32 cast matches str::parse"
+        reason = "mant has <=8 significant digits in F8.3/F6.2 fields; the \
+                  f64 product is exact and the f32 cast matches str::parse"
     )]
     let value = (mant as f64) * pow10_neg(frac_digits);
     #[allow(
@@ -488,13 +490,15 @@ fn parse_atom_record(bytes: &[u8]) -> Result<AtomRow, AdapterError> {
     let atom_name_str = ascii_str(trim_ascii(&label_atom_id));
     let element = resolve_element(bytes, atom_name_str);
 
-    // Chain ID: single byte per PDB spec. Stored as `String` to keep the
-    // `AtomRow` shape uniform with mmCIF (multi-char chain IDs).
-    let chain_str = if chain_byte.is_ascii() {
-        (chain_byte as char).to_string()
+    // Chain ID: single byte per PDB spec. An inline `CompactString` keeps
+    // the `AtomRow` shape uniform with mmCIF (multi-char chain IDs) without
+    // a per-atom heap allocation.
+    let chain_byte = if chain_byte.is_ascii() {
+        chain_byte
     } else {
-        " ".to_owned()
+        b' '
     };
+    let chain_str = CompactString::new(ascii_str(&[chain_byte]));
 
     Ok(AtomRow {
         label_asym_id: chain_str,

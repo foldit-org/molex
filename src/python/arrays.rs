@@ -120,10 +120,8 @@ pub(crate) fn flat_atoms<E: std::borrow::Borrow<MoleculeEntity>>(
     let mut flat_of = HashMap::new();
 
     for_each_flat_atom(entities, |fa| {
-        let _ = flat_of.insert(
-            (fa.entity_raw_id, fa.raw_idx as u32),
-            atoms.len() as u32,
-        );
+        let _ = flat_of
+            .insert((fa.entity_raw_id, fa.raw_idx as u32), atoms.len() as u32);
         atoms.push(fa.atom.clone());
     });
 

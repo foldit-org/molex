@@ -7,6 +7,7 @@
               still unwired"
 )]
 
+use compact_str::CompactString;
 use glam::Vec3;
 use rustc_hash::FxHashMap;
 
@@ -53,9 +54,14 @@ pub(crate) enum ExpectedEntityType {
 }
 
 /// One parser-emitted atom row.
+///
+/// Chain / entity ids are [`CompactString`]: ids are short (≤ a few
+/// chars) and massively repeated, so storing them inline keeps the
+/// per-atom row off the heap while still supporting arbitrary-length
+/// ids in the rare long case.
 pub(crate) struct AtomRow {
     /// `label_asym_id` (mmCIF) or chain letter (PDB).
-    pub label_asym_id: String,
+    pub label_asym_id: CompactString,
     /// `label_seq_id` (mmCIF) or `resSeq` (PDB). For non-polymer
     /// entities with `.` in the source, parsers pass `1`.
     pub label_seq_id: i32,
@@ -65,10 +71,10 @@ pub(crate) struct AtomRow {
     pub label_atom_id: [u8; 4],
     /// `label_entity_id` (mmCIF). Joined against registered hints to
     /// pick the entity type. `None` on the PDB path.
-    pub label_entity_id: Option<String>,
+    pub label_entity_id: Option<CompactString>,
 
     /// `auth_asym_id`. `None` defaults to `label_asym_id`.
-    pub auth_asym_id: Option<String>,
+    pub auth_asym_id: Option<CompactString>,
     /// `auth_seq_id`. `None` defaults to `label_seq_id`.
     pub auth_seq_id: Option<i32>,
     /// `auth_comp_id`. `None` defaults to `label_comp_id`.
@@ -185,7 +191,8 @@ impl EntityBuilder {
         row.label_atom_id = normalize_legacy_atom_name(row.label_atom_id);
         row.auth_atom_id = row.auth_atom_id.map(normalize_legacy_atom_name);
         self.ensure_chain(&row);
-        let Some(chain) = self.chains.get_mut(&row.label_asym_id) else {
+        let Some(chain) = self.chains.get_mut(row.label_asym_id.as_str())
+        else {
             unreachable!("chain inserted by ensure_chain");
         };
         let res_idx = chain.locate_or_create_residue(&row);
@@ -256,18 +263,21 @@ impl EntityBuilder {
     }
 
     fn ensure_chain(&mut self, row: &AtomRow) {
-        if self.chains.contains_key(&row.label_asym_id) {
+        if self.chains.contains_key(row.label_asym_id.as_str()) {
             return;
         }
         let state = ChainState {
-            pdb_chain_id: row.label_asym_id.clone(),
-            entity_hint_key: row.label_entity_id.clone(),
+            pdb_chain_id: row.label_asym_id.as_str().to_owned(),
+            entity_hint_key: row
+                .label_entity_id
+                .as_ref()
+                .map(|id| id.as_str().to_owned()),
             residues: Vec::new(),
             residue_index: FxHashMap::default(),
         };
-        // Cloning the chain key: needed both as HashMap key and as the
+        // The owned chain key lives both as the HashMap key and as the
         // chain_order entry that drives finish() ordering.
-        let key = row.label_asym_id.clone();
+        let key = row.label_asym_id.as_str().to_owned();
         self.chain_order.push(key.clone());
         let _ = self.chains.insert(key, state);
     }

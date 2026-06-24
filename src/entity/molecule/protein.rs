@@ -1,3 +1,4 @@
+// foldit:allow-long-file: ProteinEntity plus its build / complete / bond derivation.
 //! Protein types and entity.
 //!
 //! Per-residue types (`ResidueBackbone`, `Sidechain`) and the

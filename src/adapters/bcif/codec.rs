@@ -1,3 +1,4 @@
+// foldit:allow-long-file: cohesive BinaryCIF encoding/decoding primitives.
 //! BinaryCIF encoding chain decoder and supporting types.
 //!
 //! This module contains the `decode_*` functions that implement the various

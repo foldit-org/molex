@@ -1,3 +1,4 @@
+// foldit:allow-long-file: C-FFI tree accessors, one fn per ABI symbol.
 //! C ABI walk accessors: assembly -> entity -> residue / atom.
 //!
 //! Split out of `c_api/mod.rs` for file-length reasons. All entries

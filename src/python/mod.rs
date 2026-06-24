@@ -1,3 +1,4 @@
+// foldit:allow-long-file: PyO3 binding surface for the Assembly object graph.
 //! Python bindings for the `Assembly` object graph and the edit / delta
 //! handle surface.
 //!

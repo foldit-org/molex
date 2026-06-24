@@ -139,7 +139,7 @@ fn build_protein(name: &str, atoms: Vec<Atom>) -> ProteinEntity {
         atoms,
         vec![residue(name, 0..n)],
         "A".to_owned(),
-        CompletionMode::HeavyOnly,
+        Completion::Heavy,
     )
 }
 
@@ -190,7 +190,7 @@ fn heavy_only_alanine_builds_cb_but_no_hydrogens() {
     let (out_atoms, out_res) = complete_protein_residues(
         &atoms,
         &[residue("ALA", 0..4)],
-        CompletionMode::HeavyOnly,
+        Completion::Heavy,
     );
     let r = &out_res[0];
     let names: BTreeSet<String> =
@@ -233,7 +233,7 @@ fn all_atom_alanine_builds_cb_and_hydrogens() {
     let (out_atoms, out_res) = complete_protein_residues(
         &atoms,
         &[residue("ALA", 0..4)],
-        CompletionMode::AllAtom,
+        Completion::AllAtom,
     );
     let r = &out_res[0];
     let names: BTreeSet<String> =
@@ -276,7 +276,7 @@ fn truncated_leucine_builds_to_full_in_scope_set() {
     let (out_atoms, out_res) = complete_protein_residues(
         &atoms,
         &[residue("LEU", 0..6)],
-        CompletionMode::AllAtom,
+        Completion::AllAtom,
     );
     let r = &out_res[0];
     let got: BTreeSet<String> =
@@ -352,7 +352,7 @@ fn already_complete_residue_gains_no_atoms() {
 #[test]
 fn protonated_input_strips_h_heavy_only_keeps_h_all_atom() {
     // A protonated ALA parse (backbone + CB + the variously-named input
-    // protons): under HeavyOnly the canonical entity must carry NO
+    // protons): under Heavy the canonical entity must carry NO
     // hydrogen, and under AllAtom the same input keeps/places them.
     let protonated = || {
         vec![
@@ -376,7 +376,7 @@ fn protonated_input_strips_h_heavy_only_keeps_h_all_atom() {
         protonated(),
         vec![residue("ALA", 0..n)],
         "A".to_owned(),
-        CompletionMode::HeavyOnly,
+        Completion::Heavy,
     );
     let r = &heavy.residues[0];
     assert!(
@@ -391,7 +391,7 @@ fn protonated_input_strips_h_heavy_only_keeps_h_all_atom() {
         protonated(),
         vec![residue("ALA", 0..n)],
         "A".to_owned(),
-        CompletionMode::AllAtom,
+        Completion::AllAtom,
     );
     let r = &all.residues[0];
     assert!(
@@ -415,7 +415,7 @@ fn sparse_residue_passes_through_unchanged() {
     let (out_atoms, out_res) = complete_protein_residues(
         &atoms,
         &[residue("ALA", 0..2)],
-        CompletionMode::HeavyOnly,
+        Completion::Heavy,
     );
     assert_eq!(out_atoms.len(), 2, "no atoms fabricated for sparse residue");
     assert_eq!(out_res[0].atom_range, 0..2);
@@ -482,7 +482,7 @@ fn c_terminal_oxt_only_on_last_residue() {
         });
     }
     let (out_atoms, out_res) =
-        complete_protein_residues(&atoms, &residues, CompletionMode::HeavyOnly);
+        complete_protein_residues(&atoms, &residues, Completion::Heavy);
     let has_oxt = |r: &Residue| {
         residue_atom_names(&out_atoms, r).iter().any(|n| n == "OXT")
     };
@@ -520,7 +520,7 @@ fn na_completion_fills_dna_base_and_keeps_present_atoms() {
         atoms,
         vec![residue("DA", 0..n)],
         "A".to_owned(),
-        CompletionMode::HeavyOnly,
+        Completion::Heavy,
     );
     assert_eq!(na.residues.len(), 1, "DA must survive completion");
     let r = &na.residues[0];
@@ -555,7 +555,7 @@ fn na_all_atom_fills_dna_base_and_hydrogens() {
     let (out_atoms, out_res) = complete_na_residues(
         &atoms,
         &[residue("DA", 0..n)],
-        CompletionMode::AllAtom,
+        Completion::AllAtom,
         MoleculeType::DNA,
     );
     let r = &out_res[0];
@@ -600,7 +600,7 @@ fn na_five_prime_oh_fabricates_no_phosphate() {
     let (out_atoms, out_res) = complete_na_residues(
         &atoms,
         &[residue("DA", 0..n)],
-        CompletionMode::HeavyOnly,
+        Completion::Heavy,
         MoleculeType::DNA,
     );
     let r = &out_res[0];
@@ -628,7 +628,7 @@ fn na_five_prime_partial_phosphate_completes() {
     let (out_atoms, out_res) = complete_na_residues(
         &atoms,
         &[residue("DA", 0..n)],
-        CompletionMode::HeavyOnly,
+        Completion::Heavy,
         MoleculeType::DNA,
     );
     let r = &out_res[0];
@@ -659,7 +659,7 @@ fn na_five_prime_skip_does_not_apply_to_interior_residue() {
     let (out_atoms, out_res) = complete_na_residues(
         &atoms,
         &residues,
-        CompletionMode::HeavyOnly,
+        Completion::Heavy,
         MoleculeType::DNA,
     );
     let interior_names: BTreeSet<String> =
@@ -693,7 +693,7 @@ fn non_template_atom_is_preserved_with_original_coords() {
     let (out_atoms, out_res) = complete_protein_residues(
         &atoms,
         &[residue("GLY", 0..n)],
-        CompletionMode::HeavyOnly,
+        Completion::Heavy,
     );
     let r = &out_res[0];
     let names: BTreeSet<String> =
@@ -735,7 +735,7 @@ fn all_atom_places_hydrogen_at_real_bond_length() {
     let (out_atoms, out_res) = complete_protein_residues(
         &atoms,
         &[residue("ALA", 0..4)],
-        CompletionMode::AllAtom,
+        Completion::AllAtom,
     );
     let r = &out_res[0];
 
@@ -772,7 +772,7 @@ fn collinear_anchors_fabricate_nothing() {
     let (out_atoms, out_res) = complete_protein_residues(
         &atoms,
         &[residue("ALA", 0..3)],
-        CompletionMode::HeavyOnly,
+        Completion::Heavy,
     );
     let r = &out_res[0];
     // Exactly the three input atoms remain; nothing fabricated.

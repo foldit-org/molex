@@ -20,7 +20,7 @@ pub use parse::{parse, CifParseError};
 pub use write::assembly_to_mmcif;
 
 use crate::element::Element;
-use crate::entity::molecule::{BuildError, MoleculeEntity};
+use crate::entity::molecule::{BuildError, Completion, MoleculeEntity};
 use crate::ops::codec::AdapterError;
 
 // Helpers shared by the scan (`scan_row`) and DOM (`dom_build`) decode paths.
@@ -62,7 +62,8 @@ fn map_build_error(err: &BuildError) -> AdapterError {
     }
 }
 
-/// Parse mmCIF format string to entity list.
+/// Parse mmCIF format string to entity list, completing missing heavy
+/// atoms ([`Completion::Heavy`]).
 ///
 /// Returns the model whose `pdbx_PDB_model_num` matches the smallest
 /// value present; files without a model column collapse to a single
@@ -74,10 +75,28 @@ fn map_build_error(err: &BuildError) -> AdapterError {
 pub fn mmcif_str_to_entities(
     cif_str: &str,
 ) -> Result<Vec<MoleculeEntity>, AdapterError> {
-    if let Some(result) = scan::parse_mmcif_scan(cif_str) {
+    mmcif_str_to_entities_with(cif_str, Completion::Heavy)
+}
+
+/// Parse mmCIF format string to entity list at the given completion
+/// `level`.
+///
+/// [`Completion::Raw`] yields the atoms exactly as parsed (no fabricated
+/// heavy atoms, input hydrogens preserved); [`Completion::Heavy`] matches
+/// [`mmcif_str_to_entities`]; [`Completion::AllAtom`] additionally places
+/// template hydrogens.
+///
+/// # Errors
+///
+/// Returns [`AdapterError`] if parsing fails.
+pub fn mmcif_str_to_entities_with(
+    cif_str: &str,
+    level: Completion,
+) -> Result<Vec<MoleculeEntity>, AdapterError> {
+    if let Some(result) = scan::parse_mmcif_scan(cif_str, level) {
         return result;
     }
-    dom_build::parse_mmcif_dom_to_entities(cif_str)
+    dom_build::parse_mmcif_dom_to_entities(cif_str, level)
 }
 
 /// Load mmCIF file to entity list.

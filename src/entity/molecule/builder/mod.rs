@@ -13,6 +13,7 @@ use rustc_hash::FxHashMap;
 
 use super::atom::Atom;
 use super::bulk::BulkEntity;
+use super::complete::Completion;
 use super::id::EntityIdAllocator;
 use super::{MoleculeEntity, MoleculeType};
 use crate::element::Element;
@@ -132,16 +133,26 @@ pub(crate) struct EntityBuilder {
     hints: FxHashMap<String, ExpectedEntityType>,
     chains: FxHashMap<String, ChainState>,
     chain_order: Vec<String>,
+    completion: Completion,
 }
 
 impl EntityBuilder {
-    /// Create an empty builder.
+    /// Create an empty builder at the default file-ingest completion level
+    /// ([`Completion::Heavy`]).
     pub(crate) fn new() -> Self {
+        Self::with_completion(Completion::Heavy)
+    }
+
+    /// Create an empty builder that emits polymer chains completed to
+    /// `completion`. The emitters in `classify` carry this level into the
+    /// chain constructors.
+    pub(crate) fn with_completion(completion: Completion) -> Self {
         Self {
             allocator: EntityIdAllocator::new(),
             hints: FxHashMap::default(),
             chains: FxHashMap::default(),
             chain_order: Vec::new(),
+            completion,
         }
     }
 
@@ -214,6 +225,7 @@ impl EntityBuilder {
             hints,
             mut chains,
             chain_order,
+            completion,
         } = self;
 
         let mut out: Vec<MoleculeEntity> = Vec::new();
@@ -226,6 +238,7 @@ impl EntityBuilder {
                 out: &mut out,
                 water: &mut water,
                 solvent: &mut solvent,
+                completion,
             };
             for chain_key in &chain_order {
                 let Some(mut chain) = chains.remove(chain_key) else {
@@ -307,8 +320,7 @@ impl ChainState {
             label_comp_id: row.label_comp_id,
             auth_comp_id: row.auth_comp_id,
             ins_code: row.ins_code,
-            atoms: FxHashMap::default(),
-            atom_order: Vec::new(),
+            atoms: Vec::new(),
         });
         let _ = self.residue_index.insert(key, idx);
         idx
@@ -321,21 +333,21 @@ pub(super) struct ResidueAccum {
     pub(super) label_comp_id: [u8; 3],
     pub(super) auth_comp_id: Option<[u8; 3]>,
     pub(super) ins_code: Option<u8>,
-    pub(super) atoms: FxHashMap<[u8; 4], AtomChoice>,
-    pub(super) atom_order: Vec<[u8; 4]>,
+    pub(super) atoms: Vec<([u8; 4], AtomChoice)>,
 }
 
 impl ResidueAccum {
     fn apply_altloc_dedup(&mut self, row: &AtomRow) {
         let candidate = AtomChoice::from_row(row);
-        match self.atoms.get_mut(&row.label_atom_id) {
-            None => {
-                let _ = self.atoms.insert(row.label_atom_id, candidate);
-                self.atom_order.push(row.label_atom_id);
-            }
+        match self
+            .atoms
+            .iter_mut()
+            .find(|(name, _)| *name == row.label_atom_id)
+        {
+            None => self.atoms.push((row.label_atom_id, candidate)),
             Some(existing) => {
-                if candidate_should_replace(existing, &candidate) {
-                    *existing = candidate;
+                if candidate_should_replace(&existing.1, &candidate) {
+                    existing.1 = candidate;
                 }
             }
         }
@@ -409,6 +421,9 @@ pub(super) struct ChainCtx<'a> {
     pub(super) out: &'a mut Vec<MoleculeEntity>,
     pub(super) water: &'a mut GlobalBulk,
     pub(super) solvent: &'a mut GlobalBulk,
+    /// Completion level the polymer emitters pass to the chain
+    /// constructors.
+    pub(super) completion: Completion,
 }
 
 #[derive(Default)]
@@ -420,8 +435,8 @@ pub(super) struct GlobalBulk {
 
 impl GlobalBulk {
     pub(super) fn ingest(&mut self, r: &ResidueAccum) {
-        for name in &r.atom_order {
-            self.atoms.push(r.atoms[name].to_atom());
+        for (_, choice) in &r.atoms {
+            self.atoms.push(choice.to_atom());
         }
         self.residue_count += 1;
         if self.residue_name.is_none() {

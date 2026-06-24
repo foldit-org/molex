@@ -154,7 +154,7 @@ fn rna_adenine_missing_o2_prime() -> NAEntity {
         atoms,
         residues,
         "A".to_owned(),
-        CompletionMode::HeavyOnly,
+        Completion::Heavy,
     )
 }
 
@@ -238,7 +238,7 @@ fn na_five_prime_oh_residue_is_kept() {
         atoms,
         vec![na_residue("DA", 0..n, 1)],
         "A".to_owned(),
-        CompletionMode::HeavyOnly,
+        Completion::Heavy,
     );
     assert_eq!(na.residues.len(), 1, "5'-OH residue must be kept");
     let r = &na.residues[0];
@@ -300,7 +300,7 @@ fn na_five_prime_oh_then_phosphodiester_to_next() {
         atoms,
         residues,
         "A".to_owned(),
-        CompletionMode::HeavyOnly,
+        Completion::Heavy,
     );
     assert_eq!(na.residues.len(), 2, "both residues kept");
     let name_of = |aid: AtomId| {
@@ -326,8 +326,8 @@ fn na_five_prime_oh_then_phosphodiester_to_next() {
 #[test]
 fn protonated_na_strips_h_heavy_only_keeps_h_otherwise() {
     // A protonated DA parse (every heavy atom at real ideal geometry plus
-    // an input base proton H8): under HeavyOnly the canonical entity must
-    // carry NO hydrogen; the pure `new` path (CompletionMode::None) keeps
+    // an input base proton H8): under Heavy the canonical entity must
+    // carry NO hydrogen; the pure `new` path (Completion::Raw) keeps
     // the input proton verbatim.
     let protonated = || {
         let mut atoms = da_heavy_atoms(|_| true);
@@ -344,7 +344,7 @@ fn protonated_na_strips_h_heavy_only_keeps_h_otherwise() {
         protonated(),
         vec![na_residue("DA", 0..n, 1)],
         "A".to_owned(),
-        CompletionMode::HeavyOnly,
+        Completion::Heavy,
     );
     let r = &heavy.residues[0];
     assert!(

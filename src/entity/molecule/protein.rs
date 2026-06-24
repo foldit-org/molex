@@ -6,9 +6,7 @@
 use glam::Vec3;
 
 use super::atom::Atom;
-use super::complete::{
-    complete_protein_residues, keep_hydrogens, CompletionMode,
-};
+use super::complete::{complete_protein_residues, keep_hydrogens, Completion};
 use super::id::EntityId;
 use super::traits::{Entity, Polymer};
 use super::{MoleculeType, Residue};
@@ -146,26 +144,19 @@ impl ProteinEntity {
         residues: Vec<Residue>,
         pdb_chain_id: String,
     ) -> Self {
-        build_protein(
-            id,
-            atoms,
-            residues,
-            pdb_chain_id,
-            CompletionMode::None,
-            false,
-        )
+        build_protein(id, atoms, residues, pdb_chain_id, Completion::Raw, false)
     }
 
     /// Construct a protein entity, fabricating missing atoms at
     /// construction in the given completion `mode`.
     ///
     /// Same canonicalize / segment-break / bond-graph construction as
-    /// [`Self::new`], but the rigid-fit completion pass runs first (in
-    /// `mode`), before the canonicalize reorder. Because completion runs
-    /// before the drop, a residue that is backbone-incomplete in the
+    /// [`Self::new`], but the rigid-fit completion pass runs first (to
+    /// `completion`), before the canonicalize reorder. Because completion
+    /// runs before the drop, a residue that is backbone-incomplete in the
     /// parse but anchorable can have its backbone fabricated and survive,
-    /// whereas the pure [`Self::new`] would drop it. The raw-ingest path
-    /// (file parses) uses this with [`CompletionMode::HeavyOnly`].
+    /// whereas the pure [`Self::new`] would drop it. The file-ingest path
+    /// uses this with [`Completion::Heavy`].
     #[must_use]
     #[allow(
         clippy::needless_pass_by_value,
@@ -177,7 +168,7 @@ impl ProteinEntity {
         atoms: Vec<Atom>,
         residues: Vec<Residue>,
         pdb_chain_id: String,
-        completion: CompletionMode,
+        completion: Completion,
     ) -> Self {
         build_protein(id, atoms, residues, pdb_chain_id, completion, false)
     }
@@ -199,14 +190,7 @@ impl ProteinEntity {
         residues: Vec<Residue>,
         pdb_chain_id: String,
     ) -> Self {
-        build_protein(
-            id,
-            atoms,
-            residues,
-            pdb_chain_id,
-            CompletionMode::None,
-            true,
-        )
+        build_protein(id, atoms, residues, pdb_chain_id, Completion::Raw, true)
     }
 
     /// Rebuild this entity as a single continuous chain, dropping the
@@ -225,7 +209,7 @@ impl ProteinEntity {
             self.atoms.clone(),
             self.residues.clone(),
             self.pdb_chain_id.clone(),
-            CompletionMode::None,
+            Completion::Raw,
             true,
         )
     }
@@ -248,7 +232,7 @@ impl ProteinEntity {
     /// stable across this projection.
     #[must_use]
     pub fn normalize(&self) -> Self {
-        self.completed(CompletionMode::HeavyOnly)
+        self.complete(Completion::Heavy)
     }
 
     /// Rebuild this entity with all-atom completion, additionally
@@ -257,19 +241,21 @@ impl ProteinEntity {
     /// [`Self::normalize`].
     #[must_use]
     pub fn to_all_atom(&self) -> Self {
-        self.completed(CompletionMode::AllAtom)
+        self.complete(Completion::AllAtom)
     }
 
-    /// Re-extract this entity's atoms and residues and rebuild them with
-    /// the given completion `mode`. Shared core of [`Self::normalize`] and
-    /// [`Self::to_all_atom`].
-    fn completed(&self, mode: CompletionMode) -> Self {
+    /// Re-extract this entity's atoms and residues and rebuild them at
+    /// the given completion `level`. The canonical re-completion entry;
+    /// [`Self::normalize`] and [`Self::to_all_atom`] are thin wrappers
+    /// over it.
+    #[must_use]
+    pub fn complete(&self, level: Completion) -> Self {
         build_protein(
             self.id,
             self.atoms.clone(),
             self.residues.clone(),
             self.pdb_chain_id.clone(),
-            mode,
+            level,
             false,
         )
     }
@@ -462,7 +448,7 @@ impl Polymer for ProteinEntity {
 
 // Internal helpers
 
-/// Shared protein-entity construction: complete (in `mode`), canonicalize,
+/// Shared protein-entity construction: complete (to `level`), canonicalize,
 /// derive segment breaks, and build the bond graph. `continuous` selects
 /// whether segment breaks are distance-detected from C(i)->N(i+1) geometry
 /// (`false`) or forced empty for a single continuous chain (`true`).
@@ -474,22 +460,22 @@ impl Polymer for ProteinEntity {
 #[allow(
     clippy::too_many_arguments,
     reason = "mirrors the public constructors' argument set plus the \
-              completion mode and the continuous-chain selector"
+              completion level and the continuous-chain selector"
 )]
 fn build_protein(
     id: EntityId,
     atoms: Vec<Atom>,
     residues: Vec<Residue>,
     pdb_chain_id: String,
-    mode: CompletionMode,
+    level: Completion,
     continuous: bool,
 ) -> ProteinEntity {
-    let (atoms, residues) = complete_protein_residues(&atoms, &residues, mode);
+    let (atoms, residues) = complete_protein_residues(&atoms, &residues, level);
     let (atoms, residues) = canonicalize_protein_residues(
         &atoms,
         &residues,
         &pdb_chain_id,
-        keep_hydrogens(mode),
+        keep_hydrogens(level),
     );
     let segment_breaks = if continuous {
         Vec::new()

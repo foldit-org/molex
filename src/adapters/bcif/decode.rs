@@ -15,7 +15,7 @@ use super::hint::resolve_hint;
 use super::refuse::multi_block_error;
 use crate::element::Element;
 use crate::entity::molecule::{
-    AtomRow, BuildError, EntityBuilder, MoleculeEntity,
+    AtomRow, BuildError, Completion, EntityBuilder, MoleculeEntity,
 };
 use crate::ops::codec::AdapterError;
 
@@ -23,13 +23,14 @@ use crate::ops::codec::AdapterError;
 
 pub(super) fn decode_to_entities(
     bytes: &[u8],
+    completion: Completion,
 ) -> Result<Vec<MoleculeEntity>, AdapterError> {
     let block = open_block(bytes)?;
     let atom_site = require_atom_site(&block)?;
     let cols = decode_atom_site(atom_site)?;
     let target = cols.smallest_model();
 
-    let mut builder = EntityBuilder::new();
+    let mut builder = EntityBuilder::with_completion(completion);
     register_hints(&block, &mut builder)?;
 
     let mut any_atom = false;

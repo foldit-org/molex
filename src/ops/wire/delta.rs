@@ -14,7 +14,7 @@
 //!
 //! ```text
 //! 8 bytes  magic b"DELTA\0\0\0"
-//! 1 byte   version (currently 2)
+//! 1 byte   version (currently 1)
 //! 4 bytes  edit_count u32 BE
 //! per edit:
 //!   1 byte tag
@@ -37,7 +37,7 @@
 use glam::Vec3;
 use thiserror::Error;
 
-use super::deserialize::{read_atom_row, AtomRow, RowLayout};
+use super::deserialize::{read_atom_row, AtomRow};
 use super::serialize::write_atom_row;
 use super::variants::{read_variant, write_variant};
 use crate::chemistry::variant::VariantTag;
@@ -50,7 +50,7 @@ use crate::ops::edit::AssemblyEdit;
 pub const DELTA_MAGIC: &[u8; 8] = b"DELTA\0\0\0";
 
 /// Wire format version written after [`DELTA_MAGIC`].
-pub const DELTA_VERSION: u8 = 2;
+pub const DELTA_VERSION: u8 = 1;
 
 const ATOM_ROW_BYTES: usize = 25;
 
@@ -275,7 +275,7 @@ fn read_edit<'b>(
                         "Truncated atom row in delta MutateResidue".to_owned(),
                     ));
                 }
-                let row: AtomRow = read_atom_row(cur, RowLayout::V2)?;
+                let row: AtomRow = read_atom_row(cur)?;
                 cur = &cur[ATOM_ROW_BYTES..];
                 new_atoms.push(row.atom);
             }

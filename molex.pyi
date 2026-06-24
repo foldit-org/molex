@@ -19,6 +19,7 @@
 #   numpy columns         -> `Any` (numpy is not a typing dependency here)
 #   Biotite AtomArray     -> `Any`
 
+import enum
 from typing import Any
 
 # ---------------------------------------------------------------------------
@@ -30,6 +31,18 @@ from typing import Any
 # `to_arrays()`. Completion (missing heavy atoms filled) runs at parse time.
 # ---------------------------------------------------------------------------
 
+class Completion(enum.Enum):
+    """Completion level for parsing and re-completion: `Raw < Heavy < AllAtom`.
+
+    `Raw` keeps atoms exactly as given (no fabricated heavy atoms, input
+    hydrogens preserved); `Heavy` fabricates absent heavy template atoms and
+    drops input hydrogens (the file-ingest default); `AllAtom` additionally
+    places template hydrogens."""
+
+    Raw = ...
+    Heavy = ...
+    AllAtom = ...
+
 class Assembly:
     """Object-graph handle over a parsed molecular assembly.
 
@@ -38,17 +51,24 @@ class Assembly:
     """
 
     @staticmethod
-    def from_pdb(text: str) -> Assembly:
-        """Parse a PDB string. Atoms are completed during classification;
-        secondary structure is left empty (call `recompute_ss()`)."""
+    def from_pdb(
+        text: str, completion: Completion = Completion.Heavy
+    ) -> Assembly:
+        """Parse a PDB string at the given `completion` level (default
+        `Completion.Heavy`: missing heavy atoms filled, input hydrogens
+        dropped). Secondary structure is left empty (call `recompute_ss()`)."""
         ...
     @staticmethod
-    def from_mmcif(text: str) -> Assembly:
-        """Parse an mmCIF string (raw ingest, see `from_pdb`)."""
+    def from_mmcif(
+        text: str, completion: Completion = Completion.Heavy
+    ) -> Assembly:
+        """Parse an mmCIF string (see `from_pdb` for `completion`)."""
         ...
     @staticmethod
-    def from_bcif(bytes: bytes) -> Assembly:
-        """Parse BinaryCIF bytes (raw ingest, see `from_pdb`)."""
+    def from_bcif(
+        bytes: bytes, completion: Completion = Completion.Heavy
+    ) -> Assembly:
+        """Parse BinaryCIF bytes (see `from_pdb` for `completion`)."""
         ...
     @staticmethod
     def from_assembly_bytes(bytes: bytes) -> Assembly:
@@ -67,13 +87,19 @@ class Assembly:
     def generation(self) -> int:
         """Monotonic generation counter."""
         ...
+    def complete(self, level: Completion) -> Assembly:
+        """Fresh assembly re-completed at `level`: polymer entities are rebuilt
+        (Raw keeps atoms as-is, Heavy fills heavy atoms, AllAtom adds template
+        hydrogens). Atom indices shift; externally held indices do not carry
+        over."""
+        ...
     def normalize(self) -> Assembly:
         """Fresh heavy-complete assembly: polymer entities gain missing heavy
-        atoms. Atom indices shift; externally held indices do not carry over."""
+        atoms. Equivalent to `complete(Completion.Heavy)`."""
         ...
     def to_all_atom(self) -> Assembly:
         """Fresh all-atom assembly: polymer entities gain template hydrogens.
-        Atom indices shift; externally held indices do not carry over."""
+        Equivalent to `complete(Completion.AllAtom)`."""
         ...
     def apply_edits(self, edits: EditList) -> None:
         """Apply every edit in `edits` in order, advancing `generation`."""

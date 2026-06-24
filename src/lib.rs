@@ -54,7 +54,7 @@ pub use entity::molecule::protein::{
 };
 pub use entity::molecule::small_molecule::SmallMoleculeEntity;
 pub use entity::molecule::{
-    CompletionMode, EntityKind, MoleculeEntity, MoleculeType, NucleotideRing,
+    Completion, EntityKind, MoleculeEntity, MoleculeType, NucleotideRing,
 };
 pub use ops::codec::AdapterError;
 #[cfg(feature = "python")]
@@ -114,6 +114,7 @@ fn molex(_py: Python, m: &Bound<PyModule>) -> PyResult<()> {
 
     // Object graph: Assembly -> Entity -> Residue (the default Python
     // navigation surface; atoms via `to_arrays`).
+    m.add_class::<python::PyCompletion>()?;
     m.add_class::<python::PyAssembly>()?;
     m.add_class::<python::PyEntity>()?;
     m.add_class::<python::PyResidue>()?;

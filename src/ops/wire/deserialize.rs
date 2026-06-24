@@ -1,17 +1,15 @@
 //! Deserialization for the assembly binary wire format.
 //!
-//! Reads the 8-byte magic, then a `u8` version byte that selects the
-//! payload layout. Version 2 carries each entity's chain id in its header
-//! and 25-byte atom rows; version 1 carried the chain id as a per-atom
-//! byte in 26-byte rows. Both decode; any other version is a clean
-//! [`AdapterError::InvalidFormat`].
+//! Reads the 8-byte magic, then a `u8` version byte. Each entity's chain
+//! id lives in its header and atom rows are 25 bytes. Any version other
+//! than [`ASSEMBLY_VERSION`] is a clean [`AdapterError::InvalidFormat`].
 
 use std::collections::HashSet;
 
 use glam::Vec3;
 
 use super::variants::{deserialize_variants_section, EntityVariants};
-use super::{molecule_type_from_wire, ASSEMBLY_MAGIC};
+use super::{molecule_type_from_wire, ASSEMBLY_MAGIC, ASSEMBLY_VERSION};
 use crate::element::Element;
 use crate::entity::molecule::atom::Atom;
 use crate::entity::molecule::bulk::BulkEntity;
@@ -23,30 +21,22 @@ use crate::entity::molecule::small_molecule::SmallMoleculeEntity;
 use crate::entity::molecule::{MoleculeEntity, MoleculeType};
 use crate::ops::codec::AdapterError;
 
-/// Atom-row width for version 1 (per-atom chain byte) and version 2 (chain
-/// in the entity header).
-const V1_ATOM_ROW_BYTES: usize = 26;
-const V2_ATOM_ROW_BYTES: usize = 25;
+/// Atom-row width: the chain id lives in the entity header, not the row.
+const ATOM_ROW_BYTES: usize = 25;
 
 /// Byte offset where per-entity headers begin: 8-byte magic + 1-byte
 /// version + 4-byte entity count.
 const HEADERS_START: usize = 13;
 
 /// One atom row decoded from the wire, paired with the per-atom residue
-/// context used to group atoms into residues. For version-1 payloads the
-/// row also carries its chain byte (the chain id is per-atom there); for
-/// version 2 the chain lives in the entity header and this is `None`.
+/// context used to group atoms into residues.
 pub(crate) struct AtomRow {
     pub(crate) atom: Atom,
-    pub(crate) chain_byte: Option<u8>,
     pub(crate) res_name: [u8; 3],
     pub(crate) res_num: i32,
 }
 
-pub(crate) fn read_atom_row(
-    cursor: &[u8],
-    layout: RowLayout,
-) -> Result<AtomRow, AdapterError> {
+pub(crate) fn read_atom_row(cursor: &[u8]) -> Result<AtomRow, AdapterError> {
     let x = f32::from_be_bytes(cursor[0..4].try_into().map_err(|_| {
         AdapterError::SerializationError("Invalid x coordinate".to_owned())
     })?);
@@ -57,12 +47,7 @@ pub(crate) fn read_atom_row(
         AdapterError::SerializationError("Invalid z coordinate".to_owned())
     })?);
 
-    // Version 1 inserts a chain byte at offset 12; version 2 has none and
-    // the residue fields shift down by one.
-    let (chain_byte, rest_off) = match layout {
-        RowLayout::V1 => (Some(cursor[12]), 13),
-        RowLayout::V2 => (None, 12),
-    };
+    let rest_off = 12;
 
     let mut res_name = [0u8; 3];
     res_name.copy_from_slice(&cursor[rest_off..rest_off + 3]);
@@ -93,26 +78,9 @@ pub(crate) fn read_atom_row(
             name: atom_name,
             formal_charge: 0,
         },
-        chain_byte,
         res_name,
         res_num,
     })
-}
-
-/// Which atom-row layout a payload uses.
-#[derive(Clone, Copy)]
-pub(crate) enum RowLayout {
-    V1,
-    V2,
-}
-
-impl RowLayout {
-    fn row_bytes(self) -> usize {
-        match self {
-            RowLayout::V1 => V1_ATOM_ROW_BYTES,
-            RowLayout::V2 => V2_ATOM_ROW_BYTES,
-        }
-    }
 }
 
 /// Read `atom_count` atom rows from a cursor, returning the rows and
@@ -120,12 +88,11 @@ impl RowLayout {
 fn read_atom_rows(
     mut cursor: &[u8],
     atom_count: usize,
-    layout: RowLayout,
 ) -> Result<(Vec<AtomRow>, &[u8]), AdapterError> {
     let mut rows = Vec::with_capacity(atom_count);
     for _ in 0..atom_count {
-        rows.push(read_atom_row(cursor, layout)?);
-        cursor = &cursor[layout.row_bytes()..];
+        rows.push(read_atom_row(cursor)?);
+        cursor = &cursor[ATOM_ROW_BYTES..];
     }
     Ok((rows, cursor))
 }
@@ -225,28 +192,14 @@ fn build_entity(
     }
 }
 
-/// The chain id for an entity, from the header (version 2) or the first
-/// atom row's chain byte (version 1). A blank version-1 byte yields an
-/// empty chain string.
-fn resolve_chain_id(header_chain: Option<&str>, rows: &[AtomRow]) -> String {
-    if let Some(chain) = header_chain {
-        return chain.to_owned();
-    }
-    rows.first()
-        .and_then(|r| r.chain_byte)
-        .filter(|&b| b != b' ')
-        .map_or_else(String::new, |b| String::from(b as char))
-}
-
 /// One decoded entity header, carrying the originator's raw
 /// [`EntityId`] value so cross-boundary edit references resolve. `chain_id`
-/// is present for version-2 payloads (where the chain lives in the header)
-/// and `None` for version 1 (chain is read from the atom rows).
+/// is the entity's chain id (empty for non-polymer entities).
 struct EntityHeader {
     mol_type: MoleculeType,
     atom_count: usize,
     entity_id_raw: u32,
-    chain_id: Option<String>,
+    chain_id: String,
 }
 
 /// Result of [`parse_entity_headers`]: the headers themselves and the
@@ -256,13 +209,12 @@ struct ParsedHeaders {
     headers_end: usize,
 }
 
-/// Parse entity headers from the assembly binary format. Version 1 headers
-/// are `1 + 4 + 4` bytes (molecule type, atom count, raw entity id);
-/// version 2 appends a `u16` BE chain length and the chain bytes.
+/// Parse entity headers from the assembly binary format. Each header is
+/// `1 + 4 + 4` bytes (molecule type, atom count, raw entity id) followed
+/// by a `u16` BE chain length and the chain bytes.
 fn parse_entity_headers(
     bytes: &[u8],
     entity_count: usize,
-    layout: RowLayout,
 ) -> Result<ParsedHeaders, AdapterError> {
     let mut headers = Vec::with_capacity(entity_count);
     let mut offset = HEADERS_START;
@@ -305,14 +257,8 @@ fn parse_entity_headers(
             })?);
         offset += 4;
 
-        let chain_id = match layout {
-            RowLayout::V1 => None,
-            RowLayout::V2 => {
-                let (chain, next) = read_header_chain(bytes, offset)?;
-                offset = next;
-                Some(chain)
-            }
-        };
+        let (chain_id, next) = read_header_chain(bytes, offset)?;
+        offset = next;
 
         headers.push(EntityHeader {
             mol_type,
@@ -407,15 +353,12 @@ pub(crate) fn deserialize_assembly_entities(
         ));
     }
 
-    let layout = match bytes[8] {
-        1 => RowLayout::V1,
-        2 => RowLayout::V2,
-        other => {
-            return Err(AdapterError::InvalidFormat(format!(
-                "Unsupported assembly wire version: {other}",
-            )));
-        }
-    };
+    if bytes[8] != ASSEMBLY_VERSION {
+        return Err(AdapterError::InvalidFormat(format!(
+            "Unsupported assembly wire version: {}",
+            bytes[8],
+        )));
+    }
 
     let entity_count =
         u32::from_be_bytes(bytes[9..13].try_into().map_err(|_| {
@@ -436,10 +379,10 @@ pub(crate) fn deserialize_assembly_entities(
     let ParsedHeaders {
         headers,
         headers_end,
-    } = parse_entity_headers(bytes, entity_count, layout)?;
+    } = parse_entity_headers(bytes, entity_count)?;
 
     let total_atoms: usize = headers.iter().map(|h| h.atom_count).sum();
-    let atoms_end = headers_end + total_atoms * layout.row_bytes();
+    let atoms_end = headers_end + total_atoms * ATOM_ROW_BYTES;
     if bytes.len() < atoms_end {
         return Err(AdapterError::InvalidFormat(
             "Data too short for atom data".to_owned(),
@@ -451,11 +394,10 @@ pub(crate) fn deserialize_assembly_entities(
     let mut allocator = EntityIdAllocator::new();
 
     for header in headers {
-        let (rows, rest) = read_atom_rows(cursor, header.atom_count, layout)?;
+        let (rows, rest) = read_atom_rows(cursor, header.atom_count)?;
         cursor = rest;
         let id = allocator.from_raw(header.entity_id_raw);
-        let chain_id = resolve_chain_id(header.chain_id.as_deref(), &rows);
-        entities.push(build_entity(id, header.mol_type, chain_id, rows));
+        entities.push(build_entity(id, header.mol_type, header.chain_id, rows));
     }
 
     let per_entity_variants =

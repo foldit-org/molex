@@ -32,7 +32,7 @@ pub(crate) use builder::{
     AtomRow, BuildError, EntityBuilder, ExpectedEntityType,
 };
 pub use classify::classify_residue;
-pub use complete::CompletionMode;
+pub use complete::Completion;
 pub use diff::EntityDiffError;
 use glam::Vec3;
 pub use id::{EntityId, EntityIdAllocator};
@@ -119,42 +119,44 @@ impl MoleculeEntity {
         }
     }
 
-    /// Return a copy with polymer chains rebuilt heavy-complete: protein
-    /// and nucleic-acid entities gain their missing heavy atoms (see
-    /// [`ProteinEntity::normalize`] / [`NAEntity::normalize`]); non-polymer
-    /// entities are cloned unchanged. Atom indices shift, so `AtomId`s are
-    /// not stable across this projection. Completion runs on each chain's
-    /// surviving residues; residues dropped at construction are not
-    /// resurrected.
+    /// Return a copy with polymer chains rebuilt at the given completion
+    /// `level`: protein and nucleic-acid entities are re-completed (see
+    /// [`ProteinEntity::complete`] / [`NAEntity::complete`]); non-polymer
+    /// entities are cloned unchanged. Atom indices shift for any level that
+    /// fabricates atoms, so `AtomId`s are not stable across this
+    /// projection. Completion runs on each chain's surviving residues;
+    /// residues dropped at construction are not resurrected. The canonical
+    /// re-completion entry; [`Self::normalize`] and [`Self::to_all_atom`]
+    /// are thin wrappers over it.
     #[must_use]
-    pub fn normalize(&self) -> Self {
+    pub fn complete(&self, level: Completion) -> Self {
         match self {
             MoleculeEntity::Protein(p) => {
-                MoleculeEntity::Protein(p.normalize())
+                MoleculeEntity::Protein(p.complete(level))
             }
             MoleculeEntity::NucleicAcid(n) => {
-                MoleculeEntity::NucleicAcid(n.normalize())
+                MoleculeEntity::NucleicAcid(n.complete(level))
             }
             other => other.clone(),
         }
     }
 
+    /// Return a copy with polymer chains rebuilt heavy-complete: protein
+    /// and nucleic-acid entities gain their missing heavy atoms; non-polymer
+    /// entities are cloned unchanged. A thin wrapper over
+    /// [`Self::complete`] at [`Completion::Heavy`].
+    #[must_use]
+    pub fn normalize(&self) -> Self {
+        self.complete(Completion::Heavy)
+    }
+
     /// Return a copy with polymer chains rebuilt all-atom: protein and
-    /// nucleic-acid entities gain their template hydrogens (see
-    /// [`ProteinEntity::to_all_atom`] / [`NAEntity::to_all_atom`]);
-    /// non-polymer entities are cloned unchanged. Atom indices shift, so
-    /// `AtomId`s are not stable across this projection.
+    /// nucleic-acid entities gain their template hydrogens; non-polymer
+    /// entities are cloned unchanged. A thin wrapper over
+    /// [`Self::complete`] at [`Completion::AllAtom`].
     #[must_use]
     pub fn to_all_atom(&self) -> Self {
-        match self {
-            MoleculeEntity::Protein(p) => {
-                MoleculeEntity::Protein(p.to_all_atom())
-            }
-            MoleculeEntity::NucleicAcid(n) => {
-                MoleculeEntity::NucleicAcid(n.to_all_atom())
-            }
-            other => other.clone(),
-        }
+        self.complete(Completion::AllAtom)
     }
 
     // -- Entity trait delegation --

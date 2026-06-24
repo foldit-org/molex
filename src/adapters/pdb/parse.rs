@@ -3,7 +3,9 @@
 use compact_str::CompactString;
 
 use crate::element::Element;
-use crate::entity::molecule::{AtomRow, EntityBuilder, MoleculeEntity};
+use crate::entity::molecule::{
+    AtomRow, Completion, EntityBuilder, MoleculeEntity,
+};
 use crate::ops::codec::AdapterError;
 
 /// Record-kind dispatch based on cols 1-6.
@@ -41,8 +43,9 @@ fn record_kind(line: &[u8]) -> RecordKind {
 /// `MODEL`/`ENDMDL` are treated as one implicit model.
 pub(super) fn parse_pdb_to_entities(
     input: &str,
+    completion: Completion,
 ) -> Result<Vec<MoleculeEntity>, AdapterError> {
-    let mut builder = EntityBuilder::new();
+    let mut builder = EntityBuilder::with_completion(completion);
     let mut current_model: i32 = 1;
     let target_model: i32 = 1;
     let mut any_atom = false;

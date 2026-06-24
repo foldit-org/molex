@@ -13,7 +13,7 @@ use super::refuse::multi_block_error;
 use super::scan_row::{
     finish, push_row, push_slots, AtomSiteCols, RowSlots, RowValues,
 };
-use crate::entity::molecule::{EntityBuilder, MoleculeEntity};
+use crate::entity::molecule::{Completion, EntityBuilder, MoleculeEntity};
 use crate::ops::codec::AdapterError;
 
 /// Result of a single-model scan parse.
@@ -22,7 +22,10 @@ pub(super) type ScanResult = Option<Result<Vec<MoleculeEntity>, AdapterError>>;
 pub(super) type ScanModelsResult =
     Option<Result<Vec<Vec<MoleculeEntity>>, AdapterError>>;
 
-pub(super) fn parse_mmcif_scan(input: &str) -> ScanResult {
+pub(super) fn parse_mmcif_scan(
+    input: &str,
+    completion: Completion,
+) -> ScanResult {
     let mut scanner = Scanner::new(input);
     let pre = scanner.run_prepass()?;
     if let Some(err) = scanner.pending_error.take() {
@@ -37,7 +40,7 @@ pub(super) fn parse_mmcif_scan(input: &str) -> ScanResult {
         Err(e) => return Some(Err(e)),
     };
 
-    let mut builder = EntityBuilder::new();
+    let mut builder = EntityBuilder::with_completion(completion);
     register_hints(&pre, &mut builder);
 
     let mut any_atom = false;

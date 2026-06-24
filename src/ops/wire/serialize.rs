@@ -15,9 +15,9 @@ use crate::ops::codec::AdapterError;
 /// rebuild via [`Assembly::new`], and `ss_types` comes back empty until a
 /// caller opts in via [`Assembly::recompute_ss`].
 ///
-/// Format (version 2):
+/// Format (version 1):
 /// - 8 bytes: magic `b"ASSEMBLY"`
-/// - 1 byte:  version (currently 2)
+/// - 1 byte:  version (currently 1)
 /// - 4 bytes: entity_count (u32 BE)
 /// - Per entity header (variable):
 ///   - 1 byte: `molecule_type` wire byte
@@ -37,9 +37,8 @@ use crate::ops::codec::AdapterError;
 /// - Per-entity variants section (after all atoms, in entity order). See the
 ///   `variants` submodule for the inner layout.
 ///
-/// Chain id moved from a per-atom byte (version 1) to a per-entity header
-/// string here, lifting the single-printable-byte chain cap. The version-1
-/// decode path is retained in `deserialize`.
+/// The chain id lives in the per-entity header as a length-prefixed string,
+/// so chain ids are not capped to a single printable byte.
 ///
 /// Occupancy and b_factor are not preserved on the wire; deserialize
 /// resets them to 1.0 and 0.0 respectively.

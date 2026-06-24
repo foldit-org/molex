@@ -2,10 +2,9 @@
 //!
 //! The header is a fixed 8-byte magic followed by a `u8` version byte.
 //! The version selects the payload layout; the magic never changes when
-//! the payload does. Version 2 carries each entity's chain id as a
-//! length-prefixed string in the per-entity header (lifting the
-//! single-byte chain cap) and 25-byte atom rows; version 1 carried the
-//! chain id as a per-atom byte in 26-byte rows. Both versions decode.
+//! the payload does. Each entity's chain id is a length-prefixed string
+//! in the per-entity header (lifting any single-byte chain cap) and atom
+//! rows are 25 bytes.
 //!
 //! See [`crate::ops::wire::serialize_assembly`] for the byte layout.
 
@@ -22,11 +21,7 @@ use crate::ops::codec::AdapterError;
 pub const ASSEMBLY_MAGIC: &[u8; 8] = b"ASSEMBLY";
 
 /// Wire format version written after [`ASSEMBLY_MAGIC`].
-///
-/// Version 2 carries each entity's chain id in its header and 25-byte atom
-/// rows; version 1 (still decodable) carried the chain id per atom in
-/// 26-byte rows.
-pub const ASSEMBLY_VERSION: u8 = 2;
+pub const ASSEMBLY_VERSION: u8 = 1;
 
 /// Encode a `MoleculeType` to its wire byte.
 pub(crate) fn molecule_type_to_wire(mol_type: MoleculeType) -> u8 {

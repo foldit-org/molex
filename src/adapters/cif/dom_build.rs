@@ -11,20 +11,23 @@ use super::hint::resolve_hint;
 use super::parse::parse;
 use super::refuse::multi_block_error;
 use super::{map_build_error, name_to_bytes, resolve_element};
-use crate::entity::molecule::{AtomRow, EntityBuilder, MoleculeEntity};
+use crate::entity::molecule::{
+    AtomRow, Completion, EntityBuilder, MoleculeEntity,
+};
 use crate::ops::codec::AdapterError;
 
 /// Single-model DOM parse: returns the model whose `pdbx_PDB_model_num`
 /// matches the smallest value present (typically `1`).
 pub(super) fn parse_mmcif_dom_to_entities(
     input: &str,
+    completion: Completion,
 ) -> Result<Vec<MoleculeEntity>, AdapterError> {
     let doc = parse_document(input)?;
     let block = require_single_block(&doc)?;
     let cols = AtomSiteCols::from_block(block)?;
     let target = first_model_number(block, &cols);
 
-    let mut builder = EntityBuilder::new();
+    let mut builder = EntityBuilder::with_completion(completion);
     register_hints(block, &mut builder);
 
     let mut any_atom = false;

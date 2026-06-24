@@ -11,12 +11,13 @@ mod write;
 use self::parse::{parse_pdb_to_all_models, parse_pdb_to_entities};
 use self::refuse::check_beem_bundle;
 pub use self::write::{assembly_to_pdb, entities_to_pdb};
-use crate::entity::molecule::MoleculeEntity;
+use crate::entity::molecule::{Completion, MoleculeEntity};
 use crate::ops::codec::AdapterError;
 
 // Entity-first API (primary)
 
-/// Parse PDB format string to entity list.
+/// Parse PDB format string to entity list, completing missing heavy atoms
+/// ([`Completion::Heavy`]).
 ///
 /// # Errors
 ///
@@ -25,10 +26,28 @@ use crate::ops::codec::AdapterError;
 pub fn pdb_str_to_entities(
     pdb_str: &str,
 ) -> Result<Vec<MoleculeEntity>, AdapterError> {
+    pdb_str_to_entities_with(pdb_str, Completion::Heavy)
+}
+
+/// Parse PDB format string to entity list at the given completion `level`.
+///
+/// [`Completion::Raw`] yields the atoms exactly as parsed (no fabricated
+/// heavy atoms, input hydrogens preserved); [`Completion::Heavy`] matches
+/// [`pdb_str_to_entities`]; [`Completion::AllAtom`] additionally places
+/// template hydrogens.
+///
+/// # Errors
+///
+/// Returns [`AdapterError`] if parsing fails or the input is recognized
+/// as a BeEM split bundle (which the mmCIF adapter must handle instead).
+pub fn pdb_str_to_entities_with(
+    pdb_str: &str,
+    level: Completion,
+) -> Result<Vec<MoleculeEntity>, AdapterError> {
     if let Some(err) = check_beem_bundle(pdb_str, None) {
         return Err(err);
     }
-    parse_pdb_to_entities(pdb_str)
+    parse_pdb_to_entities(pdb_str, level)
 }
 
 /// Load PDB file to entity list.
@@ -46,7 +65,7 @@ pub fn pdb_file_to_entities(
     if let Some(err) = check_beem_bundle(&content, Some(path)) {
         return Err(err);
     }
-    parse_pdb_to_entities(&content)
+    parse_pdb_to_entities(&content, Completion::Heavy)
 }
 
 /// Parse a PDB string and return one entity list per `MODEL` block.

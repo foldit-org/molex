@@ -7,7 +7,6 @@ use super::{
 use crate::entity::molecule::atom::Atom;
 use crate::entity::molecule::bulk::BulkEntity;
 use crate::entity::molecule::classify::classify_residue;
-use crate::entity::molecule::complete::CompletionMode;
 use crate::entity::molecule::nucleic_acid::NAEntity;
 use crate::entity::molecule::polymer::Residue;
 use crate::entity::molecule::protein::ProteinEntity;
@@ -55,6 +54,7 @@ fn emit_polymer_chain(
         return;
     }
     let (atoms, res_vec) = flatten_residues(residues);
+    let completion = ctx.completion;
     let id = ctx.allocator.allocate();
     match mol_type {
         MoleculeType::Protein => {
@@ -64,7 +64,7 @@ fn emit_polymer_chain(
                     atoms,
                     res_vec,
                     chain_id.to_owned(),
-                    CompletionMode::HeavyOnly,
+                    completion,
                 ),
             ));
         }
@@ -76,7 +76,7 @@ fn emit_polymer_chain(
                     atoms,
                     res_vec,
                     chain_id.to_owned(),
-                    CompletionMode::HeavyOnly,
+                    completion,
                 ),
             ));
         }
@@ -95,8 +95,8 @@ fn emit_chain_bulk(
     }
     let mut atoms: Vec<Atom> = Vec::new();
     for r in residues {
-        for name in &r.atom_order {
-            atoms.push(r.atoms[name].to_atom());
+        for (_, choice) in &r.atoms {
+            atoms.push(choice.to_atom());
         }
     }
     let residue_name = residues
@@ -205,9 +205,9 @@ fn assign_unknown_bucket(r: &ResidueAccum, has_protein: bool) -> UnknownBucket {
 /// the builder choke point, so this matches the apostrophe-prime form.
 fn residue_has_na_backbone(r: &ResidueAccum) -> bool {
     const REQUIRED: [&[u8]; 5] = [b"O5'", b"C5'", b"C4'", b"C3'", b"O3'"];
-    REQUIRED
-        .iter()
-        .all(|want| r.atoms.keys().any(|name| trim_atom_key(name) == *want))
+    REQUIRED.iter().all(|want| {
+        r.atoms.iter().any(|(name, _)| trim_atom_key(name) == *want)
+    })
 }
 
 /// Per-residue sugar chemistry: a `C2'`-bearing residue with `O2'`
@@ -222,7 +222,7 @@ enum SugarChemistry {
 }
 
 fn residue_sugar_chemistry(r: &ResidueAccum) -> SugarChemistry {
-    sugar_chemistry_from_keys(r.atoms.keys())
+    sugar_chemistry_from_keys(r.atoms.iter().map(|(k, _)| k))
 }
 
 fn sugar_chemistry_from_keys<'a>(
@@ -347,6 +347,7 @@ fn emit_unknown_protein(
         return;
     }
     let (atoms, res_vec) = flatten_residues(selected.iter().copied());
+    let completion = ctx.completion;
     let id = ctx.allocator.allocate();
     ctx.out
         .push(MoleculeEntity::Protein(ProteinEntity::new_normalized(
@@ -354,7 +355,7 @@ fn emit_unknown_protein(
             atoms,
             res_vec,
             chain_id.to_owned(),
-            CompletionMode::HeavyOnly,
+            completion,
         )));
 }
 
@@ -370,6 +371,7 @@ fn emit_unknown_nucleic_acid(
     }
     let na_type = chain_na_type(&selected);
     let (atoms, res_vec) = flatten_residues(selected.iter().copied());
+    let completion = ctx.completion;
     let id = ctx.allocator.allocate();
     ctx.out
         .push(MoleculeEntity::NucleicAcid(NAEntity::new_normalized(
@@ -378,7 +380,7 @@ fn emit_unknown_nucleic_acid(
             atoms,
             res_vec,
             chain_id.to_owned(),
-            CompletionMode::HeavyOnly,
+            completion,
         )));
 }
 
@@ -392,7 +394,7 @@ fn residue_has_protein_backbone(residue: &ResidueAccum) -> bool {
     let mut has_n = false;
     let mut has_ca = false;
     let mut has_c = false;
-    for name in residue.atoms.keys() {
+    for (name, _) in &residue.atoms {
         match name {
             [b' ', b'N', b' ', b' '] | [b'N', b' ', b' ', b' '] => has_n = true,
             [b' ', b'C', b'A', b' '] | [b'C', b'A', b' ', b' '] => {
@@ -406,10 +408,7 @@ fn residue_has_protein_backbone(residue: &ResidueAccum) -> bool {
 }
 
 fn residue_to_atoms(r: &ResidueAccum) -> Vec<Atom> {
-    r.atom_order
-        .iter()
-        .map(|name| r.atoms[name].to_atom())
-        .collect()
+    r.atoms.iter().map(|(_, choice)| choice.to_atom()).collect()
 }
 
 fn flatten_residues<'a>(
@@ -419,8 +418,8 @@ fn flatten_residues<'a>(
     let mut out_residues: Vec<Residue> = Vec::new();
     for r in residues {
         let start = atoms.len();
-        for name in &r.atom_order {
-            atoms.push(r.atoms[name].to_atom());
+        for (_, choice) in &r.atoms {
+            atoms.push(choice.to_atom());
         }
         let end = atoms.len();
         out_residues.push(Residue {

@@ -11,7 +11,7 @@ use super::*;
 
 /// The file-parse path runs through `EntityBuilder` -> classify, which
 /// builds polymers via the completing constructor (`new_normalized` with
-/// `HeavyOnly`). An ALA with its four backbone atoms but no CB must come
+/// `Heavy`). An ALA with its four backbone atoms but no CB must come
 /// out with CB fabricated; if a classify site reverts to the pure
 /// constructor, the CB is absent and this fails.
 ///

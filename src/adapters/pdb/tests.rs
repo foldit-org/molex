@@ -7,9 +7,12 @@ use super::parse::{
     parse_pdb_charge, parse_seq_field,
 };
 use super::refuse::extract_pdb_id_from_bundle_filename;
-use super::{entities_to_pdb, pdb_str_to_all_models, pdb_str_to_entities};
+use super::{
+    entities_to_pdb, pdb_str_to_all_models, pdb_str_to_entities,
+    pdb_str_to_entities_with,
+};
 use crate::entity::molecule::MoleculeType;
-use crate::MoleculeEntity;
+use crate::{Completion, MoleculeEntity};
 
 /// Minimal PDB with one backbone-only residue (N, CA, C, O). Named MSE
 /// so the missing-atom completion pass is a no-op and these parse-path
@@ -31,6 +34,58 @@ fn pdb_str_to_entities_minimal() {
         .find(|e| e.molecule_type() == MoleculeType::Protein);
     assert!(protein.is_some());
     assert_eq!(protein.unwrap().atom_count(), 4);
+}
+
+/// One ALA residue with only its four backbone atoms at real (non-collinear)
+/// peptide geometry, so the rigid fit anchors and heavy completion can
+/// fabricate the missing CB (and the lone-residue C-terminal OXT).
+const SPARSE_ALA_PDB: &str = "\
+ATOM      1  N   ALA A   1       0.000   0.000   0.000  1.00  0.00           N
+ATOM      2  CA  ALA A   1       1.458   0.000   0.000  1.00  0.00           C
+ATOM      3  C   ALA A   1       2.009   1.420   0.000  1.00  0.00           C
+ATOM      4  O   ALA A   1       1.251   2.390   0.000  1.00  0.00           O
+END
+";
+
+fn protein_atom_count(entities: &[MoleculeEntity]) -> usize {
+    entities
+        .iter()
+        .find(|e| e.molecule_type() == MoleculeType::Protein)
+        .map_or(0, MoleculeEntity::atom_count)
+}
+
+#[test]
+fn raw_parse_skips_completion_heavy_fabricates_and_complete_recovers() {
+    let raw =
+        pdb_str_to_entities_with(SPARSE_ALA_PDB, Completion::Raw).unwrap();
+    let heavy =
+        pdb_str_to_entities_with(SPARSE_ALA_PDB, Completion::Heavy).unwrap();
+
+    let raw_count = protein_atom_count(&raw);
+    let heavy_count = protein_atom_count(&heavy);
+
+    // Raw is the four parsed backbone atoms verbatim; Heavy additionally
+    // fabricates CB and the lone-residue C-terminal OXT.
+    assert_eq!(raw_count, 4, "Raw must keep only the parsed atoms");
+    assert!(
+        raw_count < heavy_count,
+        "Heavy must fabricate atoms Raw omits ({raw_count} vs {heavy_count})",
+    );
+
+    // Default parse equals Heavy (today's behavior, unchanged).
+    assert_eq!(
+        protein_atom_count(&pdb_str_to_entities(SPARSE_ALA_PDB).unwrap()),
+        heavy_count
+    );
+
+    // Re-completing the Raw result to Heavy recovers the Heavy atom set.
+    let recovered: Vec<MoleculeEntity> =
+        raw.iter().map(|e| e.complete(Completion::Heavy)).collect();
+    assert_eq!(
+        protein_atom_count(&recovered),
+        heavy_count,
+        "complete(Heavy) on the Raw parse must match the Heavy parse",
+    );
 }
 
 #[test]

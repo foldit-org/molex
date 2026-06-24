@@ -30,6 +30,7 @@ use crate::chemistry::variant::{ProtonationState, VariantTag};
 use crate::element::Element;
 use crate::entity::molecule::atom::Atom as MolexAtom;
 use crate::entity::molecule::id::EntityIdAllocator;
+use crate::entity::molecule::Completion as CoreCompletion;
 use crate::ops::edit::AssemblyEdit;
 use crate::ops::wire::delta::{
     deserialize_edits, serialize_edits, DeltaSerializeError,
@@ -133,6 +134,34 @@ pub(super) fn resolve_index(
     Ok(resolved.unsigned_abs())
 }
 
+/// Completion level for parsing and re-completion: `Raw < Heavy < AllAtom`.
+///
+/// Mirrors `molex::Completion`; variant names match the Rust enum. `Raw`
+/// keeps atoms exactly as given (no fabricated heavy atoms, input hydrogens
+/// preserved); `Heavy` fabricates absent heavy template atoms and drops input
+/// hydrogens (the file-ingest default); `AllAtom` additionally places template
+/// hydrogens.
+#[pyclass(name = "Completion", module = "molex", eq, eq_int, from_py_object)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum PyCompletion {
+    /// Atoms exactly as given: skip completion, keep input hydrogens.
+    Raw,
+    /// Fabricate absent heavy template atoms (the file-ingest level).
+    Heavy,
+    /// Fabricate absent heavy atoms and template hydrogens.
+    AllAtom,
+}
+
+impl From<PyCompletion> for CoreCompletion {
+    fn from(value: PyCompletion) -> Self {
+        match value {
+            PyCompletion::Raw => CoreCompletion::Raw,
+            PyCompletion::Heavy => CoreCompletion::Heavy,
+            PyCompletion::AllAtom => CoreCompletion::AllAtom,
+        }
+    }
+}
+
 /// Python handle wrapping a `molex::Assembly`. Parallels
 /// `molex_Assembly` in the C API and `molex::Assembly` in C++.
 #[pyclass(name = "Assembly", module = "molex")]
@@ -183,27 +212,30 @@ impl PyAssembly {
         self.inner.generation()
     }
 
-    /// Project to a fresh heavy-complete `Assembly`: polymer entities gain
-    /// their missing heavy atoms (see [`crate::Assembly::normalize`]). Atom
-    /// indices shift, so any externally held atom indices into the source
-    /// assembly do not carry over. Completion runs on surviving residues
-    /// only; residues dropped at construction are not resurrected.
+    /// Project to a fresh `Assembly` at `level`: polymer entities are
+    /// re-completed (see [`crate::Assembly::complete`]). Atom indices shift,
+    /// so any externally held atom indices into the source assembly do not
+    /// carry over. Completion runs on surviving residues only; residues
+    /// dropped at construction are not resurrected.
     #[must_use]
-    pub fn normalize(&self) -> Self {
+    pub fn complete(&self, level: PyCompletion) -> Self {
         Self {
-            inner: self.inner.normalize(),
+            inner: self.inner.complete(level.into()),
         }
     }
 
+    /// Project to a fresh heavy-complete `Assembly`: polymer entities gain
+    /// their missing heavy atoms. Equivalent to `complete(Completion.Heavy)`.
+    #[must_use]
+    pub fn normalize(&self) -> Self {
+        self.complete(PyCompletion::Heavy)
+    }
+
     /// Project to a fresh all-atom `Assembly`: polymer entities gain their
-    /// template hydrogens (see [`crate::Assembly::to_all_atom`]). Atom
-    /// indices shift, so any externally held atom indices into the source
-    /// assembly do not carry over.
+    /// template hydrogens. Equivalent to `complete(Completion.AllAtom)`.
     #[must_use]
     pub fn to_all_atom(&self) -> Self {
-        Self {
-            inner: self.inner.to_all_atom(),
-        }
+        self.complete(PyCompletion::AllAtom)
     }
 
     /// Apply every edit in `edits` to the assembly in order.
@@ -285,45 +317,61 @@ impl PyAssembly {
     // the flat per-atom arrays are built lazily through the shared
     // entities -> arrays core.
 
-    /// Parse a PDB string into an `Assembly`. Raw ingest: atoms are
-    /// completed (missing heavy atoms filled) during classification.
-    /// Secondary structure is left empty; call `recompute_ss()` to populate.
+    /// Parse a PDB string into an `Assembly` at the given completion
+    /// `completion` (default `Completion.Heavy`: missing heavy atoms filled,
+    /// input hydrogens dropped). Secondary structure is left empty; call
+    /// `recompute_ss()` to populate.
     ///
     /// # Errors
     ///
     /// `PyValueError` if the PDB string cannot be parsed.
     #[staticmethod]
+    #[pyo3(signature = (text, completion = PyCompletion::Heavy))]
     #[allow(clippy::needless_pass_by_value)]
-    pub fn from_pdb(text: String) -> PyResult<Self> {
-        let entities = pdb::pdb_str_to_entities(&text).map_err(value_err)?;
+    pub fn from_pdb(text: String, completion: PyCompletion) -> PyResult<Self> {
+        let entities = pdb::pdb_str_to_entities_with(&text, completion.into())
+            .map_err(value_err)?;
         Ok(Self {
             inner: Assembly::new(entities),
         })
     }
 
-    /// Parse an mmCIF string into an `Assembly`. Raw ingest (see `from_pdb`).
+    /// Parse an mmCIF string into an `Assembly` (see `from_pdb` for
+    /// `completion`).
     ///
     /// # Errors
     ///
     /// `PyValueError` if the mmCIF string cannot be parsed.
     #[staticmethod]
+    #[pyo3(signature = (text, completion = PyCompletion::Heavy))]
     #[allow(clippy::needless_pass_by_value)]
-    pub fn from_mmcif(text: String) -> PyResult<Self> {
-        let entities = cif::mmcif_str_to_entities(&text).map_err(value_err)?;
+    pub fn from_mmcif(
+        text: String,
+        completion: PyCompletion,
+    ) -> PyResult<Self> {
+        let entities =
+            cif::mmcif_str_to_entities_with(&text, completion.into())
+                .map_err(value_err)?;
         Ok(Self {
             inner: Assembly::new(entities),
         })
     }
 
-    /// Parse BinaryCIF bytes into an `Assembly`. Raw ingest (see `from_pdb`).
+    /// Parse BinaryCIF bytes into an `Assembly` (see `from_pdb` for
+    /// `completion`).
     ///
     /// # Errors
     ///
     /// `PyValueError` if the BinaryCIF bytes cannot be parsed.
     #[staticmethod]
+    #[pyo3(signature = (bytes, completion = PyCompletion::Heavy))]
     #[allow(clippy::needless_pass_by_value)]
-    pub fn from_bcif(bytes: Vec<u8>) -> PyResult<Self> {
-        let entities = bcif::bcif_to_entities(&bytes).map_err(value_err)?;
+    pub fn from_bcif(
+        bytes: Vec<u8>,
+        completion: PyCompletion,
+    ) -> PyResult<Self> {
+        let entities = bcif::bcif_to_entities_with(&bytes, completion.into())
+            .map_err(value_err)?;
         Ok(Self {
             inner: Assembly::new(entities),
         })

@@ -129,7 +129,7 @@ fn new_normalized_completes_missing_sidechain_atoms() {
         atoms,
         residues,
         "A".to_owned(),
-        CompletionMode::HeavyOnly,
+        Completion::Heavy,
     );
     assert_eq!(protein.residues.len(), 1, "ALA must survive completion");
     let names = residue_atom_names(&protein.atoms, &protein.residues[0]);
@@ -181,7 +181,7 @@ fn new_normalized_rescues_backbone_incomplete_residue() {
         atoms,
         residues,
         "A".to_owned(),
-        CompletionMode::HeavyOnly,
+        Completion::Heavy,
     );
     assert_eq!(
         protein.residues.len(),

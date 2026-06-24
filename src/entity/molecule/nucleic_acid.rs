@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use glam::Vec3;
 
 use super::atom::Atom;
-use super::complete::{complete_na_residues, keep_hydrogens, CompletionMode};
+use super::complete::{complete_na_residues, keep_hydrogens, Completion};
 use super::id::EntityId;
 use super::protein::trimmed_atom_name;
 use super::traits::{Entity, Polymer};
@@ -118,31 +118,24 @@ impl NAEntity {
         residues: Vec<Residue>,
         pdb_chain_id: String,
     ) -> Self {
-        build_na(
-            id,
-            na_type,
-            atoms,
-            residues,
-            pdb_chain_id,
-            CompletionMode::None,
-        )
+        build_na(id, na_type, atoms, residues, pdb_chain_id, Completion::Raw)
     }
 
     /// Construct an NA entity, fabricating missing atoms at construction
     /// in the given completion `mode`.
     ///
     /// Same canonicalize / segment-break / bond-graph construction as
-    /// [`Self::new`], but the rigid-fit completion pass runs first (in
-    /// `mode`), before the canonicalize reorder. Because completion runs
-    /// before the drop, a backbone-incomplete but anchorable residue can
-    /// have its backbone fabricated and survive, whereas the pure
-    /// [`Self::new`] would drop it. The raw-ingest path (file parses)
-    /// uses this with [`CompletionMode::HeavyOnly`].
+    /// [`Self::new`], but the rigid-fit completion pass runs first (to
+    /// `completion`), before the canonicalize reorder. Because completion
+    /// runs before the drop, a backbone-incomplete but anchorable residue
+    /// can have its backbone fabricated and survive, whereas the pure
+    /// [`Self::new`] would drop it. The file-ingest path uses this with
+    /// [`Completion::Heavy`].
     #[must_use]
     #[allow(
         clippy::too_many_arguments,
         reason = "mirrors NAEntity::new's argument set plus the completion \
-                  mode"
+                  level"
     )]
     pub fn new_normalized(
         id: EntityId,
@@ -150,7 +143,7 @@ impl NAEntity {
         atoms: Vec<Atom>,
         residues: Vec<Residue>,
         pdb_chain_id: String,
-        completion: CompletionMode,
+        completion: Completion,
     ) -> Self {
         build_na(id, na_type, atoms, residues, pdb_chain_id, completion)
     }
@@ -172,7 +165,7 @@ impl NAEntity {
     /// stable across this projection.
     #[must_use]
     pub fn normalize(&self) -> Self {
-        self.completed(CompletionMode::HeavyOnly)
+        self.complete(Completion::Heavy)
     }
 
     /// Rebuild this entity with all-atom completion, additionally
@@ -181,20 +174,22 @@ impl NAEntity {
     /// [`Self::normalize`].
     #[must_use]
     pub fn to_all_atom(&self) -> Self {
-        self.completed(CompletionMode::AllAtom)
+        self.complete(Completion::AllAtom)
     }
 
-    /// Re-extract this entity's atoms and residues and rebuild them with
-    /// the given completion `mode`. Shared core of [`Self::normalize`] and
-    /// [`Self::to_all_atom`].
-    fn completed(&self, mode: CompletionMode) -> Self {
+    /// Re-extract this entity's atoms and residues and rebuild them at
+    /// the given completion `level`. The canonical re-completion entry;
+    /// [`Self::normalize`] and [`Self::to_all_atom`] are thin wrappers
+    /// over it.
+    #[must_use]
+    pub fn complete(&self, level: Completion) -> Self {
         build_na(
             self.id,
             self.na_type,
             self.atoms.clone(),
             self.residues.clone(),
             self.pdb_chain_id.clone(),
-            mode,
+            level,
         )
     }
 
@@ -306,7 +301,7 @@ impl NAEntity {
     }
 }
 
-/// Shared NA-entity construction: complete (in `mode`), canonicalize,
+/// Shared NA-entity construction: complete (to `level`), canonicalize,
 /// derive segment breaks, and build the bond graph.
 #[allow(
     clippy::needless_pass_by_value,
@@ -315,7 +310,7 @@ impl NAEntity {
 )]
 #[allow(
     clippy::too_many_arguments,
-    reason = "mirrors NAEntity::new's argument set plus the completion mode"
+    reason = "mirrors NAEntity::new's argument set plus the completion level"
 )]
 fn build_na(
     id: EntityId,
@@ -323,16 +318,16 @@ fn build_na(
     atoms: Vec<Atom>,
     residues: Vec<Residue>,
     pdb_chain_id: String,
-    mode: CompletionMode,
+    level: Completion,
 ) -> NAEntity {
     let (atoms, residues) =
-        complete_na_residues(&atoms, &residues, mode, na_type);
+        complete_na_residues(&atoms, &residues, level, na_type);
     let (atoms, residues) = canonicalize_na_residues(
         &atoms,
         &residues,
         &pdb_chain_id,
         na_type,
-        keep_hydrogens(mode),
+        keep_hydrogens(level),
     );
     let segment_breaks = compute_na_segment_breaks(&atoms, &residues);
     let bonds = build_na_bonds(id, &atoms, &residues, &segment_breaks);

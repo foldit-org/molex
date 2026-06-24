@@ -54,48 +54,49 @@ const MIN_ANCHOR_ATOMS: usize = 3;
 /// straight-line inputs while staying comfortably clear of f32 round-off.
 const COLLINEAR_TOLERANCE: f32 = 1e-3;
 
-/// Which template atoms a completion run is allowed to fabricate.
+/// A monotonic completion level: `Raw < Heavy < AllAtom`.
 ///
-/// `None` skips completion entirely: the residue's atom set is used
-/// exactly as given, fabricating nothing. It is the pure construction
-/// default (wire round-trip, array ingest, continuous rebuild), where
-/// inputs are already complete and re-running the rigid fit is pure
-/// waste. The host and rosetta consume heavy atoms only and re-derive
-/// hydrogens downstream, so `HeavyOnly` is the file-ingest mode.
-/// `AllAtom` additionally places template hydrogens for callers that
-/// need a fully protonated model.
+/// `Raw` skips completion entirely: the residue's atom set is used
+/// exactly as given, fabricating nothing and preserving any input
+/// hydrogens. It is the pure construction level (wire round-trip, array
+/// ingest, continuous rebuild), where inputs are already complete and
+/// re-running the rigid fit is pure waste. `Heavy` fabricates absent
+/// heavy template atoms and drops input hydrogens; the host and rosetta
+/// consume heavy atoms only and re-derive hydrogens downstream, so it is
+/// the file-ingest level. `AllAtom` additionally places template
+/// hydrogens for callers that need a fully protonated model.
 ///
-/// Callers select a mode at construction through the opt-in completing
+/// Callers select a level at construction through the opt-in completing
 /// constructors ([`super::protein::ProteinEntity::new_normalized`] /
 /// [`super::nucleic_acid::NAEntity::new_normalized`]); the plain `new`
-/// constructors are pure (`None`).
+/// constructors are pure (`Raw`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CompletionMode {
-    /// Skip completion entirely; fabricate nothing.
-    None,
-    /// Fabricate only absent heavy template atoms (the file-ingest mode).
-    HeavyOnly,
+pub enum Completion {
+    /// Atoms exactly as given: skip completion, keep input hydrogens.
+    Raw,
+    /// Fabricate absent heavy template atoms (the file-ingest level).
+    Heavy,
     /// Fabricate absent heavy atoms and template hydrogens.
     AllAtom,
 }
 
 /// Whether canonicalize should carry parsed hydrogens through into the
-/// output entity. Only [`CompletionMode::HeavyOnly`] strips them: it is
-/// the file-ingest mode, where the host and rosetta consume heavy atoms
+/// output entity. Only [`Completion::Heavy`] strips them: it is the
+/// file-ingest level, where the host and rosetta consume heavy atoms
 /// only, so a fully-protonated input PDB must not leak its hydrogens into
-/// the canonical entity. `None` and `AllAtom` keep them (the former by
+/// the canonical entity. `Raw` and `AllAtom` keep them (the former by
 /// preserving the parse verbatim, the latter because hydrogens are part
 /// of the all-atom model).
-pub(super) fn keep_hydrogens(mode: CompletionMode) -> bool {
-    mode != CompletionMode::HeavyOnly
+pub(super) fn keep_hydrogens(level: Completion) -> bool {
+    level != Completion::Heavy
 }
 
 /// What a single residue's completion is allowed to fabricate: the
-/// fabrication `mode` plus which polymer end the residue sits at (a lone
+/// completion `level` plus which polymer end the residue sits at (a lone
 /// residue is both termini at once). Decided by [`in_scope`].
 #[derive(Clone, Copy)]
 struct Scope {
-    mode: CompletionMode,
+    level: Completion,
     is_chain_first: bool,
     is_chain_last: bool,
 }
@@ -109,16 +110,16 @@ struct Scope {
 /// standard amino acid, or that are too sparse to fit, are emitted
 /// unchanged.
 ///
-/// `mode` selects what is fabricated: [`CompletionMode::None`] skips
-/// the pass and returns the atoms unchanged; [`CompletionMode::HeavyOnly`]
-/// (the file-ingest path) places only heavy atoms; [`CompletionMode::AllAtom`]
+/// `level` selects what is fabricated: [`Completion::Raw`] skips
+/// the pass and returns the atoms unchanged; [`Completion::Heavy`]
+/// (the file-ingest path) places only heavy atoms; [`Completion::AllAtom`]
 /// additionally places template hydrogens.
 pub(super) fn complete_protein_residues(
     atoms: &[Atom],
     residues: &[Residue],
-    mode: CompletionMode,
+    level: Completion,
 ) -> (Vec<Atom>, Vec<Residue>) {
-    complete_residues(atoms, residues, mode, |name| {
+    complete_residues(atoms, residues, level, |name| {
         AminoAcid::from_code(name).map(AminoAcid::template)
     })
 }
@@ -126,7 +127,7 @@ pub(super) fn complete_protein_residues(
 /// Complete missing atoms in nucleic-acid residues against the strand's
 /// base templates.
 ///
-/// Same contract as [`complete_protein_residues`] (including the `mode`
+/// Same contract as [`complete_protein_residues`] (including the `level`
 /// semantics); resolution goes through [`Nucleotide`] in the chemistry
 /// the entity's `na_type` selects, so an RNA chain completes against
 /// ribose (2'-OH) templates and a DNA chain against deoxyribose ones.
@@ -135,10 +136,10 @@ pub(super) fn complete_protein_residues(
 pub(super) fn complete_na_residues(
     atoms: &[Atom],
     residues: &[Residue],
-    mode: CompletionMode,
+    level: Completion,
     na_type: MoleculeType,
 ) -> (Vec<Atom>, Vec<Residue>) {
-    complete_residues(atoms, residues, mode, |name| {
+    complete_residues(atoms, residues, level, |name| {
         Nucleotide::from_code(name).and_then(|n| n.template(na_type))
     })
 }
@@ -148,7 +149,7 @@ pub(super) fn complete_na_residues(
 fn complete_residues(
     atoms: &[Atom],
     residues: &[Residue],
-    mode: CompletionMode,
+    level: Completion,
     resolve: impl Fn([u8; 3]) -> Option<&'static ResidueTemplate>,
 ) -> (Vec<Atom>, Vec<Residue>) {
     let mut new_atoms: Vec<Atom> = Vec::with_capacity(atoms.len());
@@ -160,7 +161,7 @@ fn complete_residues(
     // termini. Terminus-only completion keys off these indices.
     for (idx, residue) in residues.iter().enumerate() {
         let scope = Scope {
-            mode,
+            level,
             is_chain_first: idx == 0,
             is_chain_last: idx + 1 == residues.len(),
         };
@@ -171,7 +172,7 @@ fn complete_residues(
             new_atoms.push(atoms[idx].clone());
         }
 
-        if mode != CompletionMode::None {
+        if level != Completion::Raw {
             if let Some(template) = resolve(residue.name) {
                 append_missing_atoms(
                     atoms,
@@ -207,7 +208,7 @@ fn complete_residues(
 /// rotation needs the anchors to span at least two dimensions, and the
 /// only way `>= 3` points fail that is by lying on one line.
 ///
-/// `scope` carries the fabrication mode and which polymer end this
+/// `scope` carries the completion level and which polymer end this
 /// residue sits at, so [`in_scope`] can admit the terminus-only atoms
 /// there.
 fn append_missing_atoms(
@@ -358,12 +359,11 @@ fn is_five_prime_phosphate_atom(name: AtomName) -> bool {
 /// atoms are always in scope. Terminus-only atoms are admitted only at
 /// the matching polymer end: C-terminal atoms when `is_chain_last`,
 /// N-terminal atoms when `is_chain_first`. Leaving atoms are never
-/// fabricated, and under [`CompletionMode::HeavyOnly`] hydrogens are
-/// excluded.
+/// fabricated, and under [`Completion::Heavy`] hydrogens are excluded.
 ///
-/// In practice, on a protein C-terminus under `HeavyOnly` the only NEW
-/// heavy atom this admits is the carboxylate `OXT`: the C-terminal C and
-/// O carry `is_c_terminal` but are present in every residue (matched as
+/// In practice, on a protein C-terminus under `Heavy` the only NEW heavy
+/// atom this admits is the carboxylate `OXT`: the C-terminal C and O
+/// carry `is_c_terminal` but are present in every residue (matched as
 /// anchors, never reaching the missing list), and `HXT` is dropped as a
 /// hydrogen. N-terminal extras are all hydrogens, so the N-terminus is a
 /// heavy no-op. Under `AllAtom` the same rule additionally places `HXT`
@@ -372,7 +372,7 @@ fn is_five_prime_phosphate_atom(name: AtomName) -> bool {
 /// The NA 5'-terminal phosphate group is handled separately in
 /// [`append_missing_atoms`] (it carries no CCD flag this could key on).
 fn in_scope(t: &TemplateAtom, scope: Scope) -> bool {
-    if scope.mode == CompletionMode::HeavyOnly && t.element == Element::H {
+    if scope.level == Completion::Heavy && t.element == Element::H {
         return false;
     }
     if !t.is_leaving && !t.is_n_terminal && !t.is_c_terminal {

@@ -12,10 +12,11 @@ mod refuse;
 
 use std::path::Path;
 
-use crate::entity::molecule::MoleculeEntity;
+use crate::entity::molecule::{Completion, MoleculeEntity};
 use crate::ops::codec::AdapterError;
 
-/// Decode BinaryCIF bytes to entity list.
+/// Decode BinaryCIF bytes to entity list, completing missing heavy atoms
+/// ([`Completion::Heavy`]).
 ///
 /// Returns the model whose `pdbx_PDB_model_num` matches the smallest value
 /// present; files without a model column collapse to a single implicit model.
@@ -28,7 +29,26 @@ use crate::ops::codec::AdapterError;
 pub fn bcif_to_entities(
     bytes: &[u8],
 ) -> Result<Vec<MoleculeEntity>, AdapterError> {
-    decode::decode_to_entities(bytes)
+    bcif_to_entities_with(bytes, Completion::Heavy)
+}
+
+/// Decode BinaryCIF bytes to entity list at the given completion `level`.
+///
+/// [`Completion::Raw`] yields the atoms exactly as parsed (no fabricated
+/// heavy atoms, input hydrogens preserved); [`Completion::Heavy`] matches
+/// [`bcif_to_entities`]; [`Completion::AllAtom`] additionally places
+/// template hydrogens.
+///
+/// # Errors
+///
+/// Returns [`AdapterError`] if the bytes cannot be parsed as valid
+/// BinaryCIF, contain multiple data blocks, or describe more chains than
+/// the printable-byte mapper can hold.
+pub fn bcif_to_entities_with(
+    bytes: &[u8],
+    level: Completion,
+) -> Result<Vec<MoleculeEntity>, AdapterError> {
+    decode::decode_to_entities(bytes, level)
 }
 
 /// Load a BinaryCIF file and convert to entity list.

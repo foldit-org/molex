@@ -16,8 +16,8 @@
 ///    `*`, so this blanket swap is safe and fixes all sugar primes (`O5*` ->
 ///    `O5'`). It also rewrites the prime inside numeric-prefix hydrogen names
 ///    (`1H5*` -> `1H5'`); those H names are otherwise left untouched (the
-///    HeavyOnly path sorts hydrogens by element and never matches them by name,
-///    and the rosetta bridge already aliases the numeric-prefix form).
+///    heavy-completion path sorts hydrogens by element and never matches them
+///    by name, and the rosetta bridge already aliases the numeric-prefix form).
 /// 2. Phosphate oxygen rename: `O1P` -> `OP1`, `O2P` -> `OP2`, `O3P` -> `OP3`.
 ///    These carry no `*`, so rule 1 leaves them.
 #[must_use]

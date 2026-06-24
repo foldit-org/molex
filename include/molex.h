@@ -22,17 +22,13 @@
 
 /**
  * Wire format version written after [`ASSEMBLY_MAGIC`].
- *
- * Version 2 carries each entity's chain id in its header and 25-byte atom
- * rows; version 1 (still decodable) carried the chain id per atom in
- * 26-byte rows.
  */
-#define ASSEMBLY_VERSION 2
+#define ASSEMBLY_VERSION 1
 
 /**
  * Wire format version written after [`DELTA_MAGIC`].
  */
-#define DELTA_VERSION 2
+#define DELTA_VERSION 1
 
 /**
  * Success status returned by writer-style entry points.
@@ -48,6 +44,38 @@
  * One of the input pointers was null.
  */
 #define MOLEX_ERR_NULL -2
+
+/**
+ * Completion level across the FFI boundary: `Raw < Heavy < AllAtom`.
+ *
+ * Mirrors `molex::Completion`. Stable integer codes so C consumers can pass
+ * a level without depending on Rust's enum layout. `Raw` keeps atoms exactly
+ * as given (no fabricated heavy atoms, input hydrogens preserved); `Heavy`
+ * fabricates absent heavy template atoms and drops input hydrogens (the
+ * file-ingest default that the no-level parse entry points use); `AllAtom`
+ * additionally places template hydrogens.
+ */
+enum molex_Completion
+#ifdef __cplusplus
+  : int32_t
+#endif // __cplusplus
+ {
+  /**
+   * Atoms exactly as given: skip completion, keep input hydrogens.
+   */
+  MOLEX_COMPLETION_RAW = 0,
+  /**
+   * Fabricate absent heavy template atoms (the file-ingest level).
+   */
+  MOLEX_COMPLETION_HEAVY = 1,
+  /**
+   * Fabricate absent heavy atoms and template hydrogens.
+   */
+  MOLEX_COMPLETION_ALL_ATOM = 2,
+};
+#ifndef __cplusplus
+typedef int32_t molex_Completion;
+#endif // __cplusplus
 
 /**
  * Variant tag kind discriminant on the C boundary.
@@ -417,7 +445,29 @@ molex_Assembly *molex_assembly_to_all_atom(const molex_Assembly *assembly)
 ;
 
 /**
- * Parse a PDB-format string into an `Assembly`.
+ * Project an assembly to a fresh handle re-completed at `level`.
+ *
+ * Polymer entities are rebuilt (see [`crate::Assembly::complete`]); the
+ * source handle is left untouched. [`molex_assembly_normalize`] and
+ * [`molex_assembly_to_all_atom`] are the `Heavy` / `AllAtom` shortcuts.
+ *
+ * Completion runs on surviving residues only; residues dropped at
+ * construction are not resurrected.
+ *
+ * Returns null on a null input with the error message available via
+ * [`molex_last_error_message`]. The returned handle is caller-owned and
+ * must be freed with [`molex_assembly_free`]; freeing it is independent
+ * of the source handle.
+ */
+
+molex_Assembly *molex_assembly_complete(const molex_Assembly *assembly,
+                                        molex_Completion level)
+;
+
+/**
+ * Parse a PDB-format string into an `Assembly` at [`Completion::Heavy`]
+ * (missing heavy atoms filled, input hydrogens dropped). For another level
+ * use [`molex_pdb_str_to_assembly_with_completion`].
  *
  * Returns null on failure with the error message available via
  * [`molex_last_error_message`]. The caller owns the returned handle
@@ -429,7 +479,22 @@ molex_Assembly *molex_pdb_str_to_assembly(const char *str_ptr,
 ;
 
 /**
- * Parse an mmCIF-format string into an `Assembly`.
+ * Parse a PDB-format string into an `Assembly` at the given completion
+ * `level`. Like [`molex_pdb_str_to_assembly`] but selects the level.
+ *
+ * Returns null on failure with the error message available via
+ * [`molex_last_error_message`]. The caller owns the returned handle
+ * and must free it with [`molex_assembly_free`].
+ */
+
+molex_Assembly *molex_pdb_str_to_assembly_with_completion(const char *str_ptr,
+                                                          uintptr_t len,
+                                                          molex_Completion level)
+;
+
+/**
+ * Parse an mmCIF-format string into an `Assembly` at [`Completion::Heavy`].
+ * For another level use [`molex_cif_str_to_assembly_with_completion`].
  *
  * Returns null on failure with the error message available via
  * [`molex_last_error_message`]. The caller owns the returned handle
@@ -438,6 +503,20 @@ molex_Assembly *molex_pdb_str_to_assembly(const char *str_ptr,
 
 molex_Assembly *molex_cif_str_to_assembly(const char *str_ptr,
                                           uintptr_t len)
+;
+
+/**
+ * Parse an mmCIF-format string into an `Assembly` at the given completion
+ * `level`. Like [`molex_cif_str_to_assembly`] but selects the level.
+ *
+ * Returns null on failure with the error message available via
+ * [`molex_last_error_message`]. The caller owns the returned handle
+ * and must free it with [`molex_assembly_free`].
+ */
+
+molex_Assembly *molex_cif_str_to_assembly_with_completion(const char *str_ptr,
+                                                          uintptr_t len,
+                                                          molex_Completion level)
 ;
 
 /**
@@ -455,7 +534,8 @@ molex_Assembly *molex_bytes_to_assembly(const uint8_t *bytes_ptr,
 ;
 
 /**
- * Decode BinaryCIF bytes into an `Assembly`.
+ * Decode BinaryCIF bytes into an `Assembly` at [`Completion::Heavy`]. For
+ * another level use [`molex_bcif_to_assembly_with_completion`].
  *
  * Returns null on failure with the error message available via
  * [`molex_last_error_message`]. The caller owns the returned handle
@@ -464,6 +544,20 @@ molex_Assembly *molex_bytes_to_assembly(const uint8_t *bytes_ptr,
 
 molex_Assembly *molex_bcif_to_assembly(const uint8_t *bytes_ptr,
                                        uintptr_t len)
+;
+
+/**
+ * Decode BinaryCIF bytes into an `Assembly` at the given completion `level`.
+ * Like [`molex_bcif_to_assembly`] but selects the level.
+ *
+ * Returns null on failure with the error message available via
+ * [`molex_last_error_message`]. The caller owns the returned handle
+ * and must free it with [`molex_assembly_free`].
+ */
+
+molex_Assembly *molex_bcif_to_assembly_with_completion(const uint8_t *bytes_ptr,
+                                                       uintptr_t len,
+                                                       molex_Completion level)
 ;
 
 /**

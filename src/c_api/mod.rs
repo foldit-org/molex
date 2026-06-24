@@ -62,7 +62,9 @@ use std::ffi::c_char;
 
 use crate::adapters::{bcif, cif, pdb};
 use crate::assembly::Assembly;
-use crate::entity::molecule::{EntityKind, MoleculeEntity, MoleculeType};
+use crate::entity::molecule::{
+    Completion, EntityKind, MoleculeEntity, MoleculeType,
+};
 use crate::ops::wire::{deserialize_assembly, serialize_assembly};
 
 thread_local! {
@@ -169,6 +171,35 @@ impl From<EntityKind> for molex_EntityKind {
             EntityKind::NucleicAcid => molex_EntityKind::NucleicAcid,
             EntityKind::SmallMolecule => molex_EntityKind::SmallMolecule,
             EntityKind::Bulk => molex_EntityKind::Bulk,
+        }
+    }
+}
+
+/// Completion level across the FFI boundary: `Raw < Heavy < AllAtom`.
+///
+/// Mirrors `molex::Completion`. Stable integer codes so C consumers can pass
+/// a level without depending on Rust's enum layout. `Raw` keeps atoms exactly
+/// as given (no fabricated heavy atoms, input hydrogens preserved); `Heavy`
+/// fabricates absent heavy template atoms and drops input hydrogens (the
+/// file-ingest default that the no-level parse entry points use); `AllAtom`
+/// additionally places template hydrogens.
+#[repr(i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum molex_Completion {
+    /// Atoms exactly as given: skip completion, keep input hydrogens.
+    Raw = 0,
+    /// Fabricate absent heavy template atoms (the file-ingest level).
+    Heavy = 1,
+    /// Fabricate absent heavy atoms and template hydrogens.
+    AllAtom = 2,
+}
+
+impl From<molex_Completion> for Completion {
+    fn from(value: molex_Completion) -> Self {
+        match value {
+            molex_Completion::Raw => Completion::Raw,
+            molex_Completion::Heavy => Completion::Heavy,
+            molex_Completion::AllAtom => Completion::AllAtom,
         }
     }
 }
@@ -321,6 +352,33 @@ pub extern "C" fn molex_assembly_to_all_atom(
     Box::into_raw(Box::new(inner.to_all_atom())).cast::<molex_Assembly>()
 }
 
+/// Project an assembly to a fresh handle re-completed at `level`.
+///
+/// Polymer entities are rebuilt (see [`crate::Assembly::complete`]); the
+/// source handle is left untouched. [`molex_assembly_normalize`] and
+/// [`molex_assembly_to_all_atom`] are the `Heavy` / `AllAtom` shortcuts.
+///
+/// Completion runs on surviving residues only; residues dropped at
+/// construction are not resurrected.
+///
+/// Returns null on a null input with the error message available via
+/// [`molex_last_error_message`]. The returned handle is caller-owned and
+/// must be freed with [`molex_assembly_free`]; freeing it is independent
+/// of the source handle.
+#[no_mangle]
+pub extern "C" fn molex_assembly_complete(
+    assembly: *const molex_Assembly,
+    level: molex_Completion,
+) -> *mut molex_Assembly {
+    let Some(inner) = assembly_inner(assembly) else {
+        set_last_error(&"molex_assembly_complete: null input pointer");
+        return std::ptr::null_mut();
+    };
+    clear_last_error();
+    Box::into_raw(Box::new(inner.complete(level.into())))
+        .cast::<molex_Assembly>()
+}
+
 fn slice_from_raw<'a, T>(ptr: *const T, len: usize) -> Option<&'a [T]> {
     if ptr.is_null() {
         return None;
@@ -328,18 +386,14 @@ fn slice_from_raw<'a, T>(ptr: *const T, len: usize) -> Option<&'a [T]> {
     Some(unsafe { std::slice::from_raw_parts(ptr, len) })
 }
 
-/// Parse a PDB-format string into an `Assembly`.
-///
-/// Returns null on failure with the error message available via
-/// [`molex_last_error_message`]. The caller owns the returned handle
-/// and must free it with [`molex_assembly_free`].
-#[no_mangle]
-pub extern "C" fn molex_pdb_str_to_assembly(
+fn pdb_str_to_assembly_at(
     str_ptr: *const c_char,
     len: usize,
+    level: Completion,
+    fn_name: &str,
 ) -> *mut molex_Assembly {
     let Some(bytes) = slice_from_raw(str_ptr.cast::<u8>(), len) else {
-        set_last_error(&"molex_pdb_str_to_assembly: null input pointer");
+        set_last_error(&format!("{fn_name}: null input pointer"));
         return std::ptr::null_mut();
     };
     let s = match std::str::from_utf8(bytes) {
@@ -349,7 +403,7 @@ pub extern "C" fn molex_pdb_str_to_assembly(
             return std::ptr::null_mut();
         }
     };
-    match pdb::pdb_str_to_entities(s) {
+    match pdb::pdb_str_to_entities_with(s, level) {
         Ok(entities) => {
             clear_last_error();
             assembly_from_entities(entities)
@@ -361,18 +415,54 @@ pub extern "C" fn molex_pdb_str_to_assembly(
     }
 }
 
-/// Parse an mmCIF-format string into an `Assembly`.
+/// Parse a PDB-format string into an `Assembly` at [`Completion::Heavy`]
+/// (missing heavy atoms filled, input hydrogens dropped). For another level
+/// use [`molex_pdb_str_to_assembly_with_completion`].
 ///
 /// Returns null on failure with the error message available via
 /// [`molex_last_error_message`]. The caller owns the returned handle
 /// and must free it with [`molex_assembly_free`].
 #[no_mangle]
-pub extern "C" fn molex_cif_str_to_assembly(
+pub extern "C" fn molex_pdb_str_to_assembly(
     str_ptr: *const c_char,
     len: usize,
 ) -> *mut molex_Assembly {
+    pdb_str_to_assembly_at(
+        str_ptr,
+        len,
+        Completion::Heavy,
+        "molex_pdb_str_to_assembly",
+    )
+}
+
+/// Parse a PDB-format string into an `Assembly` at the given completion
+/// `level`. Like [`molex_pdb_str_to_assembly`] but selects the level.
+///
+/// Returns null on failure with the error message available via
+/// [`molex_last_error_message`]. The caller owns the returned handle
+/// and must free it with [`molex_assembly_free`].
+#[no_mangle]
+pub extern "C" fn molex_pdb_str_to_assembly_with_completion(
+    str_ptr: *const c_char,
+    len: usize,
+    level: molex_Completion,
+) -> *mut molex_Assembly {
+    pdb_str_to_assembly_at(
+        str_ptr,
+        len,
+        level.into(),
+        "molex_pdb_str_to_assembly_with_completion",
+    )
+}
+
+fn cif_str_to_assembly_at(
+    str_ptr: *const c_char,
+    len: usize,
+    level: Completion,
+    fn_name: &str,
+) -> *mut molex_Assembly {
     let Some(bytes) = slice_from_raw(str_ptr.cast::<u8>(), len) else {
-        set_last_error(&"molex_cif_str_to_assembly: null input pointer");
+        set_last_error(&format!("{fn_name}: null input pointer"));
         return std::ptr::null_mut();
     };
     let s = match std::str::from_utf8(bytes) {
@@ -382,7 +472,7 @@ pub extern "C" fn molex_cif_str_to_assembly(
             return std::ptr::null_mut();
         }
     };
-    match cif::mmcif_str_to_entities(s) {
+    match cif::mmcif_str_to_entities_with(s, level) {
         Ok(entities) => {
             clear_last_error();
             assembly_from_entities(entities)
@@ -392,6 +482,45 @@ pub extern "C" fn molex_cif_str_to_assembly(
             std::ptr::null_mut()
         }
     }
+}
+
+/// Parse an mmCIF-format string into an `Assembly` at [`Completion::Heavy`].
+/// For another level use [`molex_cif_str_to_assembly_with_completion`].
+///
+/// Returns null on failure with the error message available via
+/// [`molex_last_error_message`]. The caller owns the returned handle
+/// and must free it with [`molex_assembly_free`].
+#[no_mangle]
+pub extern "C" fn molex_cif_str_to_assembly(
+    str_ptr: *const c_char,
+    len: usize,
+) -> *mut molex_Assembly {
+    cif_str_to_assembly_at(
+        str_ptr,
+        len,
+        Completion::Heavy,
+        "molex_cif_str_to_assembly",
+    )
+}
+
+/// Parse an mmCIF-format string into an `Assembly` at the given completion
+/// `level`. Like [`molex_cif_str_to_assembly`] but selects the level.
+///
+/// Returns null on failure with the error message available via
+/// [`molex_last_error_message`]. The caller owns the returned handle
+/// and must free it with [`molex_assembly_free`].
+#[no_mangle]
+pub extern "C" fn molex_cif_str_to_assembly_with_completion(
+    str_ptr: *const c_char,
+    len: usize,
+    level: molex_Completion,
+) -> *mut molex_Assembly {
+    cif_str_to_assembly_at(
+        str_ptr,
+        len,
+        level.into(),
+        "molex_cif_str_to_assembly_with_completion",
+    )
 }
 
 /// Decode assembly binary bytes into an `Assembly`.
@@ -422,21 +551,17 @@ pub extern "C" fn molex_bytes_to_assembly(
     }
 }
 
-/// Decode BinaryCIF bytes into an `Assembly`.
-///
-/// Returns null on failure with the error message available via
-/// [`molex_last_error_message`]. The caller owns the returned handle
-/// and must free it with [`molex_assembly_free`].
-#[no_mangle]
-pub extern "C" fn molex_bcif_to_assembly(
+fn bcif_to_assembly_at(
     bytes_ptr: *const u8,
     len: usize,
+    level: Completion,
+    fn_name: &str,
 ) -> *mut molex_Assembly {
     let Some(bytes) = slice_from_raw(bytes_ptr, len) else {
-        set_last_error(&"molex_bcif_to_assembly: null input pointer");
+        set_last_error(&format!("{fn_name}: null input pointer"));
         return std::ptr::null_mut();
     };
-    match bcif::bcif_to_entities(bytes) {
+    match bcif::bcif_to_entities_with(bytes, level) {
         Ok(entities) => {
             clear_last_error();
             assembly_from_entities(entities)
@@ -446,6 +571,45 @@ pub extern "C" fn molex_bcif_to_assembly(
             std::ptr::null_mut()
         }
     }
+}
+
+/// Decode BinaryCIF bytes into an `Assembly` at [`Completion::Heavy`]. For
+/// another level use [`molex_bcif_to_assembly_with_completion`].
+///
+/// Returns null on failure with the error message available via
+/// [`molex_last_error_message`]. The caller owns the returned handle
+/// and must free it with [`molex_assembly_free`].
+#[no_mangle]
+pub extern "C" fn molex_bcif_to_assembly(
+    bytes_ptr: *const u8,
+    len: usize,
+) -> *mut molex_Assembly {
+    bcif_to_assembly_at(
+        bytes_ptr,
+        len,
+        Completion::Heavy,
+        "molex_bcif_to_assembly",
+    )
+}
+
+/// Decode BinaryCIF bytes into an `Assembly` at the given completion `level`.
+/// Like [`molex_bcif_to_assembly`] but selects the level.
+///
+/// Returns null on failure with the error message available via
+/// [`molex_last_error_message`]. The caller owns the returned handle
+/// and must free it with [`molex_assembly_free`].
+#[no_mangle]
+pub extern "C" fn molex_bcif_to_assembly_with_completion(
+    bytes_ptr: *const u8,
+    len: usize,
+    level: molex_Completion,
+) -> *mut molex_Assembly {
+    bcif_to_assembly_at(
+        bytes_ptr,
+        len,
+        level.into(),
+        "molex_bcif_to_assembly_with_completion",
+    )
 }
 
 // Writer entry points (Assembly -> PDB)

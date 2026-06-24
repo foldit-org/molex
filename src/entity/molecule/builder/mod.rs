@@ -7,13 +7,11 @@
               still unwired"
 )]
 
-use std::collections::HashMap;
-
 use glam::Vec3;
+use rustc_hash::FxHashMap;
 
 use super::atom::Atom;
 use super::bulk::BulkEntity;
-use super::chain::ChainIdMapper;
 use super::id::EntityIdAllocator;
 use super::{MoleculeEntity, MoleculeType};
 use crate::element::Element;
@@ -24,9 +22,6 @@ mod classify;
 use atom_name_alias::normalize_legacy_atom_name;
 use classify::classify_chain;
 
-/// Maximum number of distinct chains the builder accepts. Matches the
-/// printable-byte capacity of `ChainIdMapper`.
-const MAX_CHAINS: usize = 90;
 const DEFAULT_WATER_RESNAME: [u8; 3] = *b"HOH";
 const DEFAULT_SOLVENT_RESNAME: [u8; 3] = *b"GOL";
 
@@ -115,13 +110,6 @@ pub(crate) enum BuildError {
         /// Trimmed atom name from the offending row.
         label_atom_id: String,
     },
-    /// Chain count exceeded printable-byte capacity. Adapters convert
-    /// this to the mmCIF redirect error.
-    #[error("structure exceeds {limit} chains; use mmCIF instead")]
-    TooManyChains {
-        /// Capacity that was exceeded.
-        limit: usize,
-    },
 }
 
 /// Builds typed `MoleculeEntity` values from a stream of atom rows.
@@ -135,9 +123,8 @@ pub(crate) enum BuildError {
 /// 4. [`EntityBuilder::finish`] to consume the builder.
 pub(crate) struct EntityBuilder {
     allocator: EntityIdAllocator,
-    hints: HashMap<String, ExpectedEntityType>,
-    chains: HashMap<String, ChainState>,
-    chain_mapper: ChainIdMapper,
+    hints: FxHashMap<String, ExpectedEntityType>,
+    chains: FxHashMap<String, ChainState>,
     chain_order: Vec<String>,
 }
 
@@ -146,9 +133,8 @@ impl EntityBuilder {
     pub(crate) fn new() -> Self {
         Self {
             allocator: EntityIdAllocator::new(),
-            hints: HashMap::new(),
-            chains: HashMap::new(),
-            chain_mapper: ChainIdMapper::new(),
+            hints: FxHashMap::default(),
+            chains: FxHashMap::default(),
             chain_order: Vec::new(),
         }
     }
@@ -181,9 +167,8 @@ impl EntityBuilder {
     /// Push an atom row. Handles altLoc dedup, residue grouping, and
     /// chain bucketing.
     ///
-    /// Errors only on invalid coordinates or chain-mapper overflow;
-    /// rows with unknown elements or unrecognized residue names are
-    /// accepted.
+    /// Errors only on invalid coordinates; rows with unknown elements or
+    /// unrecognized residue names are accepted.
     #[allow(
         clippy::needless_pass_by_value,
         reason = "AtomRow is moved into builder state in mmCIF / BCIF callers"
@@ -199,7 +184,7 @@ impl EntityBuilder {
         // `Atom.name` (`AtomChoice` carries both label and auth).
         row.label_atom_id = normalize_legacy_atom_name(row.label_atom_id);
         row.auth_atom_id = row.auth_atom_id.map(normalize_legacy_atom_name);
-        self.ensure_chain(&row)?;
+        self.ensure_chain(&row);
         let Some(chain) = self.chains.get_mut(&row.label_asym_id) else {
             unreachable!("chain inserted by ensure_chain");
         };
@@ -221,7 +206,6 @@ impl EntityBuilder {
             mut allocator,
             hints,
             mut chains,
-            mut chain_mapper,
             chain_order,
         } = self;
 
@@ -246,15 +230,12 @@ impl EntityBuilder {
                     .as_deref()
                     .and_then(|k| hints.get(k).copied())
                     .unwrap_or(ExpectedEntityType::Unknown);
-                let chain_bytes = ChainBytes {
-                    pdb_chain_id: chain.pdb_chain_id,
-                    auth_asym_id: resolve_auth_chain_byte(
-                        chain_key,
-                        chain.auth_asym_id.as_deref(),
-                        &mut chain_mapper,
-                    ),
-                };
-                classify_chain(hint, chain_bytes, &chain.residues, &mut ctx);
+                classify_chain(
+                    hint,
+                    &chain.pdb_chain_id,
+                    &chain.residues,
+                    &mut ctx,
+                );
             }
         }
 
@@ -274,50 +255,33 @@ impl EntityBuilder {
         Ok(out)
     }
 
-    fn ensure_chain(&mut self, row: &AtomRow) -> Result<(), BuildError> {
+    fn ensure_chain(&mut self, row: &AtomRow) {
         if self.chains.contains_key(&row.label_asym_id) {
-            return Ok(());
+            return;
         }
-        if self.chain_order.len() >= MAX_CHAINS {
-            return Err(BuildError::TooManyChains { limit: MAX_CHAINS });
-        }
-        let pdb_chain_id = self.chain_mapper.get_or_assign(&row.label_asym_id);
         let state = ChainState {
-            pdb_chain_id,
-            auth_asym_id: row.auth_asym_id.clone(),
+            pdb_chain_id: row.label_asym_id.clone(),
             entity_hint_key: row.label_entity_id.clone(),
             residues: Vec::new(),
-            residue_index: HashMap::new(),
+            residue_index: FxHashMap::default(),
         };
         // Cloning the chain key: needed both as HashMap key and as the
         // chain_order entry that drives finish() ordering.
         let key = row.label_asym_id.clone();
         self.chain_order.push(key.clone());
         let _ = self.chains.insert(key, state);
-        Ok(())
     }
 }
 
 // Internal state
 
-/// Both chain bytes derived for an emitted entity: the label-side byte
-/// (used internally and as the `pdb_chain_id`) and the optional
-/// author-side byte (`None` when the auth string matches the label or
-/// no auth string was supplied).
-#[derive(Clone, Copy)]
-pub(super) struct ChainBytes {
-    pub(super) pdb_chain_id: u8,
-    pub(super) auth_asym_id: Option<u8>,
-}
-
 pub(super) struct ChainState {
-    pub(super) pdb_chain_id: u8,
-    /// `auth_asym_id` captured from the first row that opened the
-    /// chain. Resolved to a printable byte at `finish()` time.
-    pub(super) auth_asym_id: Option<String>,
+    /// The chain's `label_asym_id`, carried through verbatim as the
+    /// emitted entity's `pdb_chain_id`.
+    pub(super) pdb_chain_id: String,
     pub(super) entity_hint_key: Option<String>,
     pub(super) residues: Vec<ResidueAccum>,
-    pub(super) residue_index: HashMap<(i32, Option<u8>), usize>,
+    pub(super) residue_index: FxHashMap<(i32, Option<u8>), usize>,
 }
 
 impl ChainState {
@@ -333,7 +297,7 @@ impl ChainState {
             label_comp_id: row.label_comp_id,
             auth_comp_id: row.auth_comp_id,
             ins_code: row.ins_code,
-            atoms: HashMap::new(),
+            atoms: FxHashMap::default(),
             atom_order: Vec::new(),
         });
         let _ = self.residue_index.insert(key, idx);
@@ -347,7 +311,7 @@ pub(super) struct ResidueAccum {
     pub(super) label_comp_id: [u8; 3],
     pub(super) auth_comp_id: Option<[u8; 3]>,
     pub(super) ins_code: Option<u8>,
-    pub(super) atoms: HashMap<[u8; 4], AtomChoice>,
+    pub(super) atoms: FxHashMap<[u8; 4], AtomChoice>,
     pub(super) atom_order: Vec<[u8; 4]>,
 }
 
@@ -496,24 +460,6 @@ fn trim_atom_name(name: [u8; 4]) -> String {
         .unwrap_or("")
         .trim_matches(|c: char| c == ' ' || c == '\0')
         .to_owned()
-}
-
-/// Resolve a chain's `auth_asym_id` to a printable byte.
-///
-/// Returns `None` when the auth string matches the label key (the
-/// common case, no extra mapper entry needed) or when no auth string
-/// was supplied. Otherwise allocates a fresh byte in the mapper to
-/// disambiguate it from the label-side chain byte.
-fn resolve_auth_chain_byte(
-    label_key: &str,
-    auth: Option<&str>,
-    mapper: &mut ChainIdMapper,
-) -> Option<u8> {
-    let auth = auth?;
-    if auth == label_key {
-        return None;
-    }
-    Some(mapper.get_or_assign(auth))
 }
 
 #[cfg(test)]

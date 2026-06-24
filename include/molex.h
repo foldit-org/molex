@@ -11,15 +11,28 @@
 #include <stdint.h>
 
 /**
- * Wire format version written after [`ASSEMBLY_MAGIC`]. Version 1 carries
- * the entity / atom payload followed by a per-residue variants section.
+ * Default solvent probe radius (water) in Angstroms.
  */
-#define ASSEMBLY_VERSION 1
+#define DEFAULT_PROBE_RADIUS 1.4
+
+/**
+ * Default number of test points per atom (golden-spiral lattice).
+ */
+#define DEFAULT_N_POINTS 960
+
+/**
+ * Wire format version written after [`ASSEMBLY_MAGIC`].
+ *
+ * Version 2 carries each entity's chain id in its header and 25-byte atom
+ * rows; version 1 (still decodable) carried the chain id per atom in
+ * 26-byte rows.
+ */
+#define ASSEMBLY_VERSION 2
 
 /**
  * Wire format version written after [`DELTA_MAGIC`].
  */
-#define DELTA_VERSION 1
+#define DELTA_VERSION 2
 
 /**
  * Success status returned by writer-style entry points.
@@ -769,11 +782,36 @@ molex_EntityKind molex_entity_kind(const molex_Entity *entity)
 ;
 
 /**
- * PDB chain identifier byte for polymer entities. Returns -1 when the
- * entity has no chain id (small molecule / bulk) or when `entity` is null.
+ * First PDB chain-identifier byte for polymer entities.
+ *
+ * Returns -1 when the entity has no chain id (small molecule / bulk),
+ * when `entity` is null, or when the chain id is multi-character and so
+ * cannot be represented as a single byte.
+ *
+ * Chain ids are arbitrary strings (mmCIF `label_asym_id`); ribosome and
+ * capsid assemblies use multi-character ids ("AA", "AB"). Use
+ * [`molex_entity_chain_id`] for the full string. This single-byte
+ * accessor is retained for ABI stability and returns the first byte only
+ * when the id is exactly one byte.
  */
 
 int32_t molex_entity_pdb_chain_id(const molex_Entity *entity)
+;
+
+/**
+ * Pointer to this entity's full PDB chain-identifier UTF-8 bytes.
+ *
+ * The chain id is the mmCIF `label_asym_id`. Writes the byte length to
+ * `out_len` on success. Returns null and writes 0 for a non-polymer
+ * entity (small molecule / bulk) or a null `entity`.
+ *
+ * The pointer borrows the entity's owned chain string and is valid for
+ * the entity's lifetime; the buffer is not NUL-terminated, so callers
+ * must use `out_len`.
+ */
+
+const uint8_t *molex_entity_chain_id(const molex_Entity *entity,
+                                     uintptr_t *out_len)
 ;
 
 /**

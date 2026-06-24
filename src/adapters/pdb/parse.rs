@@ -181,6 +181,138 @@ pub(super) fn trim_ascii(s: &[u8]) -> &[u8] {
     &s[start..end]
 }
 
+/// View an all-ASCII byte slice as `&str` without re-validating UTF-8.
+/// Falls back to checked decoding if a non-ASCII byte is present (a column
+/// straddling a multibyte char in a malformed file).
+fn ascii_str(s: &[u8]) -> &str {
+    if s.is_ascii() {
+        // SAFETY: every byte is ASCII (< 0x80), so the slice is valid UTF-8
+        // and sits on char boundaries.
+        unsafe { std::str::from_utf8_unchecked(s) }
+    } else {
+        std::str::from_utf8(s).unwrap_or("")
+    }
+}
+
+/// Parse a fixed-width PDB decimal float field directly off bytes.
+///
+/// Accepts an optional leading `+`/`-`, decimal digits, and a single `.`;
+/// returns `default` for an empty or malformed field. The significand is
+/// accumulated as `i64` and scaled by an exact power of ten in `f64`
+/// before the final `f32` cast, which is bit-identical to
+/// `str::parse::<f32>()` across the F8.3 / F6.2 value ranges PDB columns
+/// hold (exponent/`inf`/`nan` forms never appear in these fixed columns).
+fn parse_f32_bytes(field: &[u8], default: f32) -> f32 {
+    let s = trim_ascii(field);
+    if s.is_empty() {
+        return default;
+    }
+    let mut idx = 0;
+    let neg = match s[0] {
+        b'-' => {
+            idx = 1;
+            true
+        }
+        b'+' => {
+            idx = 1;
+            false
+        }
+        _ => false,
+    };
+    let mut mant: i64 = 0;
+    let mut frac_digits: i32 = 0;
+    let mut seen_dot = false;
+    let mut any_digit = false;
+    while idx < s.len() {
+        let b = s[idx];
+        if b == b'.' {
+            if seen_dot {
+                return default;
+            }
+            seen_dot = true;
+        } else if b.is_ascii_digit() {
+            any_digit = true;
+            mant = mant * 10 + i64::from(b - b'0');
+            if seen_dot {
+                frac_digits += 1;
+            }
+        } else {
+            return default;
+        }
+        idx += 1;
+    }
+    if !any_digit {
+        return default;
+    }
+    if neg {
+        mant = -mant;
+    }
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "mant has <=8 significant digits in F8.3/F6.2 fields; the f64 \
+                  product is exact and the f32 cast matches str::parse"
+    )]
+    let value = (mant as f64) * pow10_neg(frac_digits);
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "narrowing the correctly-rounded f64 to f32 mirrors \
+                  str::parse::<f32>()"
+    )]
+    let out = value as f32;
+    out
+}
+
+/// Exact `10^-n` for the small `n` that fixed PDB float fields produce.
+fn pow10_neg(n: i32) -> f64 {
+    const POS: [f64; 8] = [1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7];
+    let m = n.unsigned_abs() as usize;
+    if m < POS.len() {
+        1.0 / POS[m]
+    } else {
+        10f64.powi(-n)
+    }
+}
+
+/// Parse a fixed-width PDB decimal integer field directly off bytes.
+/// Returns `None` for an empty or non-decimal field.
+fn parse_i32_bytes(field: &[u8]) -> Option<i32> {
+    let s = trim_ascii(field);
+    if s.is_empty() {
+        return None;
+    }
+    let mut idx = 0;
+    let neg = match s[0] {
+        b'-' => {
+            idx = 1;
+            true
+        }
+        b'+' => {
+            idx = 1;
+            false
+        }
+        _ => false,
+    };
+    if idx >= s.len() {
+        return None;
+    }
+    let mut v: i64 = 0;
+    while idx < s.len() {
+        let b = s[idx];
+        if !b.is_ascii_digit() {
+            return None;
+        }
+        v = v * 10 + i64::from(b - b'0');
+        if v > i64::from(i32::MAX) + 1 {
+            return None;
+        }
+        idx += 1;
+    }
+    if neg {
+        v = -v;
+    }
+    i32::try_from(v).ok()
+}
+
 /// Left-justified, space-padded copy of `raw` into an `N`-byte buffer.
 /// Keeps `Atom.name` storage stable across files that differ on col-13
 /// vs col-14 alignment.
@@ -191,22 +323,6 @@ pub(super) fn normalize_name<const N: usize>(raw: &[u8]) -> [u8; N] {
         out[i] = b;
     }
     out
-}
-
-fn parse_f32_field(s: &[u8], default: f32) -> f32 {
-    std::str::from_utf8(s)
-        .ok()
-        .map(str::trim)
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(default)
-}
-
-fn parse_i32_field(s: &[u8]) -> Option<i32> {
-    std::str::from_utf8(s)
-        .ok()
-        .map(str::trim)
-        .filter(|t| !t.is_empty())
-        .and_then(|t| t.parse().ok())
 }
 
 /// Decode a width-`W` PDB hybrid-36 numeric field.
@@ -294,32 +410,30 @@ pub(super) fn parse_seq_field(raw: &[u8], width: usize) -> Option<i32> {
     {
         return decode_hybrid36(raw, width);
     }
-    parse_i32_field(raw)
+    parse_i32_bytes(raw)
 }
 
 /// Parse a PDB charge field (`"2+"`, `"1-"`, `""`).
 pub(super) fn parse_pdb_charge(raw: &[u8]) -> i8 {
-    let s = std::str::from_utf8(raw).unwrap_or("").trim();
-    if s.is_empty() {
+    let b = trim_ascii(raw);
+    if b.is_empty() {
         return 0;
     }
-    let b = s.as_bytes();
-    if b.len() == 2 {
-        let mag = (b[0] as char).to_digit(10);
-        if let Some(d) = mag {
-            #[allow(
-                clippy::cast_possible_truncation,
-                reason = "single-digit charge fits in i8"
-            )]
-            let signed = d as i8;
-            return match b[1] {
-                b'+' => signed,
-                b'-' => -signed,
-                _ => 0,
-            };
-        }
+    if b.len() == 2 && b[0].is_ascii_digit() {
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "single-digit charge fits in i8"
+        )]
+        let signed = i8::try_from(b[0] - b'0').unwrap_or(0);
+        return match b[1] {
+            b'+' => signed,
+            b'-' => -signed,
+            _ => 0,
+        };
     }
-    s.parse().unwrap_or(0)
+    parse_i32_bytes(b)
+        .and_then(|v| i8::try_from(v).ok())
+        .unwrap_or(0)
 }
 
 /// Decode element from cols 77-78, falling back to atom-name inference.
@@ -329,8 +443,7 @@ fn resolve_element(bytes: &[u8], atom_name_str: &str) -> Element {
     if trimmed.is_empty() {
         return Element::from_atom_name(atom_name_str);
     }
-    let parsed = std::str::from_utf8(trimmed)
-        .map_or(Element::Unknown, Element::from_symbol);
+    let parsed = Element::from_symbol(ascii_str(trimmed));
     if matches!(parsed, Element::Unknown) {
         Element::from_atom_name(atom_name_str)
     } else {
@@ -365,21 +478,23 @@ fn parse_atom_record(bytes: &[u8]) -> Result<AtomRow, AdapterError> {
         .first()
         .copied()
         .filter(|&b| b != b' ');
-    let x = parse_f32_field(col_slice(bytes, 31, 38), f32::NAN);
-    let y = parse_f32_field(col_slice(bytes, 39, 46), f32::NAN);
-    let z = parse_f32_field(col_slice(bytes, 47, 54), f32::NAN);
-    let occupancy = parse_f32_field(col_slice(bytes, 55, 60), 1.0);
-    let b_factor = parse_f32_field(col_slice(bytes, 61, 66), 0.0);
+    let x = parse_f32_bytes(col_slice(bytes, 31, 38), f32::NAN);
+    let y = parse_f32_bytes(col_slice(bytes, 39, 46), f32::NAN);
+    let z = parse_f32_bytes(col_slice(bytes, 47, 54), f32::NAN);
+    let occupancy = parse_f32_bytes(col_slice(bytes, 55, 60), 1.0);
+    let b_factor = parse_f32_bytes(col_slice(bytes, 61, 66), 0.0);
     let formal_charge = parse_pdb_charge(col_slice(bytes, 79, 80));
 
-    let atom_name_str =
-        std::str::from_utf8(trim_ascii(&label_atom_id)).unwrap_or("");
+    let atom_name_str = ascii_str(trim_ascii(&label_atom_id));
     let element = resolve_element(bytes, atom_name_str);
 
     // Chain ID: single byte per PDB spec. Stored as `String` to keep the
     // `AtomRow` shape uniform with mmCIF (multi-char chain IDs).
-    let chain_str = std::str::from_utf8(&[chain_byte])
-        .map_or_else(|_| " ".to_owned(), str::to_owned);
+    let chain_str = if chain_byte.is_ascii() {
+        (chain_byte as char).to_string()
+    } else {
+        " ".to_owned()
+    };
 
     Ok(AtomRow {
         label_asym_id: chain_str,

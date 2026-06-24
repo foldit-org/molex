@@ -238,7 +238,7 @@ fn pdb_path_single_protein_chain() {
     assert_eq!(entities[0].molecule_type(), MoleculeType::Protein);
     let protein = entities[0].as_protein().unwrap();
     assert_eq!(protein.residues.len(), 2);
-    assert_eq!(protein.pdb_chain_id, b'A');
+    assert_eq!(protein.pdb_chain_id, "A");
 }
 
 #[test]
@@ -271,8 +271,8 @@ fn pdb_path_multi_chain_protein_dna() {
     assert_eq!(entities.len(), 2);
     assert_eq!(entities[0].molecule_type(), MoleculeType::Protein);
     assert_eq!(entities[1].molecule_type(), MoleculeType::DNA);
-    assert_eq!(entities[0].pdb_chain_id(), Some(b'A'));
-    assert_eq!(entities[1].pdb_chain_id(), Some(b'B'));
+    assert_eq!(entities[0].pdb_chain_id(), Some("A"));
+    assert_eq!(entities[1].pdb_chain_id(), Some("B"));
 }
 
 #[test]
@@ -642,25 +642,21 @@ fn insertion_codes_distinguish_residues() {
 // Error paths
 
 #[test]
-fn too_many_chains_errors_on_91st() {
+fn over_ninety_chains_all_build() {
+    // The single-byte chain cap is gone: 120 distinct protein chains all
+    // build, each carrying its own label_asym_id verbatim.
     let mut b = EntityBuilder::new();
-    for i in 0..90 {
-        let chain = format!("C{i}");
-        let row = RowBuilder::new(&chain, 1, "HOH", "O")
-            .at(0.0, 0.0, 0.0)
-            .elem(Element::O)
-            .build();
-        b.push_atom(row).unwrap();
+    for i in 0..120 {
+        push_protein_residue(&mut b, &format!("CH{i}"), 1, "ALA", 0.0, None);
     }
-    let row = RowBuilder::new("OVF", 1, "HOH", "O")
-        .at(0.0, 0.0, 0.0)
-        .elem(Element::O)
-        .build();
-    let err = b.push_atom(row).unwrap_err();
-    assert!(
-        matches!(err, BuildError::TooManyChains { limit: 90 }),
-        "got {err:?}",
-    );
+    let entities = b.finish().unwrap();
+    let chains: Vec<&str> = entities
+        .iter()
+        .filter_map(|e| e.pdb_chain_id())
+        .collect();
+    assert_eq!(chains.len(), 120);
+    assert!(chains.contains(&"CH0"));
+    assert!(chains.contains(&"CH119"));
 }
 
 #[test]
@@ -671,17 +667,13 @@ fn nan_coordinate_errors() {
         .elem(Element::C)
         .build();
     let err = b.push_atom(row).unwrap_err();
-    match err {
-        BuildError::InvalidCoordinate {
-            axis,
-            label_atom_id,
-            ..
-        } => {
-            assert_eq!(axis, 'x');
-            assert_eq!(label_atom_id, "CA");
-        }
-        other => panic!("expected InvalidCoordinate, got {other:?}"),
-    }
+    let BuildError::InvalidCoordinate {
+        axis,
+        label_atom_id,
+        ..
+    } = err;
+    assert_eq!(axis, 'x');
+    assert_eq!(label_atom_id, "CA");
 }
 
 #[test]
@@ -727,10 +719,11 @@ fn chain_order_follows_insertion_order() {
     push_protein_residue(&mut b, "A", 1, "ALA", 0.0, None);
     push_protein_residue(&mut b, "A", 2, "GLY", 3.8, None);
     let entities = b.finish().unwrap();
-    // B first, A second.
-    assert_eq!(entities[0].pdb_chain_id(), Some(b'A'));
+    // Insertion order: chain B (DNA) first, chain A (protein) second; each
+    // entity carries its own label_asym_id verbatim.
+    assert_eq!(entities[0].pdb_chain_id(), Some("B"));
     assert_eq!(entities[0].molecule_type(), MoleculeType::DNA);
-    assert_eq!(entities[1].pdb_chain_id(), Some(b'B'));
+    assert_eq!(entities[1].pdb_chain_id(), Some("A"));
     assert_eq!(entities[1].molecule_type(), MoleculeType::Protein);
 }
 

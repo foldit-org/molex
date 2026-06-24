@@ -75,28 +75,19 @@ fn designed_protein_keeps_noncanonical_residues_in_chain() {
 }
 
 #[test]
-fn auth_chain_id_visible_on_writeback() {
+fn label_chain_ids_kept_distinct() {
     let entities = load("auth_vs_label_diverges.cif");
     let proteins: Vec<_> = entities
         .iter()
         .filter(|e| e.molecule_type() == MoleculeType::Protein)
         .collect();
     assert_eq!(proteins.len(), 2);
-    let label_chains: Vec<char> = proteins
+    let label_chains: Vec<&str> = proteins
         .iter()
-        .map(|e| e.as_protein().unwrap().pdb_chain_id as char)
+        .map(|e| e.as_protein().unwrap().pdb_chain_id.as_str())
         .collect();
-    let auth_chains: Vec<Option<u8>> = proteins
-        .iter()
-        .map(|e| e.as_protein().unwrap().auth_asym_id)
-        .collect();
-    let first = auth_chains[0].expect("auth_asym_id should be populated");
     assert!(
-        auth_chains.iter().all(|c| *c == Some(first)),
-        "homodimer chains should share auth byte; got {auth_chains:?}"
-    );
-    assert!(
-        label_chains.contains(&'A') && label_chains.contains(&'B'),
+        label_chains.contains(&"A") && label_chains.contains(&"B"),
         "label chains should keep A/B distinction; got {label_chains:?}"
     );
 }

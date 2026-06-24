@@ -122,7 +122,7 @@ fn boltz_columns_to_rows(columns: &BoltzColumns<'_>) -> Vec<ReconstructRow> {
                 name: atom_name,
                 formal_charge: 0,
             },
-            chain_id: b'A',
+            chain_id: "A".to_owned(),
             res_name,
             res_num,
         });

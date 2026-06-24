@@ -75,7 +75,10 @@ fn small_protein() -> Assembly {
     // residues and are not about chemistry completion.
     let residues = vec![residue("UNK", 1, 0..4), residue("UNK", 2, 4..8)];
     let protein = MoleculeEntity::Protein(ProteinEntity::new(
-        id, atoms, residues, b'A', None,
+        id,
+        atoms,
+        residues,
+        "A".to_owned(),
     ));
     Assembly::new(vec![protein])
 }

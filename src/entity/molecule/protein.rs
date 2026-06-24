@@ -103,12 +103,9 @@ pub struct ProteinEntity {
     /// bonds `C(i)-N(i+1)` across pairs that are not separated by a
     /// segment break.
     pub bonds: Vec<CovalentBond>,
-    /// PDB chain identifier byte for this entity (derived from
-    /// `label_asym_id`).
-    pub pdb_chain_id: u8,
-    /// Author-side chain identifier byte, when distinct from
-    /// `pdb_chain_id`. `None` means "same as `pdb_chain_id`."
-    pub auth_asym_id: Option<u8>,
+    /// PDB chain identifier for this entity (the mmCIF `label_asym_id`,
+    /// an arbitrary string).
+    pub pdb_chain_id: String,
 }
 
 /// Maximum C->N distance (A) for a peptide bond. Pairs exceeding this
@@ -147,15 +144,13 @@ impl ProteinEntity {
         id: EntityId,
         atoms: Vec<Atom>,
         residues: Vec<Residue>,
-        pdb_chain_id: u8,
-        auth_asym_id: Option<u8>,
+        pdb_chain_id: String,
     ) -> Self {
         build_protein(
             id,
             atoms,
             residues,
             pdb_chain_id,
-            auth_asym_id,
             CompletionMode::None,
             false,
         )
@@ -177,16 +172,11 @@ impl ProteinEntity {
         reason = "constructor owns the inputs; canonicalize borrows before \
                   reassigning new owned vecs"
     )]
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "mirrors new's argument set plus the completion mode"
-    )]
     pub fn new_normalized(
         id: EntityId,
         atoms: Vec<Atom>,
         residues: Vec<Residue>,
-        pdb_chain_id: u8,
-        auth_asym_id: Option<u8>,
+        pdb_chain_id: String,
         completion: CompletionMode,
     ) -> Self {
         build_protein(
@@ -194,7 +184,6 @@ impl ProteinEntity {
             atoms,
             residues,
             pdb_chain_id,
-            auth_asym_id,
             completion,
             false,
         )
@@ -215,15 +204,13 @@ impl ProteinEntity {
         id: EntityId,
         atoms: Vec<Atom>,
         residues: Vec<Residue>,
-        pdb_chain_id: u8,
-        auth_asym_id: Option<u8>,
+        pdb_chain_id: String,
     ) -> Self {
         build_protein(
             id,
             atoms,
             residues,
             pdb_chain_id,
-            auth_asym_id,
             CompletionMode::None,
             true,
         )
@@ -244,8 +231,7 @@ impl ProteinEntity {
             self.id,
             self.atoms.clone(),
             self.residues.clone(),
-            self.pdb_chain_id,
-            self.auth_asym_id,
+            self.pdb_chain_id.clone(),
             CompletionMode::None,
             true,
         )
@@ -289,8 +275,7 @@ impl ProteinEntity {
             self.id,
             self.atoms.clone(),
             self.residues.clone(),
-            self.pdb_chain_id,
-            self.auth_asym_id,
+            self.pdb_chain_id.clone(),
             mode,
             false,
         )
@@ -495,15 +480,14 @@ impl Polymer for ProteinEntity {
 )]
 #[allow(
     clippy::too_many_arguments,
-    reason = "mirrors the two public constructors' argument set plus the \
+    reason = "mirrors the public constructors' argument set plus the \
               completion mode and the continuous-chain selector"
 )]
 fn build_protein(
     id: EntityId,
     atoms: Vec<Atom>,
     residues: Vec<Residue>,
-    pdb_chain_id: u8,
-    auth_asym_id: Option<u8>,
+    pdb_chain_id: String,
     mode: CompletionMode,
     continuous: bool,
 ) -> ProteinEntity {
@@ -511,7 +495,7 @@ fn build_protein(
     let (atoms, residues) = canonicalize_protein_residues(
         &atoms,
         &residues,
-        pdb_chain_id,
+        &pdb_chain_id,
         keep_hydrogens(mode),
     );
     let segment_breaks = if continuous {
@@ -527,7 +511,6 @@ fn build_protein(
         segment_breaks,
         bonds,
         pdb_chain_id,
-        auth_asym_id,
     }
 }
 
@@ -589,7 +572,7 @@ fn partition_protein_residue(
 fn canonicalize_protein_residues(
     atoms: &[Atom],
     residues: &[Residue],
-    pdb_chain_id: u8,
+    pdb_chain_id: &str,
     keep_hydrogens: bool,
 ) -> (Vec<Atom>, Vec<Residue>) {
     let mut new_atoms: Vec<Atom> = Vec::with_capacity(atoms.len());
@@ -633,7 +616,7 @@ fn canonicalize_protein_residues(
             log::warn!(
                 "ProteinEntity chain '{}': dropping residue {} (name {}); \
                  missing backbone atoms (need N, CA, C, and O or OXT)",
-                pdb_chain_id as char,
+                pdb_chain_id,
                 residue.label_seq_id,
                 res_name.trim(),
             );

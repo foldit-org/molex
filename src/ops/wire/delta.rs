@@ -28,7 +28,7 @@
 //! - `0x02` SetResidueCoords: u32 entity_id, u32 residue_idx, u32 coord_count,
 //!   12 bytes per coord
 //! - `0x03` MutateResidue: u32 entity_id, u32 residue_idx, 3 bytes new_name,
-//!   u32 atom_count, 26 bytes per atom (same row layout as the assembly
+//!   u32 atom_count, 25 bytes per atom (same row layout as the assembly
 //!   format), u32 variant_count, per-variant payload (same as the assembly
 //!   variants block)
 //! - `0x04` SetVariants: u32 entity_id, u32 residue_idx, u32 variant_count,
@@ -37,7 +37,7 @@
 use glam::Vec3;
 use thiserror::Error;
 
-use super::deserialize::{read_atom_row, AtomRow};
+use super::deserialize::{read_atom_row, AtomRow, RowLayout};
 use super::serialize::write_atom_row;
 use super::variants::{read_variant, write_variant};
 use crate::chemistry::variant::VariantTag;
@@ -50,9 +50,9 @@ use crate::ops::edit::AssemblyEdit;
 pub const DELTA_MAGIC: &[u8; 8] = b"DELTA\0\0\0";
 
 /// Wire format version written after [`DELTA_MAGIC`].
-pub const DELTA_VERSION: u8 = 1;
+pub const DELTA_VERSION: u8 = 2;
 
-const ATOM_ROW_BYTES: usize = 26;
+const ATOM_ROW_BYTES: usize = 25;
 
 /// Byte offset where edits begin: 8-byte magic + 1-byte version + 4-byte
 /// edit count.
@@ -199,11 +199,11 @@ fn write_edit(
             )]
             buffer.extend_from_slice(&(new_atoms.len() as u32).to_be_bytes());
             for atom in new_atoms {
-                // The chain_id / res_name / res_num fields in the atom
-                // row are redundant under MutateResidue (the receiver
-                // gets `new_name` + residue_idx separately), so we
-                // fill them with stable placeholders.
-                write_atom_row(atom, b' ', *new_name, 0, buffer);
+                // The res_name / res_num fields in the atom row are
+                // redundant under MutateResidue (the receiver gets
+                // `new_name` + residue_idx separately), so we fill them
+                // with stable placeholders.
+                write_atom_row(atom, *new_name, 0, buffer);
             }
             write_variant_list(new_variants, buffer);
         }
@@ -275,7 +275,7 @@ fn read_edit<'b>(
                         "Truncated atom row in delta MutateResidue".to_owned(),
                     ));
                 }
-                let row: AtomRow = read_atom_row(cur)?;
+                let row: AtomRow = read_atom_row(cur, RowLayout::V2)?;
                 cur = &cur[ATOM_ROW_BYTES..];
                 new_atoms.push(row.atom);
             }

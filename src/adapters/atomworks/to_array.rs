@@ -78,13 +78,13 @@ impl AtomData {
 /// `entity_raw_id` and `raw_idx` together identify the atom within its entity;
 /// `flat` index space is just the order in which these are yielded. `chain_id`,
 /// `res_name`, and `res_num` are the residue-level values to stamp on this
-/// atom's columns (a non-polymer atom carries the entity's residue name, blank
-/// chain, and a synthetic per-atom or fixed residue number).
+/// atom's columns (a non-polymer atom carries the entity's residue name, an
+/// empty chain, and a synthetic per-atom or fixed residue number).
 pub(crate) struct FlatAtom<'a> {
     pub entity_raw_id: u32,
     pub raw_idx: usize,
     pub atom: &'a Atom,
-    pub chain_id: u8,
+    pub chain_id: &'a str,
     pub res_name: [u8; 3],
     pub res_num: i32,
 }
@@ -114,10 +114,22 @@ pub(crate) fn for_each_flat_atom<E: std::borrow::Borrow<MoleculeEntity>>(
 
         match entity {
             MoleculeEntity::Protein(e) => {
-                emit_polymer(&mut f, entity_raw_id, atoms, &e.residues, e.pdb_chain_id);
+                emit_polymer(
+                    &mut f,
+                    entity_raw_id,
+                    atoms,
+                    &e.residues,
+                    &e.pdb_chain_id,
+                );
             }
             MoleculeEntity::NucleicAcid(e) => {
-                emit_polymer(&mut f, entity_raw_id, atoms, &e.residues, e.pdb_chain_id);
+                emit_polymer(
+                    &mut f,
+                    entity_raw_id,
+                    atoms,
+                    &e.residues,
+                    &e.pdb_chain_id,
+                );
             }
             MoleculeEntity::SmallMolecule(e) => {
                 for (raw_idx, atom) in atoms.iter().enumerate() {
@@ -125,7 +137,7 @@ pub(crate) fn for_each_flat_atom<E: std::borrow::Borrow<MoleculeEntity>>(
                         entity_raw_id,
                         raw_idx,
                         atom,
-                        chain_id: b' ',
+                        chain_id: "",
                         res_name: e.residue_name,
                         res_num: 1,
                     });
@@ -137,7 +149,7 @@ pub(crate) fn for_each_flat_atom<E: std::borrow::Borrow<MoleculeEntity>>(
                         entity_raw_id,
                         raw_idx,
                         atom,
-                        chain_id: b' ',
+                        chain_id: "",
                         res_name: e.residue_name,
                         res_num: (raw_idx as i32) + 1,
                     });
@@ -152,7 +164,7 @@ fn emit_polymer(
     entity_raw_id: u32,
     atoms: &[Atom],
     residues: &[Residue],
-    chain_id: u8,
+    chain_id: &str,
 ) {
     for residue in residues {
         for raw_idx in residue.atom_range.clone() {
@@ -216,7 +228,7 @@ fn append_atom_row(
     data: &mut AtomData,
     ctx: &EntityCtx<'_>,
     atom: &Atom,
-    chain_id: u8,
+    chain_id: &str,
     res_name: [u8; 3],
     res_num: i32,
 ) {
@@ -224,10 +236,13 @@ fn append_atom_row(
     data.coords_flat.push(atom.position.y);
     data.coords_flat.push(atom.position.z);
 
-    data.chain_ids.push(if chain_id.is_ascii_alphanumeric() {
-        String::from(chain_id as char)
-    } else {
+    // Polymer atoms carry the real `label_asym_id`; non-polymer atoms arrive
+    // with an empty chain and fall back to "A" so biotite always sees a
+    // non-empty chain string.
+    data.chain_ids.push(if chain_id.is_empty() {
         "A".to_owned()
+    } else {
+        chain_id.to_owned()
     });
 
     data.res_ids.push(res_num);
@@ -599,7 +614,10 @@ mod tests {
             },
         ];
         MoleculeEntity::Protein(ProteinEntity::new(
-            id, atoms, residues, b'A', None,
+            id,
+            atoms,
+            residues,
+            "A".to_owned(),
         ))
     }
 
@@ -697,7 +715,7 @@ mod tests {
         assert_eq!(&data.res_names[n_prot - 4..n_prot], &["GLY"; 4]);
         assert_eq!(&data.res_names[n_prot..], &["LIG"; 3]);
 
-        // chain_id: alphanumeric pdb_chain_id renders to its char; the
+        // chain_id: the polymer carries its real label_asym_id; the
         // ligand has no chain so falls back to "A".
         for c in &data.chain_ids[..n_prot] {
             assert_eq!(c, "A");

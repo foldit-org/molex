@@ -94,6 +94,19 @@ pub(super) fn validate_writable<E: std::borrow::Borrow<MoleculeEntity>>(
              {MAX_PDB_POLYMER_CHAINS}"
         )));
     }
+    // Legacy PDB col 22 holds exactly one chain character. A multi-char
+    // mmCIF `label_asym_id` (ribosomes, capsids) cannot round-trip; refuse
+    // rather than truncate.
+    for entity in entities {
+        if let Some(chain) = entity.borrow().pdb_chain_id() {
+            if chain.chars().count() > 1 {
+                return Err(legacy_limit_error(&format!(
+                    "chain id {chain:?} is multi-character and cannot fit the \
+                     single-column legacy PDB chain field"
+                )));
+            }
+        }
+    }
     for entity in entities {
         let e = entity.borrow();
         let res_count = match e {
@@ -115,6 +128,7 @@ pub(super) fn validate_writable<E: std::borrow::Borrow<MoleculeEntity>>(
 fn legacy_limit_error(detail: &str) -> AdapterError {
     AdapterError::PdbParseError(format!(
         "Structure does not fit in legacy PDB format ({detail}); use the \
-         mmCIF writer for assemblies of this size."
+         mmCIF writer (`Assembly.to_mmcif` in Python, `assembly_to_mmcif` in \
+         Rust) for assemblies of this size."
     ))
 }

@@ -76,7 +76,10 @@ fn make_chain(
         });
     }
     MoleculeEntity::Protein(ProteinEntity::new(
-        id, atoms, residues, chain, None,
+        id,
+        atoms,
+        residues,
+        String::from(chain as char),
     ))
 }
 

@@ -75,7 +75,7 @@ fn protein(residues: &[(&str, Vec<Atom>)]) -> MoleculeEntity {
         atoms.extend(ratoms.iter().cloned());
         res.push(residue(name, seq, start..atoms.len()));
     }
-    MoleculeEntity::Protein(ProteinEntity::new(id, atoms, res, b'A', None))
+    MoleculeEntity::Protein(ProteinEntity::new(id, atoms, res, "A".to_owned()))
 }
 
 /// Apply `prior.diff(new)` to an assembly holding `prior` and assert the

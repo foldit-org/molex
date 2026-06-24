@@ -55,17 +55,13 @@ impl PyEntity {
         molecule_type_str(self.inner.molecule_type())
     }
 
-    /// PDB chain identifier as a one-character string, or `None` when the
-    /// entity has no chain id (a non-polymer entity). The printable filter
-    /// (`is_ascii_graphic`) is a safety fallback that also yields `None` for a
-    /// non-printable chain byte; it is not the primary meaning of `None`.
+    /// PDB chain identifier string (the mmCIF `label_asym_id`, which may be
+    /// multi-character for large assemblies), or `None` when the entity has
+    /// no chain id (a non-polymer entity).
     #[must_use]
     #[getter]
     pub fn chain_id(&self) -> Option<String> {
-        self.inner
-            .pdb_chain_id()
-            .filter(u8::is_ascii_graphic)
-            .map(|b| (b as char).to_string())
+        self.inner.pdb_chain_id().map(str::to_owned)
     }
 
     /// Human-readable label (e.g. `"Protein Chain A"`, `"Ligand (ATP)"`).

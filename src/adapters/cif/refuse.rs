@@ -14,13 +14,3 @@ pub(super) fn multi_block_error(count: usize) -> AdapterError {
          for components.cif-style inputs."
     ))
 }
-
-/// Refusal for inputs with so many distinct chains that the
-/// printable-byte mapper has no capacity left.
-pub(super) fn too_many_chains_error(limit: usize) -> AdapterError {
-    AdapterError::InvalidFormat(format!(
-        "mmCIF input declares more than {limit} distinct chains; molex's \
-         chain-byte mapper is exhausted. Re-ingest via the mmCIF route on a \
-         smaller subset."
-    ))
-}

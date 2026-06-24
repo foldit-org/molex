@@ -15,25 +15,31 @@ use crate::ops::codec::AdapterError;
 /// rebuild via [`Assembly::new`], and `ss_types` comes back empty until a
 /// caller opts in via [`Assembly::recompute_ss`].
 ///
-/// Format:
+/// Format (version 2):
 /// - 8 bytes: magic `b"ASSEMBLY"`
-/// - 1 byte:  version (currently 1)
+/// - 1 byte:  version (currently 2)
 /// - 4 bytes: entity_count (u32 BE)
-/// - Per entity header (9 bytes each):
+/// - Per entity header (variable):
 ///   - 1 byte: `molecule_type` wire byte
 ///   - 4 bytes: `atom_count` (`u32` BE)
 ///   - 4 bytes: `entity_id` (`u32` BE) — the originator's `EntityId.raw()`.
 ///     Receivers reconstruct entities with the same id so cross-boundary edit
 ///     references resolve.
-/// - Per atom (26 bytes):
+///   - 2 bytes: `chain_len` (`u16` BE)
+///   - `chain_len` bytes: the entity's chain id (UTF-8 `label_asym_id`).
+///     Empty for non-polymer entities.
+/// - Per atom (25 bytes):
 ///   - 12 bytes: x, y, z (`f32` BE x 3)
-///   - 1 byte:   `chain_id`
 ///   - 3 bytes:  `res_name`
 ///   - 4 bytes:  `res_num` (`i32` BE)
 ///   - 4 bytes:  `atom_name`
 ///   - 2 bytes:  element symbol (byte 0, byte 1 or 0)
 /// - Per-entity variants section (after all atoms, in entity order). See the
 ///   `variants` submodule for the inner layout.
+///
+/// Chain id moved from a per-atom byte (version 1) to a per-entity header
+/// string here, lifting the single-printable-byte chain cap. The version-1
+/// decode path is retained in `deserialize`.
 ///
 /// Occupancy and b_factor are not preserved on the wire; deserialize
 /// resets them to 1.0 and 0.0 respectively.
@@ -61,8 +67,12 @@ pub(crate) fn serialize_entities<E: std::borrow::Borrow<MoleculeEntity>>(
 ) -> Result<Vec<u8>, AdapterError> {
     let total_atoms: usize =
         entities.iter().map(|e| e.borrow().atom_count()).sum();
-    let header_size = 8 + 1 + 4 + entities.len() * 9;
-    let atom_size = total_atoms * 26;
+    let chain_bytes: usize = entities
+        .iter()
+        .filter_map(|e| e.borrow().pdb_chain_id().map(str::len))
+        .sum();
+    let header_size = 8 + 1 + 4 + entities.len() * 11 + chain_bytes;
+    let atom_size = total_atoms * 25;
     let mut buffer = Vec::with_capacity(header_size + atom_size);
 
     // Magic + version byte
@@ -73,13 +83,14 @@ pub(crate) fn serialize_entities<E: std::borrow::Borrow<MoleculeEntity>>(
     #[allow(clippy::cast_possible_truncation)] // entity count fits in u32
     buffer.extend_from_slice(&(entities.len() as u32).to_be_bytes());
 
-    // Per-entity headers
+    // Per-entity headers (chain string lives here, not per atom).
     for entity in entities {
         let entity = entity.borrow();
         buffer.push(molecule_type_to_wire(entity.molecule_type()));
         #[allow(clippy::cast_possible_truncation)] // atom count fits in u32
         buffer.extend_from_slice(&(entity.atom_count() as u32).to_be_bytes());
         buffer.extend_from_slice(&entity.id().raw().to_be_bytes());
+        write_chain_id(entity.pdb_chain_id().unwrap_or(""), &mut buffer);
     }
 
     // Atom data per entity, walking residues directly.
@@ -94,17 +105,28 @@ pub(crate) fn serialize_entities<E: std::borrow::Borrow<MoleculeEntity>>(
     Ok(buffer)
 }
 
+/// Write a length-prefixed chain string: a `u16` BE byte length followed
+/// by the UTF-8 bytes. A chain id longer than `u16::MAX` bytes (never seen
+/// in practice) is truncated to fit the prefix.
+fn write_chain_id(chain_id: &str, buffer: &mut Vec<u8>) {
+    let bytes = chain_id.as_bytes();
+    let len = bytes.len().min(usize::from(u16::MAX));
+    #[allow(clippy::cast_possible_truncation)] // clamped to u16::MAX above
+    buffer.extend_from_slice(&(len as u16).to_be_bytes());
+    buffer.extend_from_slice(&bytes[..len]);
+}
+
 fn write_entity_atoms(entity: &MoleculeEntity, buffer: &mut Vec<u8>) {
     match entity {
         MoleculeEntity::Protein(e) => {
-            write_polymer_atoms(&e.atoms, &e.residues, e.pdb_chain_id, buffer);
+            write_polymer_atoms(&e.atoms, &e.residues, buffer);
         }
         MoleculeEntity::NucleicAcid(e) => {
-            write_polymer_atoms(&e.atoms, &e.residues, e.pdb_chain_id, buffer);
+            write_polymer_atoms(&e.atoms, &e.residues, buffer);
         }
         MoleculeEntity::SmallMolecule(e) => {
             for atom in &e.atoms {
-                write_atom_row(atom, b' ', e.residue_name, 1, buffer);
+                write_atom_row(atom, e.residue_name, 1, buffer);
             }
         }
         MoleculeEntity::Bulk(e) =>
@@ -115,13 +137,7 @@ fn write_entity_atoms(entity: &MoleculeEntity, buffer: &mut Vec<u8>) {
                 reason = "atom count fits in i32 for valid structures"
             )]
             for (i, atom) in e.atoms.iter().enumerate() {
-                write_atom_row(
-                    atom,
-                    b' ',
-                    e.residue_name,
-                    (i as i32) + 1,
-                    buffer,
-                );
+                write_atom_row(atom, e.residue_name, (i as i32) + 1, buffer);
             }
         }
     }
@@ -130,14 +146,12 @@ fn write_entity_atoms(entity: &MoleculeEntity, buffer: &mut Vec<u8>) {
 fn write_polymer_atoms(
     atoms: &[Atom],
     residues: &[Residue],
-    chain_id: u8,
     buffer: &mut Vec<u8>,
 ) {
     for residue in residues {
         for idx in residue.atom_range.clone() {
             write_atom_row(
                 &atoms[idx],
-                chain_id,
                 residue.name,
                 residue.label_seq_id,
                 buffer,
@@ -148,7 +162,6 @@ fn write_polymer_atoms(
 
 pub(crate) fn write_atom_row(
     atom: &Atom,
-    chain_id: u8,
     res_name: [u8; 3],
     res_num: i32,
     buffer: &mut Vec<u8>,
@@ -156,7 +169,6 @@ pub(crate) fn write_atom_row(
     buffer.extend_from_slice(&atom.position.x.to_be_bytes());
     buffer.extend_from_slice(&atom.position.y.to_be_bytes());
     buffer.extend_from_slice(&atom.position.z.to_be_bytes());
-    buffer.push(chain_id);
     buffer.extend_from_slice(&res_name);
     buffer.extend_from_slice(&res_num.to_be_bytes());
     buffer.extend_from_slice(&atom.name);

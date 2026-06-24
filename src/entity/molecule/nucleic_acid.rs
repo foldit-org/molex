@@ -58,11 +58,9 @@ pub struct NAEntity {
     /// inter-residue phosphodiester bonds `O3'(i)-P(i+1)` across kept
     /// consecutive residues.
     pub bonds: Vec<CovalentBond>,
-    /// PDB chain identifier byte (derived from `label_asym_id`).
-    pub pdb_chain_id: u8,
-    /// Author-side chain identifier byte, when distinct from
-    /// `pdb_chain_id`. `None` means "same as `pdb_chain_id`."
-    pub auth_asym_id: Option<u8>,
+    /// PDB chain identifier (the mmCIF `label_asym_id`, an arbitrary
+    /// string).
+    pub pdb_chain_id: String,
 }
 
 impl Entity for NAEntity {
@@ -113,20 +111,12 @@ impl NAEntity {
     /// drop), use [`Self::new_normalized`]; to complete an already-built
     /// entity's surviving residues, use [`Self::normalize`].
     #[must_use]
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "id + atoms + residues + label/auth chain bytes are \
-                  required; `na_type` additionally discriminates DNA from RNA \
-                  (no equivalent on the protein side because Protein is its \
-                  own kind)."
-    )]
     pub fn new(
         id: EntityId,
         na_type: MoleculeType,
         atoms: Vec<Atom>,
         residues: Vec<Residue>,
-        pdb_chain_id: u8,
-        auth_asym_id: Option<u8>,
+        pdb_chain_id: String,
     ) -> Self {
         build_na(
             id,
@@ -134,7 +124,6 @@ impl NAEntity {
             atoms,
             residues,
             pdb_chain_id,
-            auth_asym_id,
             CompletionMode::None,
         )
     }
@@ -160,8 +149,7 @@ impl NAEntity {
         na_type: MoleculeType,
         atoms: Vec<Atom>,
         residues: Vec<Residue>,
-        pdb_chain_id: u8,
-        auth_asym_id: Option<u8>,
+        pdb_chain_id: String,
         completion: CompletionMode,
     ) -> Self {
         build_na(
@@ -170,7 +158,6 @@ impl NAEntity {
             atoms,
             residues,
             pdb_chain_id,
-            auth_asym_id,
             completion,
         )
     }
@@ -213,8 +200,7 @@ impl NAEntity {
             self.na_type,
             self.atoms.clone(),
             self.residues.clone(),
-            self.pdb_chain_id,
-            self.auth_asym_id,
+            self.pdb_chain_id.clone(),
             mode,
         )
     }
@@ -343,8 +329,7 @@ fn build_na(
     na_type: MoleculeType,
     atoms: Vec<Atom>,
     residues: Vec<Residue>,
-    pdb_chain_id: u8,
-    auth_asym_id: Option<u8>,
+    pdb_chain_id: String,
     mode: CompletionMode,
 ) -> NAEntity {
     let (atoms, residues) =
@@ -352,7 +337,7 @@ fn build_na(
     let (atoms, residues) = canonicalize_na_residues(
         &atoms,
         &residues,
-        pdb_chain_id,
+        &pdb_chain_id,
         na_type,
         keep_hydrogens(mode),
     );
@@ -366,7 +351,6 @@ fn build_na(
         segment_breaks,
         bonds,
         pdb_chain_id,
-        auth_asym_id,
     }
 }
 
@@ -519,7 +503,7 @@ fn canonical_na_name(raw: [u8; 3], na_type: MoleculeType) -> [u8; 3] {
 fn canonicalize_na_residues(
     atoms: &[Atom],
     residues: &[Residue],
-    pdb_chain_id: u8,
+    pdb_chain_id: &str,
     na_type: MoleculeType,
     keep_hydrogens: bool,
 ) -> (Vec<Atom>, Vec<Residue>) {
@@ -565,7 +549,7 @@ fn canonicalize_na_residues(
                 "NAEntity chain '{}': dropping residue {} (name {}); missing \
                  backbone atoms (need O5', C5', C4', C3', O3'; P required \
                  except at the 5' terminus)",
-                pdb_chain_id as char,
+                pdb_chain_id,
                 residue.label_seq_id,
                 res_name.trim(),
             );

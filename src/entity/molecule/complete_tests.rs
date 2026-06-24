@@ -138,8 +138,7 @@ fn build_protein(name: &str, atoms: Vec<Atom>) -> ProteinEntity {
         id,
         atoms,
         vec![residue(name, 0..n)],
-        b'A',
-        None,
+        "A".to_owned(),
         CompletionMode::HeavyOnly,
     )
 }
@@ -376,8 +375,7 @@ fn protonated_input_strips_h_heavy_only_keeps_h_all_atom() {
         id,
         protonated(),
         vec![residue("ALA", 0..n)],
-        b'A',
-        None,
+        "A".to_owned(),
         CompletionMode::HeavyOnly,
     );
     let r = &heavy.residues[0];
@@ -392,8 +390,7 @@ fn protonated_input_strips_h_heavy_only_keeps_h_all_atom() {
         id,
         protonated(),
         vec![residue("ALA", 0..n)],
-        b'A',
-        None,
+        "A".to_owned(),
         CompletionMode::AllAtom,
     );
     let r = &all.residues[0];
@@ -522,8 +519,7 @@ fn na_completion_fills_dna_base_and_keeps_present_atoms() {
         MoleculeType::DNA,
         atoms,
         vec![residue("DA", 0..n)],
-        b'A',
-        None,
+        "A".to_owned(),
         CompletionMode::HeavyOnly,
     );
     assert_eq!(na.residues.len(), 1, "DA must survive completion");

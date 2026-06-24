@@ -71,7 +71,10 @@ fn make_dipeptide_with_id(
         },
     ];
     MoleculeEntity::Protein(ProteinEntity::new(
-        id, atoms, residues, chain, None,
+        id,
+        atoms,
+        residues,
+        String::from(chain as char),
     ))
 }
 
@@ -107,7 +110,10 @@ fn cys_residue_with_sg_with_id(
         variants: Vec::new(),
     }];
     MoleculeEntity::Protein(ProteinEntity::new(
-        id, atoms, residues, chain, None,
+        id,
+        atoms,
+        residues,
+        String::from(chain as char),
     ))
 }
 

@@ -164,6 +164,17 @@ impl PyAssembly {
         serialize_assembly(&self.inner).map_err(value_err)
     }
 
+    /// Emit the assembly as an mmCIF string (a single `_atom_site` loop).
+    ///
+    /// The honest write path for assemblies the legacy PDB writer refuses
+    /// (multi-character chains, >62 chains): every chain id is emitted
+    /// verbatim into `label_asym_id`, and the output round-trips back
+    /// through `Assembly.from_mmcif`.
+    #[must_use]
+    pub fn to_mmcif(&self) -> String {
+        cif::assembly_to_mmcif(&self.inner)
+    }
+
     /// Monotonic generation counter.
     #[must_use]
     #[getter]

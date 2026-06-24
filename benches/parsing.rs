@@ -1,4 +1,9 @@
-//! Benchmarks for file format parsing.
+//! Parse benchmarks (PDB / mmCIF / BinaryCIF) over real RCSB structures.
+//!
+//! Committed fixtures (1UBQ, 4HHB) are always benched. When
+//! `MOLEX_BENCH_LARGE_DIR` points at a directory holding
+//! `6vxx.{pdb,cif,bcif}` and `3j3q.cif`, those are benched too so a dev can
+//! exercise the real perf targets without committing them.
 #![allow(
     missing_docs,
     unused_results,
@@ -11,97 +16,114 @@
     clippy::uninlined_format_args
 )]
 
+use std::path::PathBuf;
+
 use criterion::{
     black_box, criterion_group, criterion_main, BenchmarkId, Criterion,
 };
+use molex::adapters::bcif::bcif_to_entities;
 use molex::adapters::cif::mmcif_str_to_entities;
 use molex::adapters::pdb::pdb_str_to_entities;
 
-fn generate_pdb(n_residues: usize) -> String {
-    let mut pdb = String::new();
-    let mut serial = 1usize;
-    for res_num in 1..=n_residues {
-        for &(name, dx, dy, dz, elem) in &[
-            ("N  ", 0.0f64, 0.0, 0.0, "N"),
-            ("CA ", 1.47, 0.0, 0.0, "C"),
-            ("C  ", 2.45, 1.0, 0.0, "C"),
-            ("O  ", 2.45, 2.2, 0.0, "O"),
-            ("CB ", 1.47, -1.5, 0.0, "C"),
-        ] {
-            let x = dx + (res_num as f64) * 3.8;
-            pdb.push_str(&format!(
-                "ATOM  {:>5} {:<4}ALA A{:>4}    {:>8.3}{:>8.3}{:>8.3}  1.00  \
-                 0.00          {:>2}  \n",
-                serial, name, res_num, x, dy, dz, elem
-            ));
-            serial += 1;
-        }
-    }
-    pdb.push_str("END\n");
-    pdb
+/// A structure's three serialized forms, as in-memory bytes/strings.
+struct Fixture {
+    name: &'static str,
+    pdb: String,
+    cif: String,
+    bcif: Vec<u8>,
+    /// `cif`-only structures (e.g. 3J3Q has no PDB/BCIF target) leave `pdb`
+    /// and `bcif` empty; `has_pdb`/`has_bcif` gate the per-format benches.
+    has_pdb: bool,
+    has_bcif: bool,
 }
 
-fn generate_mmcif(n_residues: usize) -> String {
-    let mut cif = String::from(concat!(
-        "data_test\n",
-        "loop_\n",
-        "_atom_site.group_PDB\n",
-        "_atom_site.label_atom_id\n",
-        "_atom_site.label_comp_id\n",
-        "_atom_site.label_asym_id\n",
-        "_atom_site.label_seq_id\n",
-        "_atom_site.Cartn_x\n",
-        "_atom_site.Cartn_y\n",
-        "_atom_site.Cartn_z\n",
-        "_atom_site.type_symbol\n",
-        "_atom_site.occupancy\n",
-        "_atom_site.B_iso_or_equiv\n",
-    ));
-    for res_num in 1..=n_residues {
-        for &(name, elem, dx, dy, dz) in &[
-            ("N", "N", 0.0f64, 0.0, 0.0),
-            ("CA", "C", 1.47, 0.0, 0.0),
-            ("C", "C", 2.45, 1.0, 0.0),
-            ("O", "O", 2.45, 2.2, 0.0),
-            ("CB", "C", 1.47, -1.5, 0.0),
-        ] {
-            let x = dx + (res_num as f64) * 3.8;
-            cif.push_str(&format!(
-                "ATOM {name} ALA A {res_num} {x:.3} {dy:.3} {dz:.3} {elem} \
-                 1.00 0.00\n"
-            ));
-        }
-    }
-    cif
+fn committed_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("benches/data")
 }
 
-fn bench_pdb_parsing(c: &mut Criterion) {
-    let mut group = c.benchmark_group("pdb_parse");
-    for n_residues in [10, 50, 200, 1000] {
-        let pdb = generate_pdb(n_residues);
-        let n_atoms = n_residues * 5;
+/// Load the always-committed fixtures plus, if `MOLEX_BENCH_LARGE_DIR` is set
+/// and the files exist, the large perf targets.
+fn load_fixtures() -> Vec<Fixture> {
+    let mut out = Vec::new();
+    let dir = committed_dir();
+    for name in ["1ubq", "4hhb"] {
+        out.push(Fixture {
+            name,
+            pdb: std::fs::read_to_string(dir.join(format!("{name}.pdb")))
+                .unwrap(),
+            cif: std::fs::read_to_string(dir.join(format!("{name}.cif")))
+                .unwrap(),
+            bcif: std::fs::read(dir.join(format!("{name}.bcif"))).unwrap(),
+            has_pdb: true,
+            has_bcif: true,
+        });
+    }
+
+    if let Some(large) = std::env::var_os("MOLEX_BENCH_LARGE_DIR") {
+        let large = PathBuf::from(large);
+        // 6VXX has all three serializations.
+        if let (Ok(pdb), Ok(cif), Ok(bcif)) = (
+            std::fs::read_to_string(large.join("6vxx.pdb")),
+            std::fs::read_to_string(large.join("6vxx.cif")),
+            std::fs::read(large.join("6vxx.bcif")),
+        ) {
+            out.push(Fixture {
+                name: "6vxx",
+                pdb,
+                cif,
+                bcif,
+                has_pdb: true,
+                has_bcif: true,
+            });
+        }
+        // 3J3Q is mmCIF-only (too large for the legacy PDB format).
+        if let Ok(cif) = std::fs::read_to_string(large.join("3j3q.cif")) {
+            out.push(Fixture {
+                name: "3j3q",
+                pdb: String::new(),
+                cif,
+                bcif: Vec::new(),
+                has_pdb: false,
+                has_bcif: false,
+            });
+        }
+    }
+
+    out
+}
+
+fn bench_parse(c: &mut Criterion) {
+    let fixtures = load_fixtures();
+    let mut group = c.benchmark_group("parse");
+    for fx in &fixtures {
+        if fx.has_pdb {
+            group.bench_with_input(
+                BenchmarkId::new("pdb", fx.name),
+                &fx.pdb,
+                |b, pdb| {
+                    b.iter(|| pdb_str_to_entities(black_box(pdb)).unwrap());
+                },
+            );
+        }
         group.bench_with_input(
-            BenchmarkId::new("to_entities", format!("{n_atoms}_atoms")),
-            &pdb,
-            |b, pdb| b.iter(|| pdb_str_to_entities(black_box(pdb)).unwrap()),
+            BenchmarkId::new("mmcif", fx.name),
+            &fx.cif,
+            |b, cif| {
+                b.iter(|| mmcif_str_to_entities(black_box(cif)).unwrap());
+            },
         );
+        if fx.has_bcif {
+            group.bench_with_input(
+                BenchmarkId::new("bcif", fx.name),
+                &fx.bcif,
+                |b, bcif| {
+                    b.iter(|| bcif_to_entities(black_box(bcif)).unwrap());
+                },
+            );
+        }
     }
     group.finish();
 }
 
-fn bench_mmcif_parsing(c: &mut Criterion) {
-    let mut group = c.benchmark_group("mmcif_parse");
-    for n_residues in [10, 50, 200, 1000] {
-        let cif = generate_mmcif(n_residues);
-        let n_atoms = n_residues * 5;
-        group.bench_with_input(
-            BenchmarkId::new("to_entities", format!("{n_atoms}_atoms")),
-            &cif,
-            |b, cif| b.iter(|| mmcif_str_to_entities(black_box(cif)).unwrap()),
-        );
-    }
-    group.finish();
-}
-
-criterion_group!(benches, bench_pdb_parsing, bench_mmcif_parsing);
+criterion_group!(benches, bench_parse);
 criterion_main!(benches);

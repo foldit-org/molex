@@ -8,7 +8,7 @@ use std::io::Read;
 
 use super::codec::{decode_column, decode_msgpack, ColData, MsgVal};
 use super::hint::resolve_hint;
-use super::refuse::{multi_block_error, too_many_chains_error};
+use super::refuse::multi_block_error;
 use crate::element::Element;
 use crate::entity::molecule::{
     AtomRow, BuildError, EntityBuilder, MoleculeEntity,
@@ -471,7 +471,6 @@ fn name_to_bytes<const N: usize>(name: &str) -> [u8; N] {
 
 fn map_build_error(err: &BuildError) -> AdapterError {
     match err {
-        BuildError::TooManyChains { limit } => too_many_chains_error(*limit),
         BuildError::InvalidCoordinate { .. } => {
             AdapterError::InvalidFormat(err.to_string())
         }

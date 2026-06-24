@@ -225,8 +225,7 @@ fn topology_edits_are_rejected_at_serialize_time() {
         id,
         vec![atom_at("CA", Element::C, 0.0)],
         residues,
-        b'A',
-        None,
+        "A".to_owned(),
     ));
 
     let edits = vec![

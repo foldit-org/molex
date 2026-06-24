@@ -86,7 +86,7 @@ fn parsed_entities_expose_object_accessors() {
     let prot = &entities[0];
     assert_eq!(entity_kind_str(prot.entity_kind()), "Protein");
     assert_eq!(molecule_type_str(prot.molecule_type()), "Protein");
-    assert_eq!(prot.pdb_chain_id(), Some(b'A'));
+    assert_eq!(prot.pdb_chain_id(), Some("A"));
     assert_eq!(prot.residues().map_or(0, <[_]>::len), 2);
     assert!(prot.atom_count() >= 9);
 

@@ -2,8 +2,7 @@
 //! emits one or more `MoleculeEntity` values into the `ChainCtx`.
 
 use super::{
-    ChainBytes, ChainCtx, ExpectedEntityType, ResidueAccum,
-    DEFAULT_WATER_RESNAME,
+    ChainCtx, ExpectedEntityType, ResidueAccum, DEFAULT_WATER_RESNAME,
 };
 use crate::entity::molecule::atom::Atom;
 use crate::entity::molecule::bulk::BulkEntity;
@@ -17,19 +16,19 @@ use crate::entity::molecule::{MoleculeEntity, MoleculeType};
 
 pub(super) fn classify_chain(
     hint: ExpectedEntityType,
-    chain: ChainBytes,
+    chain_id: &str,
     residues: &[ResidueAccum],
     ctx: &mut ChainCtx,
 ) {
     match hint {
         ExpectedEntityType::Protein => {
-            emit_polymer_chain(residues, MoleculeType::Protein, chain, ctx);
+            emit_polymer_chain(residues, MoleculeType::Protein, chain_id, ctx);
         }
         ExpectedEntityType::DNA => {
-            emit_polymer_chain(residues, MoleculeType::DNA, chain, ctx);
+            emit_polymer_chain(residues, MoleculeType::DNA, chain_id, ctx);
         }
         ExpectedEntityType::RNA => {
-            emit_polymer_chain(residues, MoleculeType::RNA, chain, ctx);
+            emit_polymer_chain(residues, MoleculeType::RNA, chain_id, ctx);
         }
         ExpectedEntityType::Water => emit_chain_bulk(
             residues,
@@ -41,7 +40,7 @@ pub(super) fn classify_chain(
             emit_non_polymer_chain(residues, ctx);
         }
         ExpectedEntityType::Unknown => {
-            emit_unknown_chain(chain, residues, ctx);
+            emit_unknown_chain(chain_id, residues, ctx);
         }
     }
 }
@@ -49,7 +48,7 @@ pub(super) fn classify_chain(
 fn emit_polymer_chain(
     residues: &[ResidueAccum],
     mol_type: MoleculeType,
-    chain: ChainBytes,
+    chain_id: &str,
     ctx: &mut ChainCtx,
 ) {
     if residues.is_empty() {
@@ -64,8 +63,7 @@ fn emit_polymer_chain(
                     id,
                     atoms,
                     res_vec,
-                    chain.pdb_chain_id,
-                    chain.auth_asym_id,
+                    chain_id.to_owned(),
                     CompletionMode::HeavyOnly,
                 ),
             ));
@@ -77,8 +75,7 @@ fn emit_polymer_chain(
                     mol_type,
                     atoms,
                     res_vec,
-                    chain.pdb_chain_id,
-                    chain.auth_asym_id,
+                    chain_id.to_owned(),
                     CompletionMode::HeavyOnly,
                 ),
             ));
@@ -298,7 +295,7 @@ fn trim_atom_key(name: &[u8; 4]) -> &[u8] {
 /// protein backbone atoms gets folded into the chain's protein bucket
 /// when one exists.
 fn emit_unknown_chain(
-    chain: ChainBytes,
+    chain_id: &str,
     residues: &[ResidueAccum],
     ctx: &mut ChainCtx,
 ) {
@@ -311,8 +308,8 @@ fn emit_unknown_chain(
         .map(|r| assign_unknown_bucket(r, has_protein))
         .collect();
 
-    emit_unknown_protein(residues, &buckets, chain, ctx);
-    emit_unknown_nucleic_acid(residues, &buckets, chain, ctx);
+    emit_unknown_protein(residues, &buckets, chain_id, ctx);
+    emit_unknown_nucleic_acid(residues, &buckets, chain_id, ctx);
 
     for (r, bucket) in residues.iter().zip(buckets.iter()) {
         match bucket {
@@ -342,7 +339,7 @@ fn select_bucket<'a>(
 fn emit_unknown_protein(
     residues: &[ResidueAccum],
     buckets: &[UnknownBucket],
-    chain: ChainBytes,
+    chain_id: &str,
     ctx: &mut ChainCtx,
 ) {
     let selected = select_bucket(residues, buckets, UnknownBucket::Protein);
@@ -356,8 +353,7 @@ fn emit_unknown_protein(
             id,
             atoms,
             res_vec,
-            chain.pdb_chain_id,
-            chain.auth_asym_id,
+            chain_id.to_owned(),
             CompletionMode::HeavyOnly,
         )));
 }
@@ -365,7 +361,7 @@ fn emit_unknown_protein(
 fn emit_unknown_nucleic_acid(
     residues: &[ResidueAccum],
     buckets: &[UnknownBucket],
-    chain: ChainBytes,
+    chain_id: &str,
     ctx: &mut ChainCtx,
 ) {
     let selected = select_bucket(residues, buckets, UnknownBucket::NucleicAcid);
@@ -381,8 +377,7 @@ fn emit_unknown_nucleic_acid(
             na_type,
             atoms,
             res_vec,
-            chain.pdb_chain_id,
-            chain.auth_asym_id,
+            chain_id.to_owned(),
             CompletionMode::HeavyOnly,
         )));
 }

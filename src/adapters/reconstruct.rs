@@ -22,7 +22,7 @@ use crate::entity::molecule::{MoleculeEntity, MoleculeType};
 /// residue/chain context used to group atoms into residues.
 pub(crate) struct ReconstructRow {
     pub atom: Atom,
-    pub chain_id: u8,
+    pub chain_id: String,
     pub res_name: [u8; 3],
     pub res_num: i32,
 }
@@ -36,7 +36,8 @@ pub(crate) fn build_entity(
     mol_type: MoleculeType,
     rows: Vec<ReconstructRow>,
 ) -> MoleculeEntity {
-    let pdb_chain_id = rows.first().map_or(b' ', |r| r.chain_id);
+    let pdb_chain_id =
+        rows.first().map_or_else(|| " ".to_owned(), |r| r.chain_id.clone());
 
     match mol_type {
         MoleculeType::Protein => {
@@ -46,7 +47,6 @@ pub(crate) fn build_entity(
                 atoms,
                 residues,
                 pdb_chain_id,
-                None,
             ))
         }
         MoleculeType::DNA | MoleculeType::RNA => {
@@ -57,14 +57,13 @@ pub(crate) fn build_entity(
                 atoms,
                 residues,
                 pdb_chain_id,
-                None,
             ))
         }
         MoleculeType::Water | MoleculeType::Solvent => {
             let residue_name = rows.first().map_or([b' '; 3], |r| r.res_name);
             let mut seen = HashSet::new();
             for row in &rows {
-                let _ = seen.insert((row.chain_id, row.res_num));
+                let _ = seen.insert((row.chain_id.clone(), row.res_num));
             }
             let molecule_count = seen.len();
             let atoms = rows.into_iter().map(|r| r.atom).collect();
@@ -173,7 +172,7 @@ mod tests {
                 name,
                 formal_charge: 0,
             },
-            chain_id,
+            chain_id: String::from(chain_id as char),
             res_name,
             res_num,
         }

@@ -65,8 +65,7 @@ fn assembly_bytes_roundtrip_mixed() {
         allocator.allocate(),
         ala_residue_atoms(1.0),
         vec![residue("ALA", 1, 0..4)],
-        b'A',
-        None,
+        "A".to_owned(),
     ));
     let ligand = MoleculeEntity::SmallMolecule(SmallMoleculeEntity::new(
         allocator.allocate(),
@@ -84,7 +83,7 @@ fn assembly_bytes_roundtrip_mixed() {
     let entities = vec![protein, ligand, zinc];
     let bytes = assembly_bytes(&entities).unwrap();
     assert_eq!(&bytes[0..8], b"ASSEMBLY");
-    assert_eq!(bytes[8], 1);
+    assert_eq!(bytes[8], 2);
 
     let roundtripped = deserialize_assembly(&bytes).unwrap();
     assert_eq!(roundtripped.entities().len(), entities.len());
@@ -105,8 +104,7 @@ fn assembly_bytes_protein_only() {
         id,
         ala_residue_atoms(1.0),
         vec![residue("UNK", 1, 0..4)],
-        b'A',
-        None,
+        "A".to_owned(),
     ));
     let entities = vec![protein];
 
@@ -131,8 +129,7 @@ fn deserialize_assembly_is_pure_adds_no_atoms() {
         id,
         ala_residue_atoms(1.0),
         vec![residue("ALA", 1, 0..4)],
-        b'A',
-        None,
+        "A".to_owned(),
     ));
     let input_count = protein.atom_count();
     assert_eq!(input_count, 4, "backbone-only ALA starts with 4 atoms");
@@ -186,21 +183,24 @@ fn assembly_byte_layout() {
         id,
         ala_residue_atoms(1.0),
         vec![residue("UNK", 1, 0..4)],
-        b'A',
-        None,
+        "A".to_owned(),
     ));
     let entities = vec![protein];
     let bytes = assembly_bytes(&entities).unwrap();
 
-    // 8 magic + 1 version + 4 count + 9 per-entity header + 4 atoms * 26
-    // + 4 variant-count u32 (zero, no variants on this residue).
+    // 8 magic + 1 version + 4 count + per-entity header (9 fixed + 2 chain
+    // len + 1 chain byte "A") + 4 atoms * 25 + 4 variant-count u32 (zero, no
+    // variants on this residue).
     assert_eq!(&bytes[0..8], b"ASSEMBLY");
-    assert_eq!(bytes[8], 1); // version
+    assert_eq!(bytes[8], 2); // version
     assert_eq!(u32::from_be_bytes(bytes[9..13].try_into().unwrap()), 1);
     assert_eq!(bytes[13], 0); // Protein
     assert_eq!(u32::from_be_bytes(bytes[14..18].try_into().unwrap()), 4);
-    // bytes[18..22] is the 4-byte entity_id (originator's raw value).
-    assert_eq!(bytes.len(), 8 + 1 + 4 + 9 + 4 * 26 + 4);
+    // bytes[18..22] is the 4-byte entity_id; bytes[22..24] the u16 chain
+    // length (1); bytes[24] the chain byte (b'A').
+    assert_eq!(u16::from_be_bytes(bytes[22..24].try_into().unwrap()), 1);
+    assert_eq!(bytes[24], b'A');
+    assert_eq!(bytes.len(), 8 + 1 + 4 + (9 + 2 + 1) + 4 * 25 + 4);
 }
 
 #[test]
@@ -213,7 +213,10 @@ fn assembly_bytes_polymer_roundtrip_preserves_residues() {
     };
     let residues = vec![residue("ALA", 1, 0..4), residue("ALA", 2, 4..8)];
     let protein = MoleculeEntity::Protein(ProteinEntity::new(
-        id, atoms, residues, b'A', None,
+        id,
+        atoms,
+        residues,
+        "A".to_owned(),
     ));
     let entities = vec![protein];
 
@@ -245,8 +248,7 @@ fn assembly_bytes_na_roundtrip() {
         MoleculeType::DNA,
         atoms,
         residues,
-        b'A',
-        None,
+        "A".to_owned(),
     ));
     let entities = vec![na];
 
@@ -302,10 +304,11 @@ fn deserialize_assembly_truncated_atom_data() {
 #[test]
 fn deserialize_assembly_rejects_unknown_version() {
     // A well-formed header with a future version byte must be a clean
-    // error, not a panic or a misparse.
+    // error, not a panic or a misparse. Versions 1 and 2 are supported;
+    // 3 is not.
     let mut bytes = Vec::new();
     bytes.extend_from_slice(b"ASSEMBLY");
-    bytes.push(2); // unsupported version
+    bytes.push(3); // unsupported version
     bytes.extend_from_slice(&0u32.to_be_bytes()); // 0 entities
     assert!(deserialize_assembly(&bytes).is_err());
 }
@@ -346,8 +349,7 @@ fn preserves_entity_id_across_roundtrip() {
         id,
         ala_residue_atoms(0.0),
         vec![residue("ALA", 1, 0..4)],
-        b'A',
-        None,
+        "A".to_owned(),
     ));
 
     let bytes = assembly_bytes(&[protein]).unwrap();
@@ -382,8 +384,7 @@ fn variants_roundtrip_through_wire() {
         id,
         atoms,
         vec![r1, r2],
-        b'A',
-        None,
+        "A".to_owned(),
     ));
 
     let bytes = assembly_bytes(&[protein]).unwrap();
@@ -425,8 +426,7 @@ fn variants_protonation_custom_string_roundtrip() {
         id,
         atoms,
         vec![r],
-        b'A',
-        None,
+        "A".to_owned(),
     ));
 
     let bytes = assembly_bytes(&[protein]).unwrap();
@@ -438,4 +438,78 @@ fn variants_protonation_custom_string_roundtrip() {
         VariantTag::Protonation(ProtonationState::Custom(s))
             if s == "ASP_PROTONATED",
     ));
+}
+
+#[test]
+fn multi_char_chain_id_survives_roundtrip() {
+    // A multi-character chain id ("AA") is impossible under the old
+    // single-byte model; the version-2 header chain table carries it.
+    let id = EntityIdAllocator::new().allocate();
+    let protein = MoleculeEntity::Protein(ProteinEntity::new(
+        id,
+        ala_residue_atoms(1.0),
+        vec![residue("ALA", 1, 0..4)],
+        "AA".to_owned(),
+    ));
+
+    let bytes = assembly_bytes(&[protein]).unwrap();
+    let rt = deserialize_assembly(&bytes).unwrap();
+    assert_eq!(rt.entities()[0].pdb_chain_id(), Some("AA"));
+}
+
+#[test]
+fn over_ninety_chains_survive_roundtrip() {
+    // The old 90-chain cap is gone: serialize 120 distinct multi-character
+    // chains, deserialize, and assert every chain id is preserved.
+    let mut alloc = EntityIdAllocator::new();
+    let entities: Vec<MoleculeEntity> = (0..120u16)
+        .map(|i| {
+            MoleculeEntity::Protein(ProteinEntity::new(
+                alloc.allocate(),
+                ala_residue_atoms(f32::from(i)),
+                vec![residue("ALA", 1, 0..4)],
+                format!("CH{i}"),
+            ))
+        })
+        .collect();
+
+    let bytes = assembly_bytes(&entities).unwrap();
+    let rt = deserialize_assembly(&bytes).unwrap();
+    assert_eq!(rt.entities().len(), 120);
+    for (i, e) in rt.entities().iter().enumerate() {
+        assert_eq!(e.pdb_chain_id(), Some(format!("CH{i}").as_str()));
+    }
+}
+
+#[test]
+fn version_one_payload_still_decodes() {
+    // A version-1 payload (per-atom chain byte, 26-byte rows, 9-byte
+    // headers) must still decode after the version-2 bump. Hand-build one
+    // ALA backbone atom on chain 'A'.
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"ASSEMBLY");
+    bytes.push(1); // version 1
+    bytes.extend_from_slice(&1u32.to_be_bytes()); // 1 entity
+    // Entity header (v1): mol_type, atom_count, entity_id.
+    bytes.push(0); // Protein
+    bytes.extend_from_slice(&1u32.to_be_bytes()); // 1 atom
+    bytes.extend_from_slice(&0u32.to_be_bytes()); // entity_id 0
+    // One v1 atom row (26 bytes): xyz, chain byte, res_name, res_num,
+    // atom_name, element symbol.
+    bytes.extend_from_slice(&0.0f32.to_be_bytes());
+    bytes.extend_from_slice(&0.0f32.to_be_bytes());
+    bytes.extend_from_slice(&0.0f32.to_be_bytes());
+    bytes.push(b'A'); // chain byte
+    bytes.extend_from_slice(b"ALA"); // res_name
+    bytes.extend_from_slice(&1i32.to_be_bytes()); // res_num
+    bytes.extend_from_slice(b"CA  "); // atom_name
+    bytes.push(b'C'); // element symbol byte 0
+    bytes.push(0); // element symbol byte 1
+    // Variants section: 1 entity, zero variant blocks.
+    bytes.extend_from_slice(&0u32.to_be_bytes());
+
+    let rt = deserialize_assembly(&bytes).unwrap();
+    assert_eq!(rt.entities().len(), 1);
+    assert_eq!(rt.entities()[0].pdb_chain_id(), Some("A"));
+    assert_eq!(rt.entities()[0].atom_count(), 1);
 }

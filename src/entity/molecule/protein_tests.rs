@@ -45,7 +45,7 @@ fn residue(name: &str, seq: i32, range: std::ops::Range<usize>) -> Residue {
 
 fn build_protein(atoms: Vec<Atom>, residues: Vec<Residue>) -> ProteinEntity {
     let id = EntityIdAllocator::new().allocate();
-    ProteinEntity::new(id, atoms, residues, b'A', None)
+    ProteinEntity::new(id, atoms, residues, "A".to_owned())
 }
 
 /// Two ALA-GLY residues with a 10 A C->N gap between them (segment break).
@@ -100,7 +100,7 @@ fn new_does_not_fabricate_missing_atoms() {
     let (atoms, residues) = backbone_only_alanine();
     let input_count = atoms.len();
     let id = EntityIdAllocator::new().allocate();
-    let protein = ProteinEntity::new(id, atoms, residues, b'A', None);
+    let protein = ProteinEntity::new(id, atoms, residues, "A".to_owned());
     assert_eq!(
         protein.residues.len(),
         1,
@@ -128,8 +128,7 @@ fn new_normalized_completes_missing_sidechain_atoms() {
         id,
         atoms,
         residues,
-        b'A',
-        None,
+        "A".to_owned(),
         CompletionMode::HeavyOnly,
     );
     assert_eq!(protein.residues.len(), 1, "ALA must survive completion");
@@ -162,7 +161,7 @@ fn new_drops_backbone_incomplete_residue() {
     // load-bearing drop stays intact on the pure path.
     let (atoms, residues) = backbone_incomplete_anchorable_alanine();
     let id = EntityIdAllocator::new().allocate();
-    let protein = ProteinEntity::new(id, atoms, residues, b'A', None);
+    let protein = ProteinEntity::new(id, atoms, residues, "A".to_owned());
     assert_eq!(
         protein.residues.len(),
         0,
@@ -181,8 +180,7 @@ fn new_normalized_rescues_backbone_incomplete_residue() {
         id,
         atoms,
         residues,
-        b'A',
-        None,
+        "A".to_owned(),
         CompletionMode::HeavyOnly,
     );
     assert_eq!(
@@ -204,7 +202,7 @@ fn normalize_completes_surviving_residue_sidechain() {
     // on that survivor and fills in the CB.
     let (atoms, residues) = backbone_only_alanine();
     let id = EntityIdAllocator::new().allocate();
-    let pure = ProteinEntity::new(id, atoms, residues, b'A', None);
+    let pure = ProteinEntity::new(id, atoms, residues, "A".to_owned());
     assert_eq!(pure.residues.len(), 1, "backbone-intact ALA must survive");
     let pure_names = residue_atom_names(&pure.atoms, &pure.residues[0]);
     assert!(

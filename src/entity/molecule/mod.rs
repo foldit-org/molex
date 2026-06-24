@@ -5,7 +5,6 @@ pub mod atom;
 pub(crate) mod builder;
 /// Bulk entity (water, solvent).
 pub mod bulk;
-pub(crate) mod chain;
 pub(crate) mod classify;
 /// Missing-atom completion against ideal-geometry templates.
 pub(crate) mod complete;
@@ -275,12 +274,12 @@ impl MoleculeEntity {
         }
     }
 
-    /// PDB chain identifier byte for polymer entities, `None` for others.
+    /// PDB chain identifier for polymer entities, `None` for others.
     #[must_use]
-    pub fn pdb_chain_id(&self) -> Option<u8> {
+    pub fn pdb_chain_id(&self) -> Option<&str> {
         match self {
-            MoleculeEntity::Protein(e) => Some(e.pdb_chain_id),
-            MoleculeEntity::NucleicAcid(e) => Some(e.pdb_chain_id),
+            MoleculeEntity::Protein(e) => Some(&e.pdb_chain_id),
+            MoleculeEntity::NucleicAcid(e) => Some(&e.pdb_chain_id),
             _ => None,
         }
     }
@@ -405,7 +404,7 @@ impl MoleculeEntity {
 fn polymer_label(entity: &MoleculeEntity, type_name: &str) -> String {
     entity.pdb_chain_id().map_or_else(
         || type_name.to_owned(),
-        |id| format!("{type_name} {}", id as char),
+        |id| format!("{type_name} {id}"),
     )
 }
 
@@ -473,7 +472,10 @@ mod tests {
         let residues = vec![residue("UNK", 1, 0..4), residue("UNK", 2, 4..8)];
         let id = EntityIdAllocator::new().allocate();
         MoleculeEntity::Protein(ProteinEntity::new(
-            id, atoms, residues, b'A', None,
+            id,
+            atoms,
+            residues,
+            "A".to_owned(),
         ))
     }
 
@@ -594,6 +596,6 @@ mod tests {
     #[test]
     fn pdb_chain_id_for_protein() {
         let entity = two_residue_protein();
-        assert_eq!(entity.pdb_chain_id(), Some(b'A'));
+        assert_eq!(entity.pdb_chain_id(), Some("A"));
     }
 }

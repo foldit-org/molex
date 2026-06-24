@@ -253,7 +253,7 @@ fn modified_nucleotides_classify_as_rna() {
 }
 
 #[test]
-fn auth_chain_id_visible_on_writeback() {
+fn label_chain_ids_kept_distinct() {
     let mut rows = Vec::new();
     for chain_label in ["A", "B"] {
         for r in ala_rows(chain_label, 0.0) {
@@ -283,20 +283,11 @@ fn auth_chain_id_visible_on_writeback() {
         .filter(|e| e.molecule_type() == MoleculeType::Protein)
         .collect();
     assert_eq!(proteins.len(), 2);
-    let auth_chains: Vec<Option<u8>> = proteins
+    let label_chains: Vec<&str> = proteins
         .iter()
-        .map(|e| e.as_protein().unwrap().auth_asym_id)
+        .map(|e| e.as_protein().unwrap().pdb_chain_id.as_str())
         .collect();
-    let first = auth_chains[0].expect("auth_asym_id should be populated");
-    assert!(
-        auth_chains.iter().all(|c| *c == Some(first)),
-        "homodimer chains should share auth byte; got {auth_chains:?}"
-    );
-    let label_chains: Vec<char> = proteins
-        .iter()
-        .map(|e| e.as_protein().unwrap().pdb_chain_id as char)
-        .collect();
-    assert!(label_chains.contains(&'A') && label_chains.contains(&'B'));
+    assert!(label_chains.contains(&"A") && label_chains.contains(&"B"));
 }
 
 #[test]

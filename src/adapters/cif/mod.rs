@@ -11,12 +11,13 @@ mod fast_row;
 mod hint;
 pub mod parse;
 mod refuse;
+mod write;
 
 use std::path::Path;
 
 pub use dom::{Block, ColumnIter, Columns, Document, Loop, RowIter, Value};
 pub use parse::{parse, CifParseError};
-use refuse::too_many_chains_error;
+pub use write::assembly_to_mmcif;
 
 use crate::element::Element;
 use crate::entity::molecule::{BuildError, MoleculeEntity};
@@ -55,7 +56,6 @@ fn name_to_bytes<const N: usize>(name: &str) -> [u8; N] {
 /// [`BuildError`] onto the adapter-facing [`AdapterError`].
 fn map_build_error(err: &BuildError) -> AdapterError {
     match err {
-        BuildError::TooManyChains { limit } => too_many_chains_error(*limit),
         BuildError::InvalidCoordinate { .. } => {
             AdapterError::InvalidFormat(err.to_string())
         }

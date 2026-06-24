@@ -20,7 +20,7 @@ use crate::ops::codec::AdapterError;
 ///
 /// Returns [`AdapterError`] if the assembly exceeds any legacy PDB
 /// limit (>99,999 atoms, >62 polymer chains, >9,999 residues per chain),
-/// directing the caller to the mmCIF writer instead.
+/// directing the caller to [`crate::adapters::cif::assembly_to_mmcif`].
 pub fn assembly_to_pdb(assembly: &Assembly) -> Result<String, AdapterError> {
     entities_to_pdb(assembly.entities())
 }
@@ -57,24 +57,14 @@ fn write_entity_atoms(
 ) {
     match entity {
         MoleculeEntity::Protein(e) => {
-            write_polymer_atoms(
-                &e.atoms,
-                &e.residues,
-                e.pdb_chain_id,
-                serial,
-                out,
-            );
-            write_polymer_terminator(&e.residues, e.pdb_chain_id, serial, out);
+            let chain = chain_id_byte(&e.pdb_chain_id);
+            write_polymer_atoms(&e.atoms, &e.residues, chain, serial, out);
+            write_polymer_terminator(&e.residues, chain, serial, out);
         }
         MoleculeEntity::NucleicAcid(e) => {
-            write_polymer_atoms(
-                &e.atoms,
-                &e.residues,
-                e.pdb_chain_id,
-                serial,
-                out,
-            );
-            write_polymer_terminator(&e.residues, e.pdb_chain_id, serial, out);
+            let chain = chain_id_byte(&e.pdb_chain_id);
+            write_polymer_atoms(&e.atoms, &e.residues, chain, serial, out);
+            write_polymer_terminator(&e.residues, chain, serial, out);
         }
         MoleculeEntity::SmallMolecule(e) => {
             for atom in &e.atoms {
@@ -114,6 +104,18 @@ fn write_entity_atoms(
                 );
             }
         }
+    }
+}
+
+/// Single-byte chain id for the PDB col-22 field. `validate_writable`
+/// already refused any multi-character chain, so this only ever runs on a
+/// one-char (or empty) id; a non-single-byte id falls back to a blank.
+fn chain_id_byte(chain_id: &str) -> u8 {
+    let bytes = chain_id.as_bytes();
+    if bytes.len() == 1 {
+        bytes[0]
+    } else {
+        b' '
     }
 }
 

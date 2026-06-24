@@ -15,7 +15,6 @@ use crate::adapters::reconstruct::{build_entity, ReconstructRow};
 use crate::assembly::Assembly;
 use crate::element::Element;
 use crate::entity::molecule::atom::Atom;
-use crate::entity::molecule::chain::ChainIdMapper;
 use crate::entity::molecule::id::EntityId;
 use crate::entity::molecule::{MoleculeEntity, MoleculeType};
 use crate::ops::wire::serialize_assembly;
@@ -78,11 +77,10 @@ fn build_entity_from_indices(
     output_idx: usize,
     mol_type: MoleculeType,
     arrays: &AtomArrayRefs<'_>,
-    chain_mapper: &mut ChainIdMapper,
 ) -> PyResult<MoleculeEntity> {
     let mut rows = Vec::with_capacity(indices.len());
     for &i in indices {
-        rows.push(read_atom_array_row(arrays, i, chain_mapper)?);
+        rows.push(read_atom_array_row(arrays, i)?);
     }
 
     // IDs are sequential across entities (entity N gets id N), so the id is
@@ -99,7 +97,6 @@ fn build_entity_from_indices(
 fn read_atom_array_row(
     arrays: &AtomArrayRefs<'_>,
     i: usize,
-    chain_mapper: &mut ChainIdMapper,
 ) -> PyResult<ReconstructRow> {
     let coord_i = arrays.coord.get_item(i)?;
     let x: f32 = coord_i.get_item(0)?.extract()?;
@@ -119,7 +116,7 @@ fn read_atom_array_row(
         .and_then(|v| v.extract().ok())
         .unwrap_or(0.0);
 
-    let chain_id = extract_chain_id(arrays, i, chain_mapper)?;
+    let chain_id = extract_chain_id(arrays, i)?;
     let res_name = extract_res_name(arrays, i)?;
     let res_num: i32 = arrays.res_id_arr.get_item(i)?.extract()?;
     let (atom_name, element) = extract_atom_name_and_element(arrays, i)?;
@@ -139,14 +136,12 @@ fn read_atom_array_row(
     })
 }
 
-/// Extract chain ID for atom `i` and map it via `chain_mapper`.
+/// Extract chain ID string for atom `i`.
 fn extract_chain_id(
     arrays: &AtomArrayRefs<'_>,
     i: usize,
-    chain_mapper: &mut ChainIdMapper,
-) -> PyResult<u8> {
-    let cid: String = arrays.chain_id_arr.get_item(i)?.extract()?;
-    Ok(chain_mapper.get_or_assign(&cid))
+) -> PyResult<String> {
+    arrays.chain_id_arr.get_item(i)?.extract()
 }
 
 /// Extract 3-byte residue name for atom `i`.
@@ -296,7 +291,6 @@ fn build_all_entities(
     chain_type_arr: Option<&Bound<'_, PyAny>>,
     mol_type_arr: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<Vec<MoleculeEntity>> {
-    let mut chain_mapper = ChainIdMapper::new();
     let mut entities: Vec<MoleculeEntity> =
         Vec::with_capacity(entity_order.len());
 
@@ -320,7 +314,6 @@ fn build_all_entities(
             output_idx,
             mol_type,
             arrays,
-            &mut chain_mapper,
         )?);
     }
 

@@ -64,7 +64,7 @@ fn scrambled_adenine_entity() -> NAEntity {
     }];
     let mut alloc = EntityIdAllocator::new();
     let id = alloc.allocate();
-    NAEntity::new(id, MoleculeType::DNA, atoms, residues, b'A', None)
+    NAEntity::new(id, MoleculeType::DNA, atoms, residues, "A".to_owned())
 }
 
 #[test]
@@ -153,8 +153,7 @@ fn rna_adenine_missing_o2_prime() -> NAEntity {
         MoleculeType::RNA,
         atoms,
         residues,
-        b'A',
-        None,
+        "A".to_owned(),
         CompletionMode::HeavyOnly,
     )
 }
@@ -238,8 +237,7 @@ fn na_five_prime_oh_residue_is_kept() {
         MoleculeType::DNA,
         atoms,
         vec![na_residue("DA", 0..n, 1)],
-        b'A',
-        None,
+        "A".to_owned(),
         CompletionMode::HeavyOnly,
     );
     assert_eq!(na.residues.len(), 1, "5'-OH residue must be kept");
@@ -301,8 +299,7 @@ fn na_five_prime_oh_then_phosphodiester_to_next() {
         MoleculeType::DNA,
         atoms,
         residues,
-        b'A',
-        None,
+        "A".to_owned(),
         CompletionMode::HeavyOnly,
     );
     assert_eq!(na.residues.len(), 2, "both residues kept");
@@ -346,8 +343,7 @@ fn protonated_na_strips_h_heavy_only_keeps_h_otherwise() {
         MoleculeType::DNA,
         protonated(),
         vec![na_residue("DA", 0..n, 1)],
-        b'A',
-        None,
+        "A".to_owned(),
         CompletionMode::HeavyOnly,
     );
     let r = &heavy.residues[0];
@@ -363,8 +359,7 @@ fn protonated_na_strips_h_heavy_only_keeps_h_otherwise() {
         MoleculeType::DNA,
         protonated(),
         vec![na_residue("DA", 0..n, 1)],
-        b'A',
-        None,
+        "A".to_owned(),
     );
     let r = &kept.residues[0];
     assert!(
@@ -416,7 +411,7 @@ fn na_drops_residue_missing_backbone() {
     }];
     let mut alloc = EntityIdAllocator::new();
     let id = alloc.allocate();
-    let na = NAEntity::new(id, MoleculeType::DNA, atoms, residues, b'A', None);
+    let na = NAEntity::new(id, MoleculeType::DNA, atoms, residues, "A".to_owned());
     assert_eq!(na.residues.len(), 0);
     // Atoms still present (carried through, unreferenced).
     assert_eq!(na.atoms.len(), 2);

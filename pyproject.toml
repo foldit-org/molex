@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "molex"
-version = "0.5.3"
+version = "0.6.0"
 description = "Parse, analyze, and transform molecular structure data (PDB, mmCIF, BinaryCIF, MRC)"
 readme = "README.md"
 requires-python = ">=3.8"

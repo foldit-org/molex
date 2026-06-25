@@ -7,7 +7,7 @@ use pyo3::prelude::*;
 
 use super::{molecule_type_to_chain_type_id, molecule_type_to_mol_type_str};
 use crate::analysis::bonds::{infer_bonds, BondOrder, DEFAULT_TOLERANCE};
-use crate::entity::molecule::atom::Atom;
+use crate::entity::molecule::atom::{Atom, AtomRef};
 use crate::entity::molecule::polymer::Residue;
 use crate::entity::molecule::{MoleculeEntity, MoleculeType};
 use crate::ops::wire::deserialize_assembly;
@@ -200,7 +200,7 @@ pub(crate) fn collect_atom_data<E: std::borrow::Borrow<MoleculeEntity>>(
             append_atom_row(
                 &mut data,
                 &ctx,
-                fa.atom,
+                AtomRef::from_atom(fa.atom),
                 fa.chain_id,
                 fa.res_name,
                 fa.res_num,
@@ -227,7 +227,7 @@ struct EntityCtx<'a> {
 fn append_atom_row(
     data: &mut AtomData,
     ctx: &EntityCtx<'_>,
-    atom: &Atom,
+    atom: AtomRef<'_>,
     chain_id: &str,
     res_name: [u8; 3],
     res_num: i32,
@@ -255,7 +255,7 @@ fn append_atom_row(
     );
 
     data.atom_names.push(
-        std::str::from_utf8(&atom.name)
+        std::str::from_utf8(atom.name)
             .unwrap_or("X")
             .trim()
             .to_owned(),
@@ -263,8 +263,8 @@ fn append_atom_row(
 
     data.elements.push(atom.element.symbol().to_owned());
 
-    data.occupancies.push(atom.occupancy);
-    data.b_factors.push(atom.b_factor);
+    data.occupancies.push(*atom.occupancy);
+    data.b_factors.push(*atom.b_factor);
 
     data.aw_entity_ids.push(ctx.entity_id);
     data.aw_mol_types.push(ctx.mol_type_str.to_owned());

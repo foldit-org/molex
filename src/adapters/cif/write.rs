@@ -12,7 +12,7 @@ use std::collections::HashSet;
 use std::fmt::Write as _;
 
 use crate::assembly::Assembly;
-use crate::entity::molecule::atom::Atom;
+use crate::entity::molecule::atom::{Atom, AtomRef};
 use crate::entity::molecule::polymer::Residue;
 use crate::entity::molecule::MoleculeEntity;
 
@@ -183,7 +183,7 @@ fn write_polymer(
                 &RowFields {
                     group: "ATOM",
                     serial: *serial,
-                    atom: &atoms[idx],
+                    atom: AtomRef::from_atom(&atoms[idx]),
                     res_name,
                     chain,
                     label_seq: &residue.label_seq_id.to_string(),
@@ -215,7 +215,7 @@ fn write_nonpolymer(
             &RowFields {
                 group: "HETATM",
                 serial: *serial,
-                atom,
+                atom: AtomRef::from_atom(atom),
                 res_name,
                 chain: ctx.chain,
                 // Non-polymer rows carry no structural seq id; the reader
@@ -231,7 +231,7 @@ fn write_nonpolymer(
 struct RowFields<'a> {
     group: &'a str,
     serial: usize,
-    atom: &'a Atom,
+    atom: AtomRef<'a>,
     res_name: &'a str,
     chain: &'a str,
     label_seq: &'a str,
@@ -241,9 +241,8 @@ struct RowFields<'a> {
 
 fn write_row(out: &mut String, f: &RowFields<'_>) {
     let atom = f.atom;
-    let name_bytes = atom.name;
-    let atom_name = std::str::from_utf8(&name_bytes).unwrap_or("X").trim();
-    let charge = if atom.formal_charge == 0 {
+    let atom_name = std::str::from_utf8(atom.name).unwrap_or("X").trim();
+    let charge = if *atom.formal_charge == 0 {
         "?".to_owned()
     } else {
         atom.formal_charge.to_string()

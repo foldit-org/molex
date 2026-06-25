@@ -2,7 +2,7 @@
 
 use glam::Vec3;
 
-use super::atom::Atom;
+use super::atom::{Atom, AtomRef};
 use super::id::EntityId;
 use super::{MoleculeType, Residue};
 use crate::bond::CovalentBond;
@@ -17,6 +17,17 @@ pub trait Entity {
 
     /// Reference to the underlying atom data.
     fn atoms(&self) -> &[Atom];
+
+    /// One atom by index, gathered by value. Panics if `i` is out of
+    /// bounds, matching slice indexing.
+    fn atom(&self, i: usize) -> Atom {
+        self.atoms()[i].clone()
+    }
+
+    /// Layout-agnostic per-atom views over every atom, in storage order.
+    fn atoms_iter(&self) -> impl Iterator<Item = AtomRef<'_>> {
+        self.atoms().iter().map(AtomRef::from_atom)
+    }
 
     /// All atom positions as `Vec3`.
     fn positions(&self) -> Vec<Vec3> {

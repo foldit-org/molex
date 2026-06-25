@@ -17,6 +17,7 @@
 
 use thiserror::Error;
 
+use super::atom::AtomRef;
 use super::polymer::Residue;
 use super::{Atom, EntityId, MoleculeEntity};
 use crate::ops::edit::AssemblyEdit;
@@ -131,7 +132,8 @@ fn classify_residue(
         || a.atom_range.len() != b.atom_range.len()
         || a_atoms[a.atom_range.clone()]
             .iter()
-            .zip(&b_atoms[b.atom_range.clone()])
+            .map(AtomRef::from_atom)
+            .zip(b_atoms[b.atom_range.clone()].iter().map(AtomRef::from_atom))
             .any(|(x, y)| {
                 x.element != y.element
                     || x.name != y.name
@@ -147,7 +149,8 @@ fn classify_residue(
     let variants_changed = a.variants != b.variants;
     let moved = a_atoms[a.atom_range.clone()]
         .iter()
-        .zip(&b_atoms[b.atom_range.clone()])
+        .map(AtomRef::from_atom)
+        .zip(b_atoms[b.atom_range.clone()].iter().map(AtomRef::from_atom))
         .any(|(x, y)| x.position != y.position);
     ResidueChange {
         mutated: false,

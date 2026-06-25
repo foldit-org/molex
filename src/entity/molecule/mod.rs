@@ -23,7 +23,7 @@ pub mod small_molecule;
 /// Entity and Polymer traits.
 pub mod traits;
 
-pub use atom::Atom;
+pub use atom::{Atom, AtomRef};
 #[allow(
     unused_imports,
     reason = "exported for adapter consumers; not all consumers wired yet"
@@ -220,6 +220,17 @@ impl MoleculeEntity {
     #[must_use]
     pub fn positions(&self) -> Vec<Vec3> {
         self.atom_set().iter().map(|a| a.position).collect()
+    }
+
+    /// One atom by index, gathered by value.
+    #[must_use]
+    pub fn atom(&self, i: usize) -> Atom {
+        self.atom_set()[i].clone()
+    }
+
+    /// Layout-agnostic per-atom views over every atom, in storage order.
+    pub fn atoms_iter(&self) -> impl Iterator<Item = AtomRef<'_>> {
+        self.atom_set().iter().map(AtomRef::from_atom)
     }
 
     /// Number of atoms in this entity.

@@ -8,7 +8,7 @@ use super::parse::trim_ascii;
 use super::refuse::validate_writable;
 use crate::assembly::Assembly;
 use crate::element::Element;
-use crate::entity::molecule::atom::Atom;
+use crate::entity::molecule::atom::{Atom, AtomRef};
 use crate::entity::molecule::polymer::Residue;
 use crate::entity::molecule::MoleculeEntity;
 use crate::ops::error::AdapterError;
@@ -72,7 +72,7 @@ fn write_entity_atoms(
                 write_atom_line(
                     "HETATM",
                     *serial,
-                    atom,
+                    AtomRef::from_atom(atom),
                     ResidueCtx {
                         chain_id: b' ',
                         res_name: e.residue_name,
@@ -94,7 +94,7 @@ fn write_entity_atoms(
                 write_atom_line(
                     "HETATM",
                     *serial,
-                    atom,
+                    AtomRef::from_atom(atom),
                     ResidueCtx {
                         chain_id: b' ',
                         res_name: e.residue_name,
@@ -132,7 +132,7 @@ fn write_polymer_atoms(
             write_atom_line(
                 "ATOM  ",
                 *serial,
-                &atoms[idx],
+                AtomRef::from_atom(&atoms[idx]),
                 ResidueCtx {
                     chain_id,
                     res_name: residue.name,
@@ -193,11 +193,11 @@ pub(super) fn format_atom_name(name: [u8; 4], element: Element) -> [u8; 4] {
 fn write_atom_line(
     record_kind: &str,
     serial: usize,
-    atom: &Atom,
+    atom: AtomRef<'_>,
     ctx: ResidueCtx,
     out: &mut String,
 ) {
-    let name_bytes = format_atom_name(atom.name, atom.element);
+    let name_bytes = format_atom_name(*atom.name, *atom.element);
     let name_str = std::str::from_utf8(&name_bytes).unwrap_or("X   ");
     let res_name_str = std::str::from_utf8(&ctx.res_name).unwrap_or("UNK");
     let _ = writeln!(

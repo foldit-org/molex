@@ -1,5 +1,6 @@
-// foldit:allow-long-file: BinaryCIF decode pipeline + selective-category msgpack
-// walk (skip_value/read_value share the marker grammar); cohesive decode unit.
+// foldit:allow-long-file: BinaryCIF decode pipeline + selective-category
+// msgpack walk (skip_value/read_value share the marker grammar); cohesive
+// decode unit.
 //! BinaryCIF decode pipeline: pull the single coordinate data block out of
 //! a MessagePack-encoded BinaryCIF byte stream, run the `_entity` /
 //! `_entity_poly` hint pre-pass, then iterate `_atom_site` rows into an

@@ -3,13 +3,12 @@
 //! These primitives are consumed by every surface/cavity flavor built on
 //! top of an atom-rasterized distance field:
 //!
-//! - [`voxelize_sas`]: rasterize a binary SAS solid from atom positions
-//! - [`edt_1d`] / [`edt_3d`]: Felzenszwalb-Huttenlocher Euclidean distance
+//! - `voxelize_sas`: rasterize a binary SAS solid from atom positions
+//! - `edt_1d` / `edt_3d`: Felzenszwalb-Huttenlocher Euclidean distance
 //!   transform
 //! - [`binary_to_sdf`]: binary mask -> signed distance field
-//! - [`detect_cavity_mask`]: flood-fill from grid boundary to identify
-//!   non-solid voxels that are NOT reachable from the exterior (i.e. internal
-//!   cavities)
+//! - `detect_cavity_mask`: flood-fill from grid boundary to identify non-solid
+//!   voxels that are NOT reachable from the exterior (i.e. internal cavities)
 //!
 //! Everything here is pure, thread-safe, and has no rendering or GPU
 //! concepts. Downstream consumers (cavity detection, SES, Gaussian

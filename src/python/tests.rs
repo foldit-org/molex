@@ -119,6 +119,45 @@ fn residue_reads_through_trims_name_and_keeps_seq_ids() {
     assert_eq!(gly.seq_id(), 2);
 }
 
+// `Assembly::secondary_structure` (what `Assembly.secondary_structure`
+// delegates to): one string per entity in declaration order, all-`C` per
+// residue without `recompute_ss`, and an empty string for the non-polymer
+// ion. Aligns 1:1 with `entities()`, unlike `sequence()` which drops it.
+#[test]
+fn secondary_structure_aligns_with_entities_and_is_coil_without_recompute() {
+    let entities = pdb_str_to_entities(WALK_PDB).expect("parse minimal PDB");
+    let asm = Assembly::new(entities);
+
+    let ss = asm.secondary_structure();
+    assert_eq!(ss.len(), asm.entities().len(), "one entry per entity");
+    let n_res = asm.entities()[0].residues().map_or(0, <[_]>::len);
+    assert_eq!(ss[0], "C".repeat(n_res), "all-coil before recompute_ss");
+    assert_eq!(ss[1], "", "non-polymer ion contributes an empty string");
+}
+
+// `MoleculeEntity::residue_flat_range` (what `Residue.to_arrays` slices with):
+// the prefix-sum over prior residues' atom counts in flat residue order. The
+// ranges tile the protein's atoms contiguously from 0; a non-polymer or
+// out-of-range index yields `0..0`.
+#[test]
+fn residue_flat_range_tiles_atoms_in_residue_order() {
+    let entities = pdb_str_to_entities(WALK_PDB).expect("parse minimal PDB");
+    let asm = Assembly::new(entities);
+    let prot = &asm.entities()[0];
+    let n_res = prot.residues().map_or(0, <[_]>::len);
+    assert_eq!(n_res, 2, "ALA-GLY dipeptide");
+
+    let r0 = prot.residue_flat_range(0);
+    let r1 = prot.residue_flat_range(1);
+    assert_eq!(r0.start, 0, "first residue starts the flat order");
+    assert_eq!(r1.start, r0.end, "residue 1 follows residue 0 contiguously");
+    assert_eq!(r1.end, prot.atom_count(), "ranges cover every atom");
+
+    // Out-of-range and non-polymer both yield an empty range.
+    assert_eq!(prot.residue_flat_range(n_res), 0..0);
+    assert_eq!(asm.entities()[1].residue_flat_range(0), 0..0);
+}
+
 // GIL-dependent tests below need a live interpreter. The
 // `extension-module` build links no libpython, so the test binary
 // fails to link and no test here runs in that environment; they cover

@@ -159,6 +159,26 @@ impl Assembly {
             .collect()
     }
 
+    /// Per-entity Q3 secondary structure, one string per entity in declaration
+    /// order. Each protein entity's string carries one character per residue
+    /// via [`SSType::one_letter`] (`'H'`/`'E'`/`'C'`); non-protein entities
+    /// contribute an empty string (so the result aligns 1:1 with
+    /// [`Self::entities`], unlike [`Self::sequence`] which drops non-polymers).
+    ///
+    /// Reads the SS [`Self::recompute_ss`] computed; call that first. Without
+    /// it every protein string is all-`'C'`.
+    #[must_use]
+    pub fn secondary_structure(&self) -> Vec<String> {
+        self.entities
+            .iter()
+            .map(|e| {
+                self.ss_per_residue(e.id()).map_or_else(String::new, |ss| {
+                    ss.into_iter().map(SSType::one_letter).collect()
+                })
+            })
+            .collect()
+    }
+
     /// Monotonic counter incremented on every mutation.
     #[must_use]
     pub fn generation(&self) -> u64 {

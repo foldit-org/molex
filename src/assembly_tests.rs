@@ -274,6 +274,28 @@ fn recompute_ss_populates_secondary_structure() {
 }
 
 #[test]
+fn secondary_structure_renders_one_string_per_residue() {
+    // One string per entity in declaration order; the protein string has one
+    // Q3 char (`H`/`E`/`C`) per residue. Without `recompute_ss` the stored SS
+    // is empty, so every residue reports `C`.
+    let mut alloc = EntityIdAllocator::new();
+    let protein = make_dipeptide(&mut alloc, b'A', Vec3::ZERO);
+
+    let mut assembly = Assembly::new(vec![protein]);
+    assert_eq!(assembly.secondary_structure(), vec!["CC".to_owned()]);
+
+    assembly.recompute_ss();
+    let ss = assembly.secondary_structure();
+    assert_eq!(ss.len(), 1, "one entry per entity");
+    assert_eq!(ss[0].len(), 2, "one char per residue");
+    assert!(
+        ss[0].chars().all(|c| matches!(c, 'H' | 'E' | 'C')),
+        "Q3 chars only, got {:?}",
+        ss[0]
+    );
+}
+
+#[test]
 fn carry_ss_from_copies_matching_entities() {
     // A fresh (SS-free) snapshot over the same entity set inherits the
     // source's SS for entities whose residue count matches, leaving its

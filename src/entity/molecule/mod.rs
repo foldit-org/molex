@@ -301,6 +301,32 @@ impl MoleculeEntity {
             .collect()
     }
 
+    /// Flat-atom index range for the residue at `residue_index`, in the
+    /// residue-order space that flattens this entity's atoms (the order
+    /// `collect_atom_data` / `walk_flat_atoms` produce), not storage space.
+    ///
+    /// The start is the running sum of prior residues' atom counts; the length
+    /// is this residue's atom count. Differs from [`Residue::atom_range`],
+    /// which indexes storage space. Returns `0..0` for a non-polymer entity or
+    /// an out-of-range index.
+    #[must_use]
+    pub fn residue_flat_range(
+        &self,
+        residue_index: usize,
+    ) -> std::ops::Range<usize> {
+        let Some(residues) = self.residues() else {
+            return 0..0;
+        };
+        if residue_index >= residues.len() {
+            return 0..0;
+        }
+        let offset: usize = residues[..residue_index]
+            .iter()
+            .map(|r| r.atom_range.len())
+            .sum();
+        offset..(offset + residues[residue_index].atom_range.len())
+    }
+
     /// Mutable access to this entity's `(columns, residues)` pair for
     /// polymer entities. Returns `None` for non-polymer entities.
     ///

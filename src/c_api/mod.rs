@@ -60,11 +60,9 @@ pub mod walk;
 use std::cell::RefCell;
 use std::ffi::c_char;
 
-use crate::adapters::{bcif, cif, pdb};
+use crate::adapters::{cif, pdb};
 use crate::assembly::Assembly;
-use crate::entity::molecule::{
-    Completion, EntityKind, MoleculeEntity, MoleculeType,
-};
+use crate::entity::molecule::{Completion, EntityKind, MoleculeType};
 use crate::ops::wire::{deserialize_assembly, serialize_assembly};
 
 thread_local! {
@@ -301,10 +299,7 @@ pub extern "C" fn molex_assembly_free(assembly: *mut molex_Assembly) {
 
 // Parser entry points (PDB / CIF / BCIF -> Assembly)
 
-fn assembly_from_entities(
-    entities: Vec<MoleculeEntity>,
-) -> *mut molex_Assembly {
-    let inner = Assembly::new(entities);
+fn box_assembly(inner: Assembly) -> *mut molex_Assembly {
     Box::into_raw(Box::new(inner)).cast::<molex_Assembly>()
 }
 
@@ -420,10 +415,10 @@ fn pdb_str_to_assembly_at(
             return std::ptr::null_mut();
         }
     };
-    match pdb::pdb_str_to_entities_with(s, level) {
-        Ok(entities) => {
+    match Assembly::from_pdb_with(s, level) {
+        Ok(assembly) => {
             clear_last_error();
-            assembly_from_entities(entities)
+            box_assembly(assembly)
         }
         Err(e) => {
             set_last_error(&e);
@@ -489,10 +484,10 @@ fn cif_str_to_assembly_at(
             return std::ptr::null_mut();
         }
     };
-    match cif::mmcif_str_to_entities_with(s, level) {
-        Ok(entities) => {
+    match Assembly::from_mmcif_with(s, level) {
+        Ok(assembly) => {
             clear_last_error();
-            assembly_from_entities(entities)
+            box_assembly(assembly)
         }
         Err(e) => {
             set_last_error(&e);
@@ -578,10 +573,10 @@ fn bcif_to_assembly_at(
         set_last_error(&format!("{fn_name}: null input pointer"));
         return std::ptr::null_mut();
     };
-    match bcif::bcif_to_entities_with(bytes, level) {
-        Ok(entities) => {
+    match Assembly::from_bcif_with(bytes, level) {
+        Ok(assembly) => {
             clear_last_error();
-            assembly_from_entities(entities)
+            box_assembly(assembly)
         }
         Err(e) => {
             set_last_error(&e);

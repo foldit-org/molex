@@ -41,6 +41,16 @@ pub enum SSType {
 }
 
 impl SSType {
+    /// Single-character Q3 code: `'H'` (helix), `'E'` (sheet), `'C'` (coil).
+    #[must_use]
+    pub fn one_letter(self) -> char {
+        match self {
+            SSType::Helix => 'H',
+            SSType::Sheet => 'E',
+            SSType::Coil => 'C',
+        }
+    }
+
     /// Get the color for this SS type (RGB, 0-1 range).
     #[must_use]
     pub fn color(&self) -> [f32; 3] {

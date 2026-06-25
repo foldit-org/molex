@@ -21,9 +21,9 @@ use glam::Vec3;
 use pyo3::prelude::*;
 
 use self::arrays::{entities_to_arrays, flat_atoms};
-use crate::adapters::{bcif, cif, pdb};
+use crate::adapters::cif;
+use crate::analysis::detect_disulfides;
 use crate::analysis::sasa::{DEFAULT_N_POINTS, DEFAULT_PROBE_RADIUS};
-use crate::analysis::{detect_disulfides, SSType};
 use crate::assembly::Assembly;
 use crate::chemistry::variant::{ProtonationState, VariantTag};
 use crate::element::Element;
@@ -55,14 +55,6 @@ pub use self::views::{
 
 fn value_err<E: std::fmt::Display>(e: E) -> PyErr {
     PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
-}
-
-fn ss_char(ss: SSType) -> char {
-    match ss {
-        SSType::Helix => 'H',
-        SSType::Sheet => 'E',
-        SSType::Coil => 'C',
-    }
 }
 
 /// Read an `(N, 3)` array-like (numpy array or sequence of 3-tuples) into a
@@ -280,17 +272,7 @@ impl PyAssembly {
     /// an incomplete backbone (no DSSP assignment) are reported as `'C'`.
     #[must_use]
     pub fn secondary_structure(&self) -> Vec<String> {
-        self.inner
-            .entities()
-            .iter()
-            .map(|entity| {
-                self.inner
-                    .ss_per_residue(entity.id())
-                    .map_or_else(String::new, |ss| {
-                        ss.into_iter().map(ss_char).collect()
-                    })
-            })
-            .collect()
+        self.inner.secondary_structure()
     }
 
     /// Total solvent-accessible surface area (Shrake-Rupley) in Angstrom^2
@@ -328,10 +310,9 @@ impl PyAssembly {
     #[pyo3(signature = (text, completion = PyCompletion::Heavy))]
     #[allow(clippy::needless_pass_by_value)]
     pub fn from_pdb(text: String, completion: PyCompletion) -> PyResult<Self> {
-        let entities = pdb::pdb_str_to_entities_with(&text, completion.into())
-            .map_err(value_err)?;
         Ok(Self {
-            inner: Assembly::new(entities),
+            inner: Assembly::from_pdb_with(&text, completion.into())
+                .map_err(value_err)?,
         })
     }
 
@@ -348,11 +329,9 @@ impl PyAssembly {
         text: String,
         completion: PyCompletion,
     ) -> PyResult<Self> {
-        let entities =
-            cif::mmcif_str_to_entities_with(&text, completion.into())
-                .map_err(value_err)?;
         Ok(Self {
-            inner: Assembly::new(entities),
+            inner: Assembly::from_mmcif_with(&text, completion.into())
+                .map_err(value_err)?,
         })
     }
 
@@ -369,10 +348,9 @@ impl PyAssembly {
         bytes: Vec<u8>,
         completion: PyCompletion,
     ) -> PyResult<Self> {
-        let entities = bcif::bcif_to_entities_with(&bytes, completion.into())
-            .map_err(value_err)?;
         Ok(Self {
-            inner: Assembly::new(entities),
+            inner: Assembly::from_bcif_with(&bytes, completion.into())
+                .map_err(value_err)?,
         })
     }
 

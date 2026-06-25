@@ -9,6 +9,7 @@
 
 use std::collections::HashMap;
 
+use numpy::{IntoPyArray, PyArrayMethods};
 use pyo3::prelude::*;
 
 use crate::adapters::atomworks::{collect_atom_data, AtomData};
@@ -91,7 +92,7 @@ pub(crate) fn entities_to_arrays<E: std::borrow::Borrow<MoleculeEntity>>(
     let total_atoms: usize =
         entities.iter().map(|e| e.borrow().atom_count()).sum();
     let data = collect_atom_data(entities, total_atoms);
-    atom_data_to_arrays(py, &data, total_atoms)
+    atom_data_to_arrays(py, data, total_atoms)
 }
 
 /// Lookup from per-entity atom identity to `to_arrays()` flat index space.
@@ -136,46 +137,36 @@ pub(crate) fn flat_atoms<E: std::borrow::Borrow<MoleculeEntity>>(
 /// Returns `PyErr` if any numpy operation fails.
 pub(crate) fn atom_data_to_arrays(
     py: Python,
-    data: &AtomData,
+    data: AtomData,
     total_atoms: usize,
 ) -> PyResult<AtomArrays> {
     let numpy = py.import("numpy")?;
 
-    let coords = numpy.call_method1("array", (&data.coords_flat,))?;
-    let coords = coords.call_method1("reshape", ((total_atoms, 3),))?;
-    let coords = coords.call_method1("astype", (numpy.getattr("float32")?,))?;
-
-    let res_ids = numpy.call_method1("array", (&data.res_ids,))?;
-    let res_ids = res_ids.call_method1("astype", (numpy.getattr("int32")?,))?;
-
-    let occupancies = numpy.call_method1("array", (&data.occupancies,))?;
-    let occupancies =
-        occupancies.call_method1("astype", (numpy.getattr("float32")?,))?;
-
-    let b_factors = numpy.call_method1("array", (&data.b_factors,))?;
-    let b_factors =
-        b_factors.call_method1("astype", (numpy.getattr("float32")?,))?;
-
-    let entity_ids = numpy.call_method1("array", (&data.aw_entity_ids,))?;
-    let entity_ids =
-        entity_ids.call_method1("astype", (numpy.getattr("int32")?,))?;
-
-    let chain_types = numpy.call_method1("array", (&data.aw_chain_types,))?;
-    let chain_types =
-        chain_types.call_method1("astype", (numpy.getattr("int32")?,))?;
+    // Numeric columns: move the owned vecs straight into numpy (no float64/
+    // int64 intermediate, no astype copy). `into_pyarray` yields float32 /
+    // int32 directly; coords reshape to (total_atoms, 3) is a metadata view.
+    let coords = data
+        .coords_flat
+        .into_pyarray(py)
+        .reshape((total_atoms, 3))?;
+    let res_ids = data.res_ids.into_pyarray(py);
+    let occupancies = data.occupancies.into_pyarray(py);
+    let b_factors = data.b_factors.into_pyarray(py);
+    let entity_ids = data.aw_entity_ids.into_pyarray(py);
+    let chain_types = data.aw_chain_types.into_pyarray(py);
 
     Ok(AtomArrays {
-        coords: coords.unbind(),
+        coords: coords.into_any().unbind(),
         atom_names: numpy.call_method1("array", (&data.atom_names,))?.unbind(),
         elements: numpy.call_method1("array", (&data.elements,))?.unbind(),
-        res_ids: res_ids.unbind(),
+        res_ids: res_ids.into_any().unbind(),
         res_names: numpy.call_method1("array", (&data.res_names,))?.unbind(),
         chain_ids: numpy.call_method1("array", (&data.chain_ids,))?.unbind(),
-        occupancies: occupancies.unbind(),
-        b_factors: b_factors.unbind(),
-        entity_ids: entity_ids.unbind(),
+        occupancies: occupancies.into_any().unbind(),
+        b_factors: b_factors.into_any().unbind(),
+        entity_ids: entity_ids.into_any().unbind(),
         mol_types: numpy.call_method1("array", (&data.aw_mol_types,))?.unbind(),
-        chain_types: chain_types.unbind(),
+        chain_types: chain_types.into_any().unbind(),
     })
 }
 

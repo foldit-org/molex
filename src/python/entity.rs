@@ -244,32 +244,22 @@ impl PyResidue {
     /// This residue's atoms as per-atom numpy columns (an `AtomArrays`), via
     /// the shared entities -> arrays core: the parent entity's columns are
     /// collected once, then sliced to this residue's contiguous run of atoms.
-    /// The flat column offset is the sum of the prior residues' atom counts,
-    /// matching how the shared collector flattens polymer atoms in residue
-    /// order.
+    /// The flat slice range comes from the native
+    /// [`MoleculeEntity::residue_flat_range`], which sums the prior residues'
+    /// atom counts in the same order the shared collector flattens them.
     ///
     /// # Errors
     ///
     /// `PyErr` if numpy is unavailable or a numpy operation fails.
     pub fn to_arrays(&self, py: Python) -> PyResult<AtomArrays> {
-        let Some(residues) = self.inner.residues() else {
-            // `new` only builds for polymer entities, so this is unreachable in
-            // practice; return empty columns rather than panic.
-            let data = collect_atom_data(std::slice::from_ref(&self.inner), 0)
-                .slice_atoms(0..0);
-            return atom_data_to_arrays(py, &data, 0);
-        };
-        let offset: usize = residues[..self.residue_index]
-            .iter()
-            .map(|r| r.atom_range.len())
-            .sum();
-        let count = residues[self.residue_index].atom_range.len();
+        let range = self.inner.residue_flat_range(self.residue_index);
+        let count = range.len();
 
         let entity_atoms = self.inner.atom_count();
         let data =
             collect_atom_data(std::slice::from_ref(&self.inner), entity_atoms);
-        let sliced = data.slice_atoms(offset..(offset + count));
-        atom_data_to_arrays(py, &sliced, count)
+        let sliced = data.slice_atoms(range);
+        atom_data_to_arrays(py, sliced, count)
     }
 
     /// Concise repr: `<Residue {name} {seq_id}{ins_code}>`.

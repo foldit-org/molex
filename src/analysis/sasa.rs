@@ -283,8 +283,8 @@ pub fn assembly_sasa(
         if entity.molecule_type() != MoleculeType::Protein {
             continue;
         }
-        for atom in entity.atom_set() {
-            positions.push(atom.position);
+        for atom in entity.atoms_iter() {
+            positions.push(*atom.position);
             radii.push(atom.element.vdw_radius());
         }
     }

@@ -110,14 +110,14 @@ pub(crate) fn for_each_flat_atom<E: std::borrow::Borrow<MoleculeEntity>>(
     for entity in entities {
         let entity = entity.borrow();
         let entity_raw_id = entity.id().raw();
-        let atoms = entity.atom_set();
+        let atoms = entity.columns().to_atoms();
 
         match entity {
             MoleculeEntity::Protein(e) => {
                 emit_polymer(
                     &mut f,
                     entity_raw_id,
-                    atoms,
+                    &atoms,
                     &e.residues,
                     &e.pdb_chain_id,
                 );
@@ -126,7 +126,7 @@ pub(crate) fn for_each_flat_atom<E: std::borrow::Borrow<MoleculeEntity>>(
                 emit_polymer(
                     &mut f,
                     entity_raw_id,
-                    atoms,
+                    &atoms,
                     &e.residues,
                     &e.pdb_chain_id,
                 );
@@ -282,9 +282,10 @@ fn append_entity_bonds(
         MoleculeType::Ligand | MoleculeType::Cofactor | MoleculeType::Ion
     );
 
-    let atoms = entity.atom_set();
-    if needs_inference && atoms.len() >= 2 && atoms.len() <= 500 {
-        let inferred = infer_bonds(atoms, DEFAULT_TOLERANCE);
+    let count = entity.atom_count();
+    if needs_inference && (2..=500).contains(&count) {
+        let atoms = entity.columns().to_atoms();
+        let inferred = infer_bonds(&atoms, DEFAULT_TOLERANCE);
         for bond in &inferred {
             let bt = match bond.order {
                 BondOrder::Single => 1u8,
@@ -678,10 +679,10 @@ mod tests {
         // column-major axis).
         let mut flat = Vec::with_capacity(total * 3);
         for e in &entities {
-            for a in e.atom_set() {
-                flat.push(a.position.x);
-                flat.push(a.position.y);
-                flat.push(a.position.z);
+            for p in e.positions() {
+                flat.push(p.x);
+                flat.push(p.y);
+                flat.push(p.z);
             }
         }
         assert_eq!(data.coords_flat, flat);

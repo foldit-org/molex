@@ -23,7 +23,7 @@ pub mod small_molecule;
 /// Entity and Polymer traits.
 pub mod traits;
 
-pub use atom::{Atom, AtomRef};
+pub use atom::{Atom, AtomColumns, AtomRef};
 #[allow(
     unused_imports,
     reason = "exported for adapter consumers; not all consumers wired yet"
@@ -195,48 +195,51 @@ impl MoleculeEntity {
         }
     }
 
-    /// Slice over the underlying atoms.
+    /// The underlying struct-of-arrays atom storage.
     #[must_use]
-    pub fn atom_set(&self) -> &[Atom] {
+    pub fn columns(&self) -> &AtomColumns {
         match self {
-            MoleculeEntity::Protein(e) => e.atoms(),
-            MoleculeEntity::NucleicAcid(e) => e.atoms(),
-            MoleculeEntity::SmallMolecule(e) => e.atoms(),
-            MoleculeEntity::Bulk(e) => e.atoms(),
+            MoleculeEntity::Protein(e) => e.columns(),
+            MoleculeEntity::NucleicAcid(e) => e.columns(),
+            MoleculeEntity::SmallMolecule(e) => e.columns(),
+            MoleculeEntity::Bulk(e) => e.columns(),
         }
     }
 
-    /// Mutable reference to the underlying `Vec<Atom>`.
-    pub fn atom_set_mut(&mut self) -> &mut [Atom] {
+    /// Mutable access to the underlying columns. For in-place edits that
+    /// preserve atom count (coordinate updates); reshapes that change the
+    /// atom count must keep all six columns the same length.
+    pub fn columns_mut(&mut self) -> &mut AtomColumns {
         match self {
-            MoleculeEntity::Protein(e) => &mut e.atoms,
-            MoleculeEntity::NucleicAcid(e) => &mut e.atoms,
-            MoleculeEntity::SmallMolecule(e) => &mut e.atoms,
-            MoleculeEntity::Bulk(e) => &mut e.atoms,
+            MoleculeEntity::Protein(e) => &mut e.columns,
+            MoleculeEntity::NucleicAcid(e) => &mut e.columns,
+            MoleculeEntity::SmallMolecule(e) => &mut e.columns,
+            MoleculeEntity::Bulk(e) => &mut e.columns,
         }
     }
 
-    /// All atom positions as Vec3.
+    /// All atom positions, in storage order.
     #[must_use]
-    pub fn positions(&self) -> Vec<Vec3> {
-        self.atom_set().iter().map(|a| a.position).collect()
+    pub fn positions(&self) -> &[Vec3] {
+        &self.columns().position
     }
 
     /// One atom by index, gathered by value.
     #[must_use]
     pub fn atom(&self, i: usize) -> Atom {
-        self.atom_set()[i].clone()
+        self.columns().gather(i)
     }
 
     /// Layout-agnostic per-atom views over every atom, in storage order.
     pub fn atoms_iter(&self) -> impl Iterator<Item = AtomRef<'_>> {
-        self.atom_set().iter().map(AtomRef::from_atom)
+        let columns = self.columns();
+        (0..columns.len()).map(|i| columns.atom_ref(i))
     }
 
     /// Number of atoms in this entity.
     #[must_use]
     pub fn atom_count(&self) -> usize {
-        self.atom_set().len()
+        self.columns().len()
     }
 
     /// Intra-entity covalent bonds. Bulk entities carry none and return
@@ -262,19 +265,22 @@ impl MoleculeEntity {
         }
     }
 
-    /// Mutable access to this entity's `(atoms, residues)` pair for
+    /// Mutable access to this entity's `(columns, residues)` pair for
     /// polymer entities. Returns `None` for non-polymer entities.
     ///
     /// Intended for the `ops::edit` path that re-shapes residue
     /// content; callers are responsible for keeping `atom_range`s
-    /// consistent.
-    pub fn polymer_parts_mut(
+    /// consistent. Atom-list reshapes go through
+    /// [`AtomColumns::splice`].
+    pub fn polymer_columns_mut(
         &mut self,
-    ) -> Option<(&mut Vec<Atom>, &mut Vec<Residue>)> {
+    ) -> Option<(&mut AtomColumns, &mut Vec<Residue>)> {
         match self {
-            MoleculeEntity::Protein(e) => Some((&mut e.atoms, &mut e.residues)),
+            MoleculeEntity::Protein(e) => {
+                Some((&mut e.columns, &mut e.residues))
+            }
             MoleculeEntity::NucleicAcid(e) => {
-                Some((&mut e.atoms, &mut e.residues))
+                Some((&mut e.columns, &mut e.residues))
             }
             MoleculeEntity::SmallMolecule(_) | MoleculeEntity::Bulk(_) => None,
         }
@@ -331,7 +337,7 @@ impl MoleculeEntity {
     /// Compute the axis-aligned bounding box for this entity's atoms.
     #[must_use]
     pub fn aabb(&self) -> Option<Aabb> {
-        Aabb::from_positions(&self.positions())
+        Aabb::from_positions(self.positions())
     }
 
     /// Human-readable label (e.g. "Protein Chain A", "Ligand (ATP)", "Zn2+
@@ -543,10 +549,10 @@ mod tests {
     }
 
     #[test]
-    fn atom_set_and_atom_count() {
+    fn columns_len_and_atom_count() {
         let entity = two_residue_protein();
         assert_eq!(entity.atom_count(), 8);
-        assert_eq!(entity.atom_set().len(), 8);
+        assert_eq!(entity.columns().len(), 8);
     }
 
     #[test]

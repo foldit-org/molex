@@ -37,7 +37,7 @@ use super::{
 };
 use crate::assembly::Assembly;
 use crate::element::Element;
-use crate::entity::molecule::{Atom, MoleculeEntity, Residue};
+use crate::entity::molecule::{AtomColumns, MoleculeEntity, Residue};
 
 // Assembly walk accessors
 
@@ -174,19 +174,26 @@ pub extern "C" fn molex_entity_num_atoms(entity: *const molex_Entity) -> usize {
     entity_inner(entity).map_or(0, MoleculeEntity::atom_count)
 }
 
-/// Borrow a non-owning view of the i-th atom in this entity's flat atom
-/// list. Returns null when `entity` is null or `i` is out of bounds.
+/// A by-value handle locating the i-th atom in this entity's flat atom
+/// list. Returns the null-`entity` sentinel when `entity` is null or `i`
+/// is out of bounds.
 #[no_mangle]
 pub extern "C" fn molex_entity_atom(
     entity: *const molex_Entity,
     i: usize,
-) -> *const molex_Atom {
-    let Some(e) = entity_inner(entity) else {
-        return std::ptr::null();
+) -> molex_Atom {
+    let invalid = molex_Atom {
+        entity: std::ptr::null(),
+        index: 0,
     };
-    e.atom_set().get(i).map_or(std::ptr::null(), |atom: &Atom| {
-        std::ptr::from_ref(atom).cast::<molex_Atom>()
-    })
+    let Some(e) = entity_inner(entity) else {
+        return invalid;
+    };
+    if i < e.atom_count() {
+        molex_Atom { entity, index: i }
+    } else {
+        invalid
+    }
 }
 
 fn polymer_residues(entity: &MoleculeEntity) -> Option<&[Residue]> {
@@ -299,32 +306,36 @@ pub extern "C" fn molex_entity_residue_num_atoms(
         .map_or(0, |residue| residue.atom_range.len())
 }
 
-/// Borrow a non-owning view of the j-th atom in the i-th residue of
-/// this entity. Returns null on any out-of-bounds access or null
-/// `entity` argument.
+/// A by-value handle locating the j-th atom in the i-th residue of this
+/// entity. Returns the null-`entity` sentinel on any out-of-bounds access
+/// or null `entity` argument.
 #[no_mangle]
 pub extern "C" fn molex_entity_residue_atom(
     entity: *const molex_Entity,
     residue_idx: usize,
     atom_idx: usize,
-) -> *const molex_Atom {
+) -> molex_Atom {
+    let invalid = molex_Atom {
+        entity: std::ptr::null(),
+        index: 0,
+    };
     let Some(e) = entity_inner(entity) else {
-        return std::ptr::null();
+        return invalid;
     };
     let Some(residues) = polymer_residues(e) else {
-        return std::ptr::null();
+        return invalid;
     };
     let Some(residue) = residues.get(residue_idx) else {
-        return std::ptr::null();
+        return invalid;
     };
-    let atoms = e.atom_set();
     let flat_idx = residue.atom_range.start + atom_idx;
-    if flat_idx >= residue.atom_range.end {
-        return std::ptr::null();
+    if flat_idx >= residue.atom_range.end || flat_idx >= e.atom_count() {
+        return invalid;
     }
-    atoms.get(flat_idx).map_or(std::ptr::null(), |atom: &Atom| {
-        std::ptr::from_ref(atom).cast::<molex_Atom>()
-    })
+    molex_Atom {
+        entity,
+        index: flat_idx,
+    }
 }
 
 // Residue accessors
@@ -387,24 +398,27 @@ pub extern "C" fn molex_residue_ins_code(residue: *const molex_Residue) -> u8 {
 
 // Atom accessors
 
-fn atom_inner<'a>(atom: *const molex_Atom) -> Option<&'a Atom> {
-    if atom.is_null() {
-        return None;
-    }
-    Some(unsafe { &*atom.cast::<Atom>() })
+/// Resolve a by-value atom handle to `(columns, index)`. Returns `None`
+/// when the handle carries the null-`entity` sentinel or its `index` is
+/// out of bounds — the same invalid path the old null atom pointer took.
+fn atom_inner<'a>(atom: molex_Atom) -> Option<(&'a AtomColumns, usize)> {
+    let e = entity_inner(atom.entity)?;
+    let columns = e.columns();
+    (atom.index < columns.len()).then_some((columns, atom.index))
 }
 
 /// Pointer to this atom's 4-byte PDB-style name (e.g. b"CA  "). Writes
-/// 4 to `out_len` on success. Returns null and writes 0 if `atom` is null.
+/// 4 to `out_len` on success. Returns null and writes 0 if the handle is
+/// invalid.
 ///
 /// The buffer is space-padded; callers that want a trimmed atom name
 /// should strip ASCII spaces.
 #[no_mangle]
 pub extern "C" fn molex_atom_name(
-    atom: *const molex_Atom,
+    atom: molex_Atom,
     out_len: *mut usize,
 ) -> *const u8 {
-    let Some(a) = atom_inner(atom) else {
+    let Some((columns, i)) = atom_inner(atom) else {
         if !out_len.is_null() {
             unsafe {
                 *out_len = 0;
@@ -412,56 +426,60 @@ pub extern "C" fn molex_atom_name(
         }
         return std::ptr::null();
     };
+    let name = &columns.name[i];
     if !out_len.is_null() {
         unsafe {
-            *out_len = a.name.len();
+            *out_len = name.len();
         }
     }
-    a.name.as_ptr()
+    name.as_ptr()
 }
 
 /// Atomic number for this atom's element, or 0 for
-/// [`Element::Unknown`] / a null `atom`.
+/// [`Element::Unknown`] / an invalid handle.
 #[no_mangle]
-pub extern "C" fn molex_atom_atomic_number(atom: *const molex_Atom) -> u8 {
-    atom_inner(atom).map_or(0, |a| Element::atomic_number(a.element))
+pub extern "C" fn molex_atom_atomic_number(atom: molex_Atom) -> u8 {
+    atom_inner(atom)
+        .map_or(0, |(columns, i)| Element::atomic_number(columns.element[i]))
 }
 
 /// Write this atom's `(x, y, z)` position into the 3-float output array.
-/// No-op if either pointer is null.
+/// No-op if `out_xyz` is null or the handle is invalid.
 #[no_mangle]
-pub extern "C" fn molex_atom_position(
-    atom: *const molex_Atom,
-    out_xyz: *mut f32,
-) {
+pub extern "C" fn molex_atom_position(atom: molex_Atom, out_xyz: *mut f32) {
     if out_xyz.is_null() {
         return;
     }
-    let Some(a) = atom_inner(atom) else { return };
+    let Some((columns, i)) = atom_inner(atom) else {
+        return;
+    };
+    let pos = columns.position[i];
     unsafe {
-        *out_xyz.add(0) = a.position.x;
-        *out_xyz.add(1) = a.position.y;
-        *out_xyz.add(2) = a.position.z;
+        *out_xyz.add(0) = pos.x;
+        *out_xyz.add(1) = pos.y;
+        *out_xyz.add(2) = pos.z;
     }
 }
 
-/// Crystallographic occupancy (0.0 to 1.0). Returns 0 if `atom` is null.
+/// Crystallographic occupancy (0.0 to 1.0). Returns 0 if the handle is
+/// invalid.
 #[no_mangle]
-pub extern "C" fn molex_atom_occupancy(atom: *const molex_Atom) -> f32 {
-    atom_inner(atom).map_or(0.0, |a| a.occupancy)
+pub extern "C" fn molex_atom_occupancy(atom: molex_Atom) -> f32 {
+    atom_inner(atom).map_or(0.0, |(columns, i)| columns.occupancy[i])
 }
 
-/// Temperature factor (B-factor) in square angstroms. Returns 0 if
-/// `atom` is null.
+/// Temperature factor (B-factor) in square angstroms. Returns 0 if the
+/// handle is invalid.
 #[no_mangle]
-pub extern "C" fn molex_atom_b_factor(atom: *const molex_Atom) -> f32 {
-    atom_inner(atom).map_or(0.0, |a| a.b_factor)
+pub extern "C" fn molex_atom_b_factor(atom: molex_Atom) -> f32 {
+    atom_inner(atom).map_or(0.0, |(columns, i)| columns.b_factor[i])
 }
 
-/// Signed formal charge (0 means neutral). Returns 0 if `atom` is null.
+/// Signed formal charge (0 means neutral). Returns 0 if the handle is
+/// invalid.
 #[no_mangle]
-pub extern "C" fn molex_atom_formal_charge(atom: *const molex_Atom) -> i8 {
-    atom_inner(atom).map_or(0, |a| a.formal_charge)
+pub extern "C" fn molex_atom_formal_charge(atom: molex_Atom) -> i8 {
+    atom_inner(atom).map_or(0, |(columns, i)| columns.formal_charge[i])
 }
 
 #[cfg(test)]
@@ -640,13 +658,13 @@ mod tests {
 
     #[test]
     fn entity_atom_handles_null_and_out_of_range() {
-        assert!(molex_entity_atom(std::ptr::null(), 0).is_null());
+        assert!(molex_entity_atom(std::ptr::null(), 0).entity.is_null());
 
         let asm = make_assembly_handle();
         let entity = molex_assembly_entity(asm, 0);
-        assert!(!molex_entity_atom(entity, 0).is_null());
-        assert!(molex_entity_atom(entity, 9).is_null());
-        assert!(molex_entity_atom(entity, usize::MAX).is_null());
+        assert!(!molex_entity_atom(entity, 0).entity.is_null());
+        assert!(molex_entity_atom(entity, 9).entity.is_null());
+        assert!(molex_entity_atom(entity, usize::MAX).entity.is_null());
         molex_assembly_free(asm);
     }
 
@@ -676,19 +694,23 @@ mod tests {
 
     #[test]
     fn entity_residue_atom_handles_null_and_out_of_range() {
-        assert!(molex_entity_residue_atom(std::ptr::null(), 0, 0).is_null());
+        assert!(molex_entity_residue_atom(std::ptr::null(), 0, 0)
+            .entity
+            .is_null());
 
         let asm = make_assembly_handle();
         let entity = molex_assembly_entity(asm, 0);
         // Valid (residue 0, atom 0) resolves.
-        assert!(!molex_entity_residue_atom(entity, 0, 0).is_null());
+        assert!(!molex_entity_residue_atom(entity, 0, 0).entity.is_null());
         // Out-of-range residue index.
-        assert!(molex_entity_residue_atom(entity, 2, 0).is_null());
+        assert!(molex_entity_residue_atom(entity, 2, 0).entity.is_null());
         // In-range residue, out-of-range atom-within-residue. Residue 0
         // spans flat atoms 0..5, so local index 5 walks past the range
         // even though that flat slot still exists in the entity.
-        assert!(molex_entity_residue_atom(entity, 0, 5).is_null());
-        assert!(molex_entity_residue_atom(entity, 0, usize::MAX).is_null());
+        assert!(molex_entity_residue_atom(entity, 0, 5).entity.is_null());
+        assert!(molex_entity_residue_atom(entity, 0, usize::MAX)
+            .entity
+            .is_null());
         molex_assembly_free(asm);
     }
 
@@ -763,25 +785,27 @@ mod tests {
 
     #[test]
     fn atom_accessors_handle_null() {
-        let null = std::ptr::null::<molex_Atom>();
+        let invalid = molex_Atom {
+            entity: std::ptr::null(),
+            index: 0,
+        };
 
         let mut out_len: usize = 99;
-        let p = molex_atom_name(null, &raw mut out_len);
+        let p = molex_atom_name(invalid, &raw mut out_len);
         assert!(p.is_null());
         assert_eq!(out_len, 0);
 
-        assert_eq!(molex_atom_atomic_number(null), 0);
-        assert_eq!(molex_atom_occupancy(null), 0.0);
-        assert_eq!(molex_atom_b_factor(null), 0.0);
-        assert_eq!(molex_atom_formal_charge(null), 0);
+        assert_eq!(molex_atom_atomic_number(invalid), 0);
+        assert_eq!(molex_atom_occupancy(invalid), 0.0);
+        assert_eq!(molex_atom_b_factor(invalid), 0.0);
+        assert_eq!(molex_atom_formal_charge(invalid), 0);
 
-        // Null atom (and null out buffer) must be a no-op, not a write
+        // Invalid handle (and null out buffer) must be a no-op, not a write
         // through a dangling pointer.
         let mut xyz = [-1.0f32; 3];
-        molex_atom_position(null, xyz.as_mut_ptr());
+        molex_atom_position(invalid, xyz.as_mut_ptr());
         assert_eq!(xyz, [-1.0, -1.0, -1.0]);
-        let valid_atom_unused = std::ptr::null::<molex_Atom>();
-        molex_atom_position(valid_atom_unused, std::ptr::null_mut());
+        molex_atom_position(invalid, std::ptr::null_mut());
     }
 
     #[test]
@@ -789,7 +813,7 @@ mod tests {
         let asm = make_assembly_handle();
         let entity = molex_assembly_entity(asm, 0);
         let atom = molex_entity_atom(entity, 0);
-        assert!(!atom.is_null());
+        assert!(!atom.entity.is_null());
 
         let mut out_len: usize = 0;
         let p = molex_atom_name(atom, &raw mut out_len);

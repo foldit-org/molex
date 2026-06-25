@@ -249,9 +249,9 @@ fn apply_set_entity_coords(
             got: coords.len(),
         });
     }
-    let atoms = Arc::make_mut(target).atom_set_mut();
-    for (atom, &pos) in atoms.iter_mut().zip(coords.iter()) {
-        atom.position = pos;
+    let columns = Arc::make_mut(target).columns_mut();
+    for (slot, &pos) in columns.position.iter_mut().zip(coords.iter()) {
+        *slot = pos;
     }
     assembly.after_mutation_pub();
     Ok(())
@@ -266,7 +266,7 @@ fn apply_set_residue_coords(
     let idx = entity_index(assembly, entity)?;
     let entities = assembly.entities_mut();
     let target = Arc::make_mut(&mut entities[idx]);
-    let Some((atoms, residues)) = target.polymer_parts_mut() else {
+    let Some((columns, residues)) = target.polymer_columns_mut() else {
         return Err(EditError::NotPolymer { entity });
     };
     let residue =
@@ -283,7 +283,7 @@ fn apply_set_residue_coords(
         });
     }
     for (atom_idx, &pos) in range.zip(coords.iter()) {
-        atoms[atom_idx].position = pos;
+        columns.position[atom_idx] = pos;
     }
     assembly.after_mutation_pub();
     Ok(())
@@ -306,7 +306,7 @@ fn apply_mutate_residue(
     let idx = entity_index(assembly, entity)?;
     let entities = assembly.entities_mut();
     let target = Arc::make_mut(&mut entities[idx]);
-    let Some((atoms, residues)) = target.polymer_parts_mut() else {
+    let Some((columns, residues)) = target.polymer_columns_mut() else {
         return Err(EditError::NotPolymer { entity });
     };
     if residue_idx >= residues.len() {
@@ -320,11 +320,9 @@ fn apply_mutate_residue(
     let old_len = old_range.len();
     let new_len = new_atoms.len();
 
-    // Splice the entity's atom list: drop `old_range`, insert
-    // `new_atoms` in its place. Drop the returned iterator immediately
-    // — `Vec::splice` only runs the replacement when the iterator is
-    // consumed/dropped.
-    drop(atoms.splice(old_range.clone(), new_atoms.iter().cloned()));
+    // Splice the entity's atom columns: drop `old_range`, insert
+    // `new_atoms` in its place, across all six columns in lockstep.
+    columns.splice(old_range.clone(), new_atoms);
 
     // Reshape the target residue.
     let new_end = old_range.start + new_len;
@@ -368,7 +366,7 @@ fn apply_set_variants(
     let idx = entity_index(assembly, entity)?;
     let entities = assembly.entities_mut();
     let target = Arc::make_mut(&mut entities[idx]);
-    let Some((_, residues)) = target.polymer_parts_mut() else {
+    let Some((_, residues)) = target.polymer_columns_mut() else {
         return Err(EditError::NotPolymer { entity });
     };
     let residue =

@@ -94,7 +94,7 @@ fn pdb_str_to_entities_preserves_positions() {
         .iter()
         .find(|e| e.molecule_type() == MoleculeType::Protein)
         .unwrap();
-    let pos = &protein.atom_set()[0].position;
+    let pos = &protein.positions()[0];
     assert!((pos.x - 1.0).abs() < 0.01);
     assert!((pos.y - 2.0).abs() < 0.01);
     assert!((pos.z - 3.0).abs() < 0.01);
@@ -273,8 +273,8 @@ END
     assert_eq!(models.len(), 2);
     assert_eq!(models[0][0].atom_count(), 4);
     assert_eq!(models[1][0].atom_count(), 4);
-    let m0_x = models[0][0].atom_set()[0].position.x;
-    let m1_x = models[1][0].atom_set()[0].position.x;
+    let m0_x = models[0][0].positions()[0].x;
+    let m1_x = models[1][0].positions()[0].x;
     assert!((m0_x - 1.0).abs() < 0.01);
     assert!((m1_x - 1.5).abs() < 0.01);
 }
@@ -301,7 +301,7 @@ END
         .iter()
         .find(|e| e.molecule_type() == MoleculeType::Protein)
         .unwrap();
-    let pos = &protein.atom_set()[0].position;
+    let pos = &protein.positions()[0];
     assert!((pos.x - 1.0).abs() < 0.01);
 }
 

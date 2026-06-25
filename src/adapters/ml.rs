@@ -307,6 +307,7 @@ fn rows4_from_flat(flat: &[i8]) -> Vec<[i8; 4]> {
 )]
 mod tests {
     use super::*;
+    use crate::entity::molecule::traits::Entity;
     use crate::entity::molecule::MoleculeEntity;
     use crate::ops::wire::deserialize_assembly;
 
@@ -579,12 +580,13 @@ mod tests {
         assert_eq!(protein.residues.len(), 2);
         assert_eq!(protein.residues[0].name, *b"ALA");
         assert_eq!(protein.residues[1].name, *b"GLY");
-        assert_eq!(protein.atoms.len(), 8);
+        let atoms = protein.columns().to_atoms();
+        assert_eq!(atoms.len(), 8);
 
         // Per-residue name->coord pairing survives canonicalization: look each
         // expected atom up by name within its residue range.
         let coord_by_name = |range: std::ops::Range<usize>, want: &[u8; 4]| {
-            protein.atoms[range]
+            atoms[range]
                 .iter()
                 .find(|a| &a.name == want)
                 .map(|a| a.position)

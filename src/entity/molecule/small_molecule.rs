@@ -1,7 +1,7 @@
 //! Small molecule entity: a single non-polymer molecule (ligand, ion,
 //! cofactor, lipid).
 
-use super::atom::Atom;
+use super::atom::{Atom, AtomColumns};
 use super::id::EntityId;
 use super::traits::Entity;
 use super::MoleculeType;
@@ -16,8 +16,8 @@ pub struct SmallMoleculeEntity {
     pub id: EntityId,
     /// Molecule type (Ligand, Ion, Cofactor, or Lipid).
     pub mol_type: MoleculeType,
-    /// Atom data.
-    pub atoms: Vec<Atom>,
+    /// Atom data, stored as parallel columns.
+    pub columns: AtomColumns,
     /// 3-character residue code (e.g. b"ATP").
     pub residue_name: [u8; 3],
     /// Human-readable name for display (e.g. "Chlorophyll A").
@@ -63,7 +63,7 @@ impl SmallMoleculeEntity {
         Self {
             id,
             mol_type,
-            atoms,
+            columns: AtomColumns::from_atoms(atoms),
             residue_name,
             display_name,
             bonds,
@@ -78,8 +78,8 @@ impl Entity for SmallMoleculeEntity {
     fn molecule_type(&self) -> MoleculeType {
         self.mol_type
     }
-    fn atoms(&self) -> &[Atom] {
-        &self.atoms
+    fn columns(&self) -> &AtomColumns {
+        &self.columns
     }
     fn bonds(&self) -> &[CovalentBond] {
         &self.bonds

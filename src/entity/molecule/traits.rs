@@ -2,10 +2,11 @@
 
 use glam::Vec3;
 
-use super::atom::{Atom, AtomRef};
+use super::atom::{Atom, AtomColumns, AtomRef};
 use super::id::EntityId;
 use super::{MoleculeType, Residue};
 use crate::bond::CovalentBond;
+use crate::element::Element;
 
 /// Common behavior for all molecular entities.
 pub trait Entity {
@@ -15,28 +16,34 @@ pub trait Entity {
     /// Classification of this entity's molecule type.
     fn molecule_type(&self) -> MoleculeType;
 
-    /// Reference to the underlying atom data.
-    fn atoms(&self) -> &[Atom];
+    /// The underlying struct-of-arrays atom storage.
+    fn columns(&self) -> &AtomColumns;
+
+    /// Atom positions, in storage order.
+    fn positions(&self) -> &[Vec3] {
+        &self.columns().position
+    }
+
+    /// Atom elements, in storage order.
+    fn elements(&self) -> &[Element] {
+        &self.columns().element
+    }
 
     /// One atom by index, gathered by value. Panics if `i` is out of
     /// bounds, matching slice indexing.
     fn atom(&self, i: usize) -> Atom {
-        self.atoms()[i].clone()
+        self.columns().gather(i)
     }
 
     /// Layout-agnostic per-atom views over every atom, in storage order.
     fn atoms_iter(&self) -> impl Iterator<Item = AtomRef<'_>> {
-        self.atoms().iter().map(AtomRef::from_atom)
-    }
-
-    /// All atom positions as `Vec3`.
-    fn positions(&self) -> Vec<Vec3> {
-        self.atoms().iter().map(|a| a.position).collect()
+        let columns = self.columns();
+        (0..columns.len()).map(|i| columns.atom_ref(i))
     }
 
     /// Number of atoms in this entity.
     fn atom_count(&self) -> usize {
-        self.atoms().len()
+        self.columns().len()
     }
 
     /// Intra-entity covalent bonds, with `AtomId` endpoints into this

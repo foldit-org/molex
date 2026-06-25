@@ -99,7 +99,7 @@ fn set_entity_coords_updates_all_positions_and_bumps_generation() {
     .unwrap();
 
     assert_eq!(a.generation(), start_gen + 1);
-    let positions: Vec<Vec3> = a.entities()[0].positions();
+    let positions: Vec<Vec3> = a.entities()[0].positions().to_vec();
     assert_eq!(positions, new_coords);
 }
 
@@ -132,7 +132,7 @@ fn set_residue_coords_touches_only_target_residue() {
     let mut a = small_protein();
     let id = a.entities()[0].id();
 
-    let before = a.entities()[0].positions();
+    let before = a.entities()[0].positions().to_vec();
     let new_r0_coords = vec![Vec3::new(1.0, 1.0, 1.0); 4];
     a.apply_edit(&AssemblyEdit::SetResidueCoords {
         entity: id,
@@ -141,7 +141,7 @@ fn set_residue_coords_touches_only_target_residue() {
     })
     .unwrap();
 
-    let after = a.entities()[0].positions();
+    let after = a.entities()[0].positions().to_vec();
     assert_eq!(&after[0..4], new_r0_coords.as_slice());
     // Residue 1's atoms (indices 4..8) untouched.
     assert_eq!(&after[4..8], &before[4..8]);
@@ -167,7 +167,7 @@ fn mutate_residue_changes_atom_count_and_shifts_subsequent_ranges() {
     assert_eq!(p.residues[0].name, res_bytes("TRP"));
     assert_eq!(p.residues[0].atom_range, 0..14);
     assert_eq!(p.residues[1].atom_range, 14..18);
-    assert_eq!(p.atoms.len(), 18);
+    assert_eq!(p.columns.len(), 18);
 }
 
 #[test]

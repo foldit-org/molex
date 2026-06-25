@@ -8,6 +8,7 @@ use std::borrow::Borrow;
 use crate::analysis::BondOrder;
 use crate::atom_id::AtomId;
 use crate::bond::CovalentBond;
+use crate::entity::molecule::traits::Entity;
 use crate::entity::molecule::MoleculeEntity;
 
 /// Maximum SG-SG distance (angstroms) for a disulfide bond.
@@ -48,7 +49,7 @@ pub fn detect_disulfides<E: Borrow<MoleculeEntity>>(
                 continue;
             }
             for idx in residue.atom_range.clone() {
-                let atom = &protein.atoms[idx];
+                let atom = protein.atom(idx);
                 if trimmed_atom_name_bytes(&atom.name) == b"SG" {
                     sg_atoms.push(SgAtom {
                         id: AtomId {

@@ -72,10 +72,11 @@ fn na_canonical_ordering_places_backbone_first() {
     let na = scrambled_adenine_entity();
     assert_eq!(na.residues.len(), 1);
     let r = &na.residues[0];
+    let na_atoms = na.columns().to_atoms();
     let names: Vec<&str> = r
         .atom_range
         .clone()
-        .map(|i| std::str::from_utf8(&na.atoms[i].name).unwrap().trim())
+        .map(|i| std::str::from_utf8(&na_atoms[i].name).unwrap().trim())
         .collect();
     // First six must be the canonical backbone.
     assert_eq!(&names[..6], &["P", "O5'", "C5'", "C4'", "C3'", "O3'"]);
@@ -84,9 +85,10 @@ fn na_canonical_ordering_places_backbone_first() {
 #[test]
 fn na_bonds_include_sugar_phosphate_and_purine_anchor() {
     let na = scrambled_adenine_entity();
+    let na_atoms = na.columns().to_atoms();
     // bonds are AtomId-endpoint. Reconstruct by name.
     let name_of = |aid: AtomId| {
-        std::str::from_utf8(&na.atoms[aid.index as usize].name)
+        std::str::from_utf8(&na_atoms[aid.index as usize].name)
             .unwrap()
             .trim()
             .to_owned()
@@ -163,11 +165,12 @@ fn rna_residue_completes_with_ribose_o2_prime() {
     let na = rna_adenine_missing_o2_prime();
     assert_eq!(na.residues.len(), 1, "RNA adenine should be kept");
     let r = &na.residues[0];
+    let na_atoms = na.columns().to_atoms();
     let names: Vec<String> = r
         .atom_range
         .clone()
         .map(|i| {
-            std::str::from_utf8(&na.atoms[i].name)
+            std::str::from_utf8(&na_atoms[i].name)
                 .unwrap()
                 .trim()
                 .to_owned()
@@ -242,10 +245,11 @@ fn na_five_prime_oh_residue_is_kept() {
     );
     assert_eq!(na.residues.len(), 1, "5'-OH residue must be kept");
     let r = &na.residues[0];
+    let na_atoms = na.columns().to_atoms();
     let names: Vec<&str> = r
         .atom_range
         .clone()
-        .map(|i| std::str::from_utf8(&na.atoms[i].name).unwrap().trim())
+        .map(|i| std::str::from_utf8(&na_atoms[i].name).unwrap().trim())
         .collect();
     for forged in ["P", "OP1", "OP2", "OP3"] {
         assert!(
@@ -259,7 +263,7 @@ fn na_five_prime_oh_residue_is_kept() {
     // No bond names a (nonexistent) phosphate or its OP oxygens.
     for bond in &na.bonds {
         for aid in [bond.a, bond.b] {
-            let nm = std::str::from_utf8(&na.atoms[aid.index as usize].name)
+            let nm = std::str::from_utf8(&na_atoms[aid.index as usize].name)
                 .unwrap()
                 .trim();
             assert!(
@@ -303,8 +307,9 @@ fn na_five_prime_oh_then_phosphodiester_to_next() {
         Completion::Heavy,
     );
     assert_eq!(na.residues.len(), 2, "both residues kept");
+    let na_atoms = na.columns().to_atoms();
     let name_of = |aid: AtomId| {
-        std::str::from_utf8(&na.atoms[aid.index as usize].name)
+        std::str::from_utf8(&na_atoms[aid.index as usize].name)
             .unwrap()
             .trim()
             .to_owned()
@@ -347,10 +352,11 @@ fn protonated_na_strips_h_heavy_only_keeps_h_otherwise() {
         Completion::Heavy,
     );
     let r = &heavy.residues[0];
+    let heavy_atoms = heavy.columns().to_atoms();
     assert!(
         r.atom_range
             .clone()
-            .all(|i| heavy.atoms[i].element != Element::H),
+            .all(|i| heavy_atoms[i].element != Element::H),
         "heavy-only NA ingest strips every input hydrogen"
     );
 
@@ -362,10 +368,11 @@ fn protonated_na_strips_h_heavy_only_keeps_h_otherwise() {
         "A".to_owned(),
     );
     let r = &kept.residues[0];
+    let kept_atoms = kept.columns().to_atoms();
     assert!(
         r.atom_range
             .clone()
-            .any(|i| kept.atoms[i].element == Element::H),
+            .any(|i| kept_atoms[i].element == Element::H),
         "the pure (None) path keeps the input hydrogen"
     );
 }
@@ -415,5 +422,5 @@ fn na_drops_residue_missing_backbone() {
         NAEntity::new(id, MoleculeType::DNA, atoms, residues, "A".to_owned());
     assert_eq!(na.residues.len(), 0);
     // Atoms still present (carried through, unreferenced).
-    assert_eq!(na.atoms.len(), 2);
+    assert_eq!(na.columns.len(), 2);
 }

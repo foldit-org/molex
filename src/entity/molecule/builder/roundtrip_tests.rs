@@ -11,6 +11,7 @@ use super::tests::{
     atomname, push_protein_residue, raw_atomname, resname, RowBuilder,
 };
 use super::*;
+use crate::entity::molecule::traits::Entity;
 
 /// Push four backbone rows for a single ALA residue with overrides
 /// applied uniformly through `decorate`. `decorate` runs per-row so the
@@ -92,8 +93,8 @@ fn auth_atom_id_round_trips() {
     let entities = b.finish().unwrap();
     let protein = entities[0].as_protein().unwrap();
     assert_eq!(protein.residues.len(), 1);
-    let cb_atom = protein
-        .atoms
+    let p_atoms = protein.columns().to_atoms();
+    let cb_atom = p_atoms
         .iter()
         .find(|a| a.name == raw_atomname("QB  "))
         .unwrap();
@@ -131,11 +132,12 @@ fn formal_charge_round_trips() {
     }
     let entities = b.finish().unwrap();
     let protein = entities[0].as_protein().unwrap();
-    let n_atom = &protein.atoms[protein.residues[0].atom_range.start];
+    let p_atoms = protein.columns().to_atoms();
+    let n_atom = &p_atoms[protein.residues[0].atom_range.start];
     assert_eq!(n_atom.name, atomname("N"));
     assert_eq!(n_atom.formal_charge, 2);
     // Sibling atoms stay neutral.
-    let ca_atom = &protein.atoms[protein.residues[0].atom_range.start + 1];
+    let ca_atom = &p_atoms[protein.residues[0].atom_range.start + 1];
     assert_eq!(ca_atom.formal_charge, 0);
 }
 
@@ -150,10 +152,8 @@ fn auth_none_defaults_to_label() {
     assert_eq!(residue.auth_seq_id, None);
     assert_eq!(residue.auth_comp_id, None);
     assert_eq!(residue.ins_code, None);
+    let p_atoms = protein.columns().to_atoms();
     for idx in residue.atom_range.clone() {
-        assert_eq!(
-            protein.atoms[idx].formal_charge, 0,
-            "default formal_charge is 0",
-        );
+        assert_eq!(p_atoms[idx].formal_charge, 0, "default formal_charge is 0");
     }
 }

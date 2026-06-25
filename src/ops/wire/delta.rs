@@ -41,6 +41,7 @@ use super::deserialize::{read_atom_row, AtomRow};
 use super::serialize::write_atom_row;
 use super::variants::{read_variant, write_variant};
 use crate::chemistry::variant::VariantTag;
+use crate::entity::molecule::atom::AtomRef;
 use crate::entity::molecule::id::EntityIdAllocator;
 use crate::ops::edit::AssemblyEdit;
 use crate::ops::error::AdapterError;
@@ -203,7 +204,7 @@ fn write_edit(
                 // redundant under MutateResidue (the receiver gets
                 // `new_name` + residue_idx separately), so we fill them
                 // with stable placeholders.
-                write_atom_row(atom, *new_name, 0, buffer);
+                write_atom_row(AtomRef::from_atom(atom), *new_name, 0, buffer);
             }
             write_variant_list(new_variants, buffer);
         }

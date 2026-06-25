@@ -70,9 +70,11 @@ fn build_backbone_only_ala(
 }
 
 fn assert_has_cb(entities: &[MoleculeEntity], msg: &str) {
+    use crate::entity::molecule::traits::Entity;
     let protein = entities[0].as_protein().unwrap();
     let has_cb = protein
-        .atoms
+        .columns()
+        .to_atoms()
         .iter()
         .any(|a| std::str::from_utf8(&a.name).unwrap().trim() == "CB");
     assert!(has_cb, "{msg}");

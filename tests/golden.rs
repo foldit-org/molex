@@ -242,7 +242,7 @@ fn total_atoms(asm: &Assembly) -> usize {
 fn count_hydrogens(asm: &Assembly) -> usize {
     asm.entities()
         .iter()
-        .flat_map(|e| e.atom_set().iter())
+        .flat_map(|e| e.columns().to_atoms())
         .filter(|a| a.element == Element::H)
         .count()
 }

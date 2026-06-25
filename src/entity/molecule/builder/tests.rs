@@ -15,6 +15,7 @@
 )]
 
 use super::*;
+use crate::entity::molecule::traits::Entity;
 
 // Row construction helpers
 
@@ -503,8 +504,8 @@ fn altloc_higher_occupancy_wins() {
     }
     let entities = b.finish().unwrap();
     let protein = entities[0].as_protein().unwrap();
-    let cb = protein
-        .atoms
+    let p_atoms = protein.columns().to_atoms();
+    let cb = p_atoms
         .iter()
         .find(|a| std::str::from_utf8(&a.name).unwrap().trim() == "CB")
         .unwrap();
@@ -527,8 +528,8 @@ fn altloc_alphabetic_tiebreak() {
     }
     let entities = b.finish().unwrap();
     let sm = entities[0].as_small_molecule().unwrap();
-    assert_eq!(sm.atoms.len(), 1);
-    assert_eq!(sm.atoms[0].position.x, 1.0, "A wins alphabetic tiebreak");
+    assert_eq!(sm.columns.len(), 1);
+    assert_eq!(sm.atom(0).position.x, 1.0, "A wins alphabetic tiebreak");
 }
 
 #[test]
@@ -571,8 +572,8 @@ fn altloc_blank_arrives_after_non_blank_replaces_it() {
     .unwrap();
     let entities = b.finish().unwrap();
     let sm = entities[0].as_small_molecule().unwrap();
-    assert_eq!(sm.atoms.len(), 1);
-    assert_eq!(sm.atoms[0].position.x, 0.0, "blank replaces alt");
+    assert_eq!(sm.columns.len(), 1);
+    assert_eq!(sm.atom(0).position.x, 0.0, "blank replaces alt");
 }
 
 #[test]
@@ -586,7 +587,7 @@ fn altloc_same_atom_name_different_residues_is_independent() {
     let entities = b.finish().unwrap();
     let protein = entities[0].as_protein().unwrap();
     // 4 backbone atoms x 2 residues = 8 atoms total.
-    assert_eq!(protein.atoms.len(), 8);
+    assert_eq!(protein.columns.len(), 8);
 }
 
 #[test]
@@ -605,7 +606,7 @@ fn altloc_numeric_alphabetic_tiebreak() {
     }
     let entities = b.finish().unwrap();
     let sm = entities[0].as_small_molecule().unwrap();
-    assert_eq!(sm.atoms[0].position.x, 1.0, "'1' < '2' alphabetic");
+    assert_eq!(sm.atom(0).position.x, 1.0, "'1' < '2' alphabetic");
 }
 
 // Insertion codes

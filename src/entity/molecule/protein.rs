@@ -7,7 +7,7 @@
 
 use glam::Vec3;
 
-use super::atom::Atom;
+use super::atom::{Atom, AtomColumns};
 use super::complete::{complete_protein_residues, keep_hydrogens, Completion};
 use super::id::EntityId;
 use super::traits::{Entity, Polymer};
@@ -83,13 +83,13 @@ impl Sidechain {
 pub struct ProteinEntity {
     /// Unique entity identifier.
     pub id: EntityId,
-    /// All atoms in this protein chain.
+    /// All atoms in this protein chain, stored as parallel columns.
     ///
     /// After [`ProteinEntity::new`], atoms belonging to a kept residue are
     /// laid out in canonical order: `N, CA, C, O, sidechain heavy...,
-    /// hydrogens...`. Atoms of dropped residues remain in `atoms` but are
+    /// hydrogens...`. Atoms of dropped residues remain in `columns` but are
     /// not referenced by any `Residue::atom_range`.
-    pub atoms: Vec<Atom>,
+    pub columns: AtomColumns,
     /// Ordered residues (name, number, atom range into `atoms`). Residues
     /// missing any of the four backbone atoms (N, CA, C, O or OXT) are
     /// dropped during construction.
@@ -208,7 +208,7 @@ impl ProteinEntity {
     pub fn to_continuous(&self) -> Self {
         build_protein(
             self.id,
-            self.atoms.clone(),
+            self.columns.to_atoms(),
             self.residues.clone(),
             self.pdb_chain_id.clone(),
             Completion::Raw,
@@ -254,7 +254,7 @@ impl ProteinEntity {
     pub fn complete(&self, level: Completion) -> Self {
         build_protein(
             self.id,
-            self.atoms.clone(),
+            self.columns.to_atoms(),
             self.residues.clone(),
             self.pdb_chain_id.clone(),
             level,
@@ -270,7 +270,7 @@ impl ProteinEntity {
     pub fn to_backbone(&self) -> Vec<ResidueBackbone> {
         self.residues
             .iter()
-            .filter_map(|r| extract_backbone_from_residue(&self.atoms, r))
+            .filter_map(|r| extract_backbone_from_residue(self, r))
             .collect()
     }
 
@@ -291,7 +291,7 @@ impl ProteinEntity {
         self.residues
             .iter()
             .map(|r| {
-                if residue_has_backbone(&self.atoms, r) {
+                if residue_has_backbone(self, r) {
                     next.next().copied().unwrap_or(SSType::Coil)
                 } else {
                     SSType::Coil
@@ -318,7 +318,7 @@ impl ProteinEntity {
         let bb: Vec<Option<ResidueBackbone>> = self
             .residues
             .iter()
-            .map(|r| extract_backbone_from_residue(&self.atoms, r))
+            .map(|r| extract_backbone_from_residue(self, r))
             .collect();
         let breaks: std::collections::HashSet<usize> =
             self.segment_breaks.iter().copied().collect();
@@ -357,9 +357,7 @@ impl ProteinEntity {
                 let range = self.segment_range(seg_idx);
                 let mut positions = Vec::with_capacity(range.len() * 3);
                 for r in &self.residues[range] {
-                    if let Some(bb) =
-                        extract_backbone_from_residue(&self.atoms, r)
-                    {
+                    if let Some(bb) = extract_backbone_from_residue(self, r) {
                         positions.push(bb.n);
                         positions.push(bb.ca);
                         positions.push(bb.c);
@@ -378,8 +376,8 @@ impl Entity for ProteinEntity {
     fn molecule_type(&self) -> MoleculeType {
         MoleculeType::Protein
     }
-    fn atoms(&self) -> &[Atom] {
-        &self.atoms
+    fn columns(&self) -> &AtomColumns {
+        &self.columns
     }
     fn bonds(&self) -> &[CovalentBond] {
         &self.bonds
@@ -434,7 +432,7 @@ fn build_protein(
     let bonds = build_protein_bonds(id, &atoms, &residues, &segment_breaks);
     ProteinEntity {
         id,
-        atoms,
+        columns: AtomColumns::from_atoms(atoms),
         residues,
         segment_breaks,
         bonds,
@@ -696,16 +694,15 @@ fn compute_segment_breaks(residues: &[Residue], atoms: &[Atom]) -> Vec<usize> {
 }
 
 /// Find a backbone atom by trimmed string name.
-fn find_atom_by_name(
-    atoms: &[Atom],
+fn find_atom_by_name<E: Entity>(
+    entity: &E,
     residue: &Residue,
     name: &str,
 ) -> Option<Vec3> {
     for idx in residue.atom_range.clone() {
-        let atom_name =
-            std::str::from_utf8(&atoms[idx].name).unwrap_or("").trim();
+        let a = entity.atom(idx);
+        let atom_name = std::str::from_utf8(&a.name).unwrap_or("").trim();
         if atom_name == name {
-            let a = &atoms[idx];
             return Some(a.position);
         }
     }
@@ -716,16 +713,16 @@ fn find_atom_by_name(
 ///
 /// Returns `None` for exactly the residues [`residue_has_backbone`] rejects:
 /// the two share one notion of a complete backbone (N, CA, C, and O or OXT).
-fn extract_backbone_from_residue(
-    atoms: &[Atom],
+fn extract_backbone_from_residue<E: Entity>(
+    entity: &E,
     residue: &Residue,
 ) -> Option<ResidueBackbone> {
     Some(ResidueBackbone {
-        n: find_atom_by_name(atoms, residue, "N")?,
-        ca: find_atom_by_name(atoms, residue, "CA")?,
-        c: find_atom_by_name(atoms, residue, "C")?,
-        o: find_atom_by_name(atoms, residue, "O")
-            .or_else(|| find_atom_by_name(atoms, residue, "OXT"))?,
+        n: find_atom_by_name(entity, residue, "N")?,
+        ca: find_atom_by_name(entity, residue, "CA")?,
+        c: find_atom_by_name(entity, residue, "C")?,
+        o: find_atom_by_name(entity, residue, "O")
+            .or_else(|| find_atom_by_name(entity, residue, "OXT"))?,
     })
 }
 
@@ -733,8 +730,11 @@ fn extract_backbone_from_residue(
 /// (or its OXT terminal substitute). The single source for which residues
 /// receive a secondary-structure assignment; [`extract_backbone_from_residue`]
 /// returns `Some` for exactly these residues.
-pub(crate) fn residue_has_backbone(atoms: &[Atom], residue: &Residue) -> bool {
-    extract_backbone_from_residue(atoms, residue).is_some()
+pub(crate) fn residue_has_backbone<E: Entity>(
+    entity: &E,
+    residue: &Residue,
+) -> bool {
+    extract_backbone_from_residue(entity, residue).is_some()
 }
 
 /// Signed dihedral angle about the `p1->p2` bond for the four points

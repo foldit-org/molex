@@ -139,13 +139,14 @@ fn first_protein(es: &[MoleculeEntity]) -> &MoleculeEntity {
         .expect("expected at least one protein entity")
 }
 
-fn find_atom_by_name<'a>(
-    entity: &'a MoleculeEntity,
+fn find_atom_by_name(
+    entity: &MoleculeEntity,
     name: &str,
-) -> Option<&'a molex::Atom> {
+) -> Option<molex::Atom> {
     entity
-        .atom_set()
-        .iter()
+        .columns()
+        .to_atoms()
+        .into_iter()
         .find(|a| std::str::from_utf8(&a.name).unwrap_or("").trim() == name)
 }
 
@@ -399,8 +400,8 @@ fn altloc_a_wins_over_b_by_occupancy() {
         ),
     ]);
     let entities = bcif_to_entities(&bcif).unwrap();
-    let cb_atoms: Vec<_> = first_protein(&entities)
-        .atom_set()
+    let atoms = first_protein(&entities).columns().to_atoms();
+    let cb_atoms: Vec<_> = atoms
         .iter()
         .filter(|a| std::str::from_utf8(&a.name).unwrap().trim() == "CB")
         .collect();
@@ -460,7 +461,9 @@ fn formal_charge_field_populated() {
     let entities = bcif_to_entities(&bcif).unwrap();
     let charges: Vec<i8> = entities
         .iter()
-        .flat_map(|e| e.atom_set().iter().map(|a| a.formal_charge))
+        .flat_map(|e| {
+            e.columns().to_atoms().into_iter().map(|a| a.formal_charge)
+        })
         .collect();
     assert!(charges.contains(&2));
     assert!(charges.contains(&-1));
@@ -594,7 +597,7 @@ fn null_mask_on_occupancy_defaults_to_one() {
         ),
     ]);
     let entities = bcif_to_entities(&bcif).unwrap();
-    for a in first_protein(&entities).atom_set() {
+    for a in first_protein(&entities).columns().to_atoms() {
         assert!(
             (a.occupancy - 1.0).abs() < 1e-6,
             "occupancy not defaulted: {}",
@@ -696,7 +699,7 @@ fn element_falls_back_to_atom_name_when_type_symbol_missing() {
         cat,
     ]);
     let entities = bcif_to_entities(&bcif).unwrap();
-    let atoms = first_protein(&entities).atom_set();
+    let atoms = first_protein(&entities).columns().to_atoms();
     assert_eq!(atoms[0].element, Element::N);
     assert_eq!(atoms[1].element, Element::C);
     assert_eq!(atoms[3].element, Element::O);
@@ -775,7 +778,7 @@ fn delta_integer_packing_reconstructs_coords_exactly() {
     ]);
 
     let entities = bcif_to_entities(&bcif).unwrap();
-    let atoms = first_protein(&entities).atom_set();
+    let atoms = first_protein(&entities).columns().to_atoms();
     // Missing-atom completion appends sidechain/hydrogen atoms after the
     // parsed ones; the codec round-trip only governs the four parsed
     // coordinates, so compare just that prefix.
@@ -806,7 +809,7 @@ fn fixed_point_reconstructs_coords_within_quantization() {
     ]);
 
     let entities = bcif_to_entities(&bcif).unwrap();
-    let atoms = first_protein(&entities).atom_set();
+    let atoms = first_protein(&entities).columns().to_atoms();
     // Tolerance: half a quantization step from rounding, plus f32 epsilon at
     // the largest magnitude in the fixture.
     let tol = (0.5 / factor) as f32 + 1e-3;
@@ -841,7 +844,7 @@ fn interval_quantization_lands_in_expected_buckets() {
     ]);
 
     let entities = bcif_to_entities(&bcif).unwrap();
-    let atoms = first_protein(&entities).atom_set();
+    let atoms = first_protein(&entities).columns().to_atoms();
     for (a, &v) in atoms.iter().zip(raw.iter()) {
         let expected_idx = ((v - min) / step).round();
         let expected = (expected_idx * step + min) as f32;

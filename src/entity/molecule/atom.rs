@@ -61,6 +61,140 @@ impl<'a> AtomRef<'a> {
     }
 }
 
+/// Struct-of-arrays storage for an entity's atoms.
+///
+/// Each [`Atom`] field becomes a parallel column. The columns are kept the
+/// same length and in the same order, so index `i` addresses one atom
+/// across all six.
+///
+/// Built from a `Vec<Atom>` via [`AtomColumns::from_atoms`]; that transpose
+/// is the bit-identical contract — the column at index `i` carries exactly
+/// the bytes the `i`-th `Atom` held. Single atoms are read back with
+/// [`AtomColumns::gather`] (by value) or [`AtomColumns::atom_ref`]
+/// (borrowed cells).
+#[derive(Debug, Clone)]
+pub struct AtomColumns {
+    /// 3D positions in angstroms.
+    pub position: Vec<Vec3>,
+    /// Crystallographic occupancies (0.0 to 1.0).
+    pub occupancy: Vec<f32>,
+    /// Temperature factors (B-factor) in square angstroms.
+    pub b_factor: Vec<f32>,
+    /// Chemical elements.
+    pub element: Vec<Element>,
+    /// PDB-style 4-character atom names.
+    pub name: Vec<[u8; 4]>,
+    /// Formal charges (signed). 0 means neutral.
+    pub formal_charge: Vec<i8>,
+}
+
+impl AtomColumns {
+    /// Number of atoms (the shared column length).
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.position.len()
+    }
+
+    /// Whether this column set holds no atoms.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.position.is_empty()
+    }
+
+    /// Transpose a `Vec<Atom>` into parallel columns, field by field in
+    /// struct-declaration order. The bit-identical boundary: every column
+    /// cell carries the matching `Atom` field verbatim.
+    #[must_use]
+    pub fn from_atoms(atoms: Vec<Atom>) -> Self {
+        let mut out = Self {
+            position: Vec::with_capacity(atoms.len()),
+            occupancy: Vec::with_capacity(atoms.len()),
+            b_factor: Vec::with_capacity(atoms.len()),
+            element: Vec::with_capacity(atoms.len()),
+            name: Vec::with_capacity(atoms.len()),
+            formal_charge: Vec::with_capacity(atoms.len()),
+        };
+        for atom in atoms {
+            out.position.push(atom.position);
+            out.occupancy.push(atom.occupancy);
+            out.b_factor.push(atom.b_factor);
+            out.element.push(atom.element);
+            out.name.push(atom.name);
+            out.formal_charge.push(atom.formal_charge);
+        }
+        out
+    }
+
+    /// Gather every atom back into a `Vec<Atom>`, the inverse of
+    /// [`Self::from_atoms`]. Reconstructs each `Atom` in struct-field order.
+    #[must_use]
+    pub fn to_atoms(&self) -> Vec<Atom> {
+        (0..self.len()).map(|i| self.gather(i)).collect()
+    }
+
+    /// Gather one atom by index into a by-value [`Atom`]. Panics if `i` is
+    /// out of bounds, matching slice indexing.
+    #[must_use]
+    pub fn gather(&self, i: usize) -> Atom {
+        Atom {
+            position: self.position[i],
+            occupancy: self.occupancy[i],
+            b_factor: self.b_factor[i],
+            element: self.element[i],
+            name: self.name[i],
+            formal_charge: self.formal_charge[i],
+        }
+    }
+
+    /// Borrow one atom's six cells as an [`AtomRef`]. Panics if `i` is out
+    /// of bounds.
+    #[must_use]
+    pub fn atom_ref(&self, i: usize) -> AtomRef<'_> {
+        AtomRef {
+            position: &self.position[i],
+            occupancy: &self.occupancy[i],
+            b_factor: &self.b_factor[i],
+            element: &self.element[i],
+            name: &self.name[i],
+            formal_charge: &self.formal_charge[i],
+        }
+    }
+
+    /// Replace `range` across all six columns with `atoms`, in lockstep.
+    /// Equivalent to splicing the same range of a `Vec<Atom>` and re-
+    /// transposing: each column drops its `range` cells and inserts the
+    /// matching field of every atom, preserving element order.
+    ///
+    /// Each `Vec::splice` returns a drain iterator that performs the
+    /// replacement only once consumed/dropped, so each is dropped eagerly.
+    pub fn splice(&mut self, range: std::ops::Range<usize>, atoms: &[Atom]) {
+        drop(
+            self.position
+                .splice(range.clone(), atoms.iter().map(|a| a.position)),
+        );
+        drop(
+            self.occupancy
+                .splice(range.clone(), atoms.iter().map(|a| a.occupancy)),
+        );
+        drop(
+            self.b_factor
+                .splice(range.clone(), atoms.iter().map(|a| a.b_factor)),
+        );
+        drop(
+            self.element
+                .splice(range.clone(), atoms.iter().map(|a| a.element)),
+        );
+        drop(
+            self.name
+                .splice(range.clone(), atoms.iter().map(|a| a.name)),
+        );
+        drop(
+            self.formal_charge
+                .splice(range, atoms.iter().map(|a| a.formal_charge)),
+        );
+    }
+}
+
 /// Pack an atom-name string into the 4-byte, left-justified, space-padded
 /// buffer every parser uses for [`Atom::name`] (PDB-column convention).
 /// Inputs longer than 4 bytes are truncated to the first 4.

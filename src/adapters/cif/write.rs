@@ -12,8 +12,9 @@ use std::collections::HashSet;
 use std::fmt::Write as _;
 
 use crate::assembly::Assembly;
-use crate::entity::molecule::atom::{Atom, AtomRef};
+use crate::entity::molecule::atom::{AtomColumns, AtomRef};
 use crate::entity::molecule::polymer::Residue;
+use crate::entity::molecule::traits::Entity;
 use crate::entity::molecule::MoleculeEntity;
 
 /// Emit an `Assembly` as an mmCIF string with a single `_atom_site` loop.
@@ -131,10 +132,22 @@ fn write_entity(
 ) {
     match entity {
         MoleculeEntity::Protein(e) => {
-            write_polymer(&e.atoms, &e.residues, &e.pdb_chain_id, serial, out);
+            write_polymer(
+                e.columns(),
+                &e.residues,
+                &e.pdb_chain_id,
+                serial,
+                out,
+            );
         }
         MoleculeEntity::NucleicAcid(e) => {
-            write_polymer(&e.atoms, &e.residues, &e.pdb_chain_id, serial, out);
+            write_polymer(
+                e.columns(),
+                &e.residues,
+                &e.pdb_chain_id,
+                serial,
+                out,
+            );
         }
         MoleculeEntity::SmallMolecule(e) => {
             // One molecule => one residue: all atoms share seq id 1.
@@ -144,26 +157,28 @@ fn write_entity(
                 chain: &chain,
                 seq: 1,
             };
-            write_nonpolymer(&e.atoms, &ctx, serial, out);
+            for atom in e.atoms_iter() {
+                write_nonpolymer_row(atom, &ctx, serial, out);
+            }
         }
         MoleculeEntity::Bulk(e) => {
             // Many identical molecules (water/solvent): one residue per atom
             // so each survives the reader's distinct-residue keying.
             let chain = chains.synth_label();
-            for (i, atom) in e.atoms.iter().enumerate() {
+            for (i, atom) in e.atoms_iter().enumerate() {
                 let ctx = NonPolymerCtx {
                     res_name: e.residue_name,
                     chain: &chain,
                     seq: i32::try_from(i + 1).unwrap_or(i32::MAX),
                 };
-                write_nonpolymer(std::slice::from_ref(atom), &ctx, serial, out);
+                write_nonpolymer_row(atom, &ctx, serial, out);
             }
         }
     }
 }
 
 fn write_polymer(
-    atoms: &[Atom],
+    columns: &AtomColumns,
     residues: &[Residue],
     chain: &str,
     serial: &mut usize,
@@ -183,7 +198,7 @@ fn write_polymer(
                 &RowFields {
                     group: "ATOM",
                     serial: *serial,
-                    atom: AtomRef::from_atom(&atoms[idx]),
+                    atom: columns.atom_ref(idx),
                     res_name,
                     chain,
                     label_seq: &residue.label_seq_id.to_string(),
@@ -201,31 +216,28 @@ struct NonPolymerCtx<'a> {
     seq: i32,
 }
 
-fn write_nonpolymer(
-    atoms: &[Atom],
+fn write_nonpolymer_row(
+    atom: AtomRef<'_>,
     ctx: &NonPolymerCtx<'_>,
     serial: &mut usize,
     out: &mut String,
 ) {
-    let res_name = bytes3_to_str(&ctx.res_name);
-    for atom in atoms {
-        *serial += 1;
-        write_row(
-            out,
-            &RowFields {
-                group: "HETATM",
-                serial: *serial,
-                atom: AtomRef::from_atom(atom),
-                res_name,
-                chain: ctx.chain,
-                // Non-polymer rows carry no structural seq id; the reader
-                // falls back to auth_seq_id for the distinct-residue key.
-                label_seq: ".",
-                ins_code: ".",
-                auth_seq: ctx.seq,
-            },
-        );
-    }
+    *serial += 1;
+    write_row(
+        out,
+        &RowFields {
+            group: "HETATM",
+            serial: *serial,
+            atom,
+            res_name: bytes3_to_str(&ctx.res_name),
+            chain: ctx.chain,
+            // Non-polymer rows carry no structural seq id; the reader
+            // falls back to auth_seq_id for the distinct-residue key.
+            label_seq: ".",
+            ins_code: ".",
+            auth_seq: ctx.seq,
+        },
+    );
 }
 
 struct RowFields<'a> {
@@ -311,6 +323,7 @@ mod tests {
     use crate::adapters::cif::mmcif_str_to_entities;
     use crate::assembly::Assembly;
     use crate::element::Element;
+    use crate::entity::molecule::atom::Atom;
     use crate::entity::molecule::bulk::BulkEntity;
     use crate::entity::molecule::id::EntityIdAllocator;
     use crate::entity::molecule::protein::ProteinEntity;

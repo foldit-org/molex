@@ -92,13 +92,14 @@ fn label_chain_ids_kept_distinct() {
     );
 }
 
-fn find_atom_by_name<'a>(
-    entity: &'a MoleculeEntity,
+fn find_atom_by_name(
+    entity: &MoleculeEntity,
     name: &str,
-) -> Option<&'a molex::Atom> {
+) -> Option<molex::Atom> {
     entity
-        .atom_set()
-        .iter()
+        .columns()
+        .to_atoms()
+        .into_iter()
         .find(|a| std::str::from_utf8(&a.name).unwrap_or("").trim() == name)
 }
 
@@ -133,8 +134,8 @@ fn all_models_returns_three_buckets() {
 fn altloc_a_wins_over_b_by_occupancy() {
     let entities = load("altloc_AB.cif");
     let protein_entity = first_protein(&entities);
-    let cb_atoms: Vec<_> = protein_entity
-        .atom_set()
+    let atoms = protein_entity.columns().to_atoms();
+    let cb_atoms: Vec<_> = atoms
         .iter()
         .filter(|a| std::str::from_utf8(&a.name).unwrap().trim() == "CB")
         .collect();
@@ -158,7 +159,9 @@ fn formal_charge_field_populated() {
     let entities = load("formal_charge.cif");
     let charges: Vec<i8> = entities
         .iter()
-        .flat_map(|e| e.atom_set().iter().map(|a| a.formal_charge))
+        .flat_map(|e| {
+            e.columns().to_atoms().into_iter().map(|a| a.formal_charge)
+        })
         .collect();
     assert!(charges.contains(&2));
     assert!(charges.contains(&-1));
@@ -199,7 +202,8 @@ fn fast_path_quotes_with_embedded_apostrophe_parse_cleanly() {
         .find(|e| e.molecule_type() == MoleculeType::RNA)
         .unwrap();
     let atom_names: Vec<String> = na_entity
-        .atom_set()
+        .columns()
+        .to_atoms()
         .iter()
         .map(|a| std::str::from_utf8(&a.name).unwrap().trim().to_owned())
         .collect();
@@ -217,7 +221,8 @@ fn fast_path_semicolon_text_field_does_not_desync() {
     // missing-atom completion pass then appends sidechain/hydrogen atoms,
     // so assert on the parsed prefix rather than the total atom count.
     let names: Vec<String> = protein_entity
-        .atom_set()
+        .columns()
+        .to_atoms()
         .iter()
         .take(4)
         .map(|a| std::str::from_utf8(&a.name).unwrap().trim().to_owned())
@@ -230,7 +235,7 @@ fn dom_path_dot_in_type_symbol_falls_back_to_atom_name() {
     use molex::Element;
     let entities = load("dom_dot_in_type_symbol.cif");
     let protein_entity = first_protein(&entities);
-    let atoms = protein_entity.atom_set();
+    let atoms = protein_entity.columns().to_atoms();
     assert_eq!(atoms[0].element, Element::N);
     assert_eq!(atoms[1].element, Element::C);
     assert_eq!(atoms[2].element, Element::C);

@@ -142,7 +142,7 @@ fn mutation_plus_unchanged_residue_move_round_trips() {
 fn variant_change_yields_set_variants_and_round_trips() {
     let a = protein(&[("ALA", ala_atoms(0.0))]);
     let mut b = protein(&[("ALA", ala_atoms(0.0))]);
-    if let Some((_, residues)) = b.polymer_parts_mut() {
+    if let Some((_, residues)) = b.polymer_columns_mut() {
         residues[0].variants =
             vec![VariantTag::Protonation(ProtonationState::HisEpsilon)];
     }

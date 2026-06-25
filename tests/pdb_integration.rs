@@ -25,7 +25,8 @@ fn load(name: &str) -> Vec<MoleculeEntity> {
 
 fn atom_names(entity: &MoleculeEntity) -> Vec<String> {
     entity
-        .atom_set()
+        .columns()
+        .to_atoms()
         .iter()
         .map(|a| {
             std::str::from_utf8(&a.name)
@@ -58,8 +59,8 @@ fn altloc_a_beats_b_when_occupancy_is_higher() {
     let names = atom_names(protein);
     let cb_count = names.iter().filter(|n| *n == "CB").count();
     assert_eq!(cb_count, 1);
-    let cb_atom = protein
-        .atom_set()
+    let atoms = protein.columns().to_atoms();
+    let cb_atom = atoms
         .iter()
         .find(|a| std::str::from_utf8(&a.name).unwrap_or("").trim() == "CB")
         .unwrap();
@@ -73,8 +74,8 @@ fn altloc_numeric_picks_higher_occupancy() {
         .iter()
         .find(|e| e.molecule_type() == MoleculeType::Protein)
         .unwrap();
-    let cb_atom = protein
-        .atom_set()
+    let atoms = protein.columns().to_atoms();
+    let cb_atom = atoms
         .iter()
         .find(|a| std::str::from_utf8(&a.name).unwrap_or("").trim() == "CB")
         .unwrap();
@@ -89,8 +90,8 @@ fn altloc_ties_break_alphabetically() {
         .iter()
         .find(|e| e.molecule_type() == MoleculeType::Protein)
         .unwrap();
-    let cb_atom = protein
-        .atom_set()
+    let atoms = protein.columns().to_atoms();
+    let cb_atom = atoms
         .iter()
         .find(|a| std::str::from_utf8(&a.name).unwrap_or("").trim() == "CB")
         .unwrap();
@@ -155,7 +156,7 @@ fn no_element_column_falls_back_to_atom_name_inference() {
         .iter()
         .find(|e| e.molecule_type() == MoleculeType::Protein)
         .unwrap();
-    let atoms = protein.atom_set();
+    let atoms = protein.columns().to_atoms();
     assert_eq!(atoms[0].element, Element::N);
     assert_eq!(atoms[1].element, Element::C);
     assert_eq!(atoms[2].element, Element::C);
@@ -169,7 +170,7 @@ fn alphafold_style_pldbt_in_bfactor_column() {
         .iter()
         .find(|e| e.molecule_type() == MoleculeType::Protein)
         .unwrap();
-    let atoms = protein.atom_set();
+    let atoms = protein.columns().to_atoms();
     assert!(atoms[0].b_factor > 50.0);
     assert!(atoms[0].b_factor < 100.0);
 }

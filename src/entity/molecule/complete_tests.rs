@@ -13,6 +13,7 @@ use crate::element::Element;
 use crate::entity::molecule::id::EntityIdAllocator;
 use crate::entity::molecule::nucleic_acid::NAEntity;
 use crate::entity::molecule::protein::ProteinEntity;
+use crate::entity::molecule::traits::Entity;
 use crate::entity::molecule::MoleculeType;
 
 fn atom_at(name: &str, element: Element, p: Vec3) -> Atom {
@@ -157,17 +158,18 @@ fn backbone_only_alanine_builds_cb_near_ca() {
     let protein = build_protein("ALA", atoms);
     assert_eq!(protein.residues.len(), 1, "ALA must survive completion");
     let r = &protein.residues[0];
-    let names = residue_atom_names(&protein.atoms, r);
+    let p_atoms = protein.columns().to_atoms();
+    let names = residue_atom_names(&p_atoms, r);
     assert!(names.contains(&"CB".to_owned()), "CB should be built");
 
     let ca = r.atom_range.start + 1; // canonical CA offset
-    let ca_pos = protein.atoms[ca].position;
+    let ca_pos = p_atoms[ca].position;
     let cb_idx = r
         .atom_range
         .clone()
-        .find(|&i| trimmed_atom_name(&protein.atoms[i].name) == b"CB")
+        .find(|&i| trimmed_atom_name(&p_atoms[i].name) == b"CB")
         .unwrap();
-    let cb_pos = protein.atoms[cb_idx].position;
+    let cb_pos = p_atoms[cb_idx].position;
     assert!(cb_pos.is_finite(), "CB position must be finite");
     let d = (cb_pos - ca_pos).length();
     assert!(
@@ -326,9 +328,10 @@ fn already_complete_residue_gains_no_atoms() {
     atoms.push(atom_at("OXT", Element::O, Vec3::new(3.3, 1.4, 0.0)));
     let protein = build_protein("ALA", atoms);
     let r = &protein.residues[0];
+    let p_atoms = protein.columns().to_atoms();
     // The six heavy atoms survive (N, CA, C, O, CB, OXT); every input
     // hydrogen is dropped under heavy-only.
-    let names = residue_atom_names(&protein.atoms, r);
+    let names = residue_atom_names(&p_atoms, r);
     let kept: BTreeSet<&String> = names.iter().collect();
     let expected: BTreeSet<String> = ["N", "CA", "C", "O", "CB", "OXT"]
         .into_iter()
@@ -342,7 +345,7 @@ fn already_complete_residue_gains_no_atoms() {
     assert!(
         r.atom_range
             .clone()
-            .all(|i| protein.atoms[i].element != Element::H),
+            .all(|i| p_atoms[i].element != Element::H),
         "no hydrogen survives heavy-only ingest"
     );
     // No duplicated names within the residue.
@@ -379,10 +382,11 @@ fn protonated_input_strips_h_heavy_only_keeps_h_all_atom() {
         Completion::Heavy,
     );
     let r = &heavy.residues[0];
+    let heavy_atoms = heavy.columns().to_atoms();
     assert!(
         r.atom_range
             .clone()
-            .all(|i| heavy.atoms[i].element != Element::H),
+            .all(|i| heavy_atoms[i].element != Element::H),
         "heavy-only ingest strips every input hydrogen"
     );
 
@@ -394,10 +398,11 @@ fn protonated_input_strips_h_heavy_only_keeps_h_all_atom() {
         Completion::AllAtom,
     );
     let r = &all.residues[0];
+    let all_atoms = all.columns().to_atoms();
     assert!(
         r.atom_range
             .clone()
-            .any(|i| all.atoms[i].element == Element::H),
+            .any(|i| all_atoms[i].element == Element::H),
         "all-atom keeps/places hydrogens for the same input"
     );
 }
@@ -524,8 +529,9 @@ fn na_completion_fills_dna_base_and_keeps_present_atoms() {
     );
     assert_eq!(na.residues.len(), 1, "DA must survive completion");
     let r = &na.residues[0];
+    let na_atoms = na.columns().to_atoms();
     let names: BTreeSet<String> =
-        residue_atom_names(&na.atoms, r).into_iter().collect();
+        residue_atom_names(&na_atoms, r).into_iter().collect();
     // Present sugar/phosphate atoms preserved.
     for kept in ["P", "O5'", "C5'", "C4'", "C3'", "O3'", "C1'", "O4'"] {
         assert!(names.contains(kept), "lost present atom {kept}");

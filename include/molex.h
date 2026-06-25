@@ -295,11 +295,6 @@ typedef int32_t molex_EntityKind;
 typedef struct molex_Assembly molex_Assembly;
 
 /**
- * Non-owning view of a single atom within an entity.
- */
-typedef struct molex_Atom molex_Atom;
-
-/**
  * Owned, ordered list of typed Assembly edits.
  *
  * Free with [`molex_edits_free`]. Push typed entries via the
@@ -369,6 +364,24 @@ typedef struct {
    */
   uintptr_t str_len;
 } molex_Variant;
+
+/**
+ * By-value handle locating a single atom within an entity's columns.
+ *
+ * Carries a borrowed `entity` pointer plus the atom's `index`. A null
+ * `entity` is the invalid/out-of-bounds sentinel; the `molex_atom_*`
+ * accessors return 0/null for it.
+ */
+typedef struct {
+  /**
+   * Entity the atom belongs to (borrowed; null means invalid).
+   */
+  const molex_Entity *entity;
+  /**
+   * Atom index into the entity's columns.
+   */
+  uintptr_t index;
+} molex_Atom;
 
 #ifdef __cplusplus
 extern "C" {
@@ -931,12 +944,13 @@ uintptr_t molex_entity_num_atoms(const molex_Entity *entity)
 ;
 
 /**
- * Borrow a non-owning view of the i-th atom in this entity's flat atom
- * list. Returns null when `entity` is null or `i` is out of bounds.
+ * A by-value handle locating the i-th atom in this entity's flat atom
+ * list. Returns the null-`entity` sentinel when `entity` is null or `i`
+ * is out of bounds.
  */
 
-const molex_Atom *molex_entity_atom(const molex_Entity *entity,
-                                    uintptr_t i)
+molex_Atom molex_entity_atom(const molex_Entity *entity,
+                             uintptr_t i)
 ;
 
 /**
@@ -996,14 +1010,14 @@ uintptr_t molex_entity_residue_num_atoms(const molex_Entity *entity,
 ;
 
 /**
- * Borrow a non-owning view of the j-th atom in the i-th residue of
- * this entity. Returns null on any out-of-bounds access or null
- * `entity` argument.
+ * A by-value handle locating the j-th atom in the i-th residue of this
+ * entity. Returns the null-`entity` sentinel on any out-of-bounds access
+ * or null `entity` argument.
  */
 
-const molex_Atom *molex_entity_residue_atom(const molex_Entity *entity,
-                                            uintptr_t residue_idx,
-                                            uintptr_t atom_idx)
+molex_Atom molex_entity_residue_atom(const molex_Entity *entity,
+                                     uintptr_t residue_idx,
+                                     uintptr_t atom_idx)
 ;
 
 /**
@@ -1044,53 +1058,56 @@ uint8_t molex_residue_ins_code(const molex_Residue *residue)
 
 /**
  * Pointer to this atom's 4-byte PDB-style name (e.g. b"CA  "). Writes
- * 4 to `out_len` on success. Returns null and writes 0 if `atom` is null.
+ * 4 to `out_len` on success. Returns null and writes 0 if the handle is
+ * invalid.
  *
  * The buffer is space-padded; callers that want a trimmed atom name
  * should strip ASCII spaces.
  */
 
-const uint8_t *molex_atom_name(const molex_Atom *atom,
+const uint8_t *molex_atom_name(molex_Atom atom,
                                uintptr_t *out_len)
 ;
 
 /**
  * Atomic number for this atom's element, or 0 for
- * [`Element::Unknown`] / a null `atom`.
+ * [`Element::Unknown`] / an invalid handle.
  */
 
-uint8_t molex_atom_atomic_number(const molex_Atom *atom)
+uint8_t molex_atom_atomic_number(molex_Atom atom)
 ;
 
 /**
  * Write this atom's `(x, y, z)` position into the 3-float output array.
- * No-op if either pointer is null.
+ * No-op if `out_xyz` is null or the handle is invalid.
  */
 
-void molex_atom_position(const molex_Atom *atom,
+void molex_atom_position(molex_Atom atom,
                          float *out_xyz)
 ;
 
 /**
- * Crystallographic occupancy (0.0 to 1.0). Returns 0 if `atom` is null.
+ * Crystallographic occupancy (0.0 to 1.0). Returns 0 if the handle is
+ * invalid.
  */
 
-float molex_atom_occupancy(const molex_Atom *atom)
+float molex_atom_occupancy(molex_Atom atom)
 ;
 
 /**
- * Temperature factor (B-factor) in square angstroms. Returns 0 if
- * `atom` is null.
+ * Temperature factor (B-factor) in square angstroms. Returns 0 if the
+ * handle is invalid.
  */
 
-float molex_atom_b_factor(const molex_Atom *atom)
+float molex_atom_b_factor(molex_Atom atom)
 ;
 
 /**
- * Signed formal charge (0 means neutral). Returns 0 if `atom` is null.
+ * Signed formal charge (0 means neutral). Returns 0 if the handle is
+ * invalid.
  */
 
-int8_t molex_atom_formal_charge(const molex_Atom *atom)
+int8_t molex_atom_formal_charge(molex_Atom atom)
 ;
 
 #ifdef __cplusplus

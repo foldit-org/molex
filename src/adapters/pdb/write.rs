@@ -8,8 +8,9 @@ use super::parse::trim_ascii;
 use super::refuse::validate_writable;
 use crate::assembly::Assembly;
 use crate::element::Element;
-use crate::entity::molecule::atom::{Atom, AtomRef};
+use crate::entity::molecule::atom::{AtomColumns, AtomRef};
 use crate::entity::molecule::polymer::Residue;
+use crate::entity::molecule::traits::Entity;
 use crate::entity::molecule::MoleculeEntity;
 use crate::ops::error::AdapterError;
 
@@ -58,21 +59,21 @@ fn write_entity_atoms(
     match entity {
         MoleculeEntity::Protein(e) => {
             let chain = chain_id_byte(&e.pdb_chain_id);
-            write_polymer_atoms(&e.atoms, &e.residues, chain, serial, out);
+            write_polymer_atoms(e.columns(), &e.residues, chain, serial, out);
             write_polymer_terminator(&e.residues, chain, serial, out);
         }
         MoleculeEntity::NucleicAcid(e) => {
             let chain = chain_id_byte(&e.pdb_chain_id);
-            write_polymer_atoms(&e.atoms, &e.residues, chain, serial, out);
+            write_polymer_atoms(e.columns(), &e.residues, chain, serial, out);
             write_polymer_terminator(&e.residues, chain, serial, out);
         }
         MoleculeEntity::SmallMolecule(e) => {
-            for atom in &e.atoms {
+            for atom in e.atoms_iter() {
                 *serial += 1;
                 write_atom_line(
                     "HETATM",
                     *serial,
-                    AtomRef::from_atom(atom),
+                    atom,
                     ResidueCtx {
                         chain_id: b' ',
                         res_name: e.residue_name,
@@ -89,12 +90,12 @@ fn write_entity_atoms(
                 clippy::cast_possible_wrap,
                 reason = "atom count fits in i32 for valid structures"
             )]
-            for (i, atom) in e.atoms.iter().enumerate() {
+            for (i, atom) in e.atoms_iter().enumerate() {
                 *serial += 1;
                 write_atom_line(
                     "HETATM",
                     *serial,
-                    AtomRef::from_atom(atom),
+                    atom,
                     ResidueCtx {
                         chain_id: b' ',
                         res_name: e.residue_name,
@@ -120,7 +121,7 @@ fn chain_id_byte(chain_id: &str) -> u8 {
 }
 
 fn write_polymer_atoms(
-    atoms: &[Atom],
+    columns: &AtomColumns,
     residues: &[Residue],
     chain_id: u8,
     serial: &mut usize,
@@ -132,7 +133,7 @@ fn write_polymer_atoms(
             write_atom_line(
                 "ATOM  ",
                 *serial,
-                AtomRef::from_atom(&atoms[idx]),
+                columns.atom_ref(idx),
                 ResidueCtx {
                     chain_id,
                     res_name: residue.name,

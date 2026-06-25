@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use glam::Vec3;
 
-use super::atom::Atom;
+use super::atom::{Atom, AtomColumns};
 use super::complete::{complete_na_residues, keep_hydrogens, Completion};
 use super::id::EntityId;
 use super::protein::trimmed_atom_name;
@@ -38,15 +38,15 @@ pub struct NAEntity {
     pub id: EntityId,
     /// Molecule type (DNA or RNA).
     pub na_type: MoleculeType,
-    /// All atoms in this entity.
+    /// All atoms in this entity, stored as parallel columns.
     ///
     /// After [`NAEntity::new`], atoms belonging to a kept residue are
     /// laid out in canonical order: `P, O5', C5', C4', C3', O3',
     /// base heavy..., hydrogens...`. A free 5'-OH terminal residue omits
     /// the leading `P` (its backbone starts at `O5'`). Atoms of dropped
-    /// residues remain in `atoms` but are not referenced by any
+    /// residues remain in `columns` but are not referenced by any
     /// `Residue::atom_range`.
-    pub atoms: Vec<Atom>,
+    pub columns: AtomColumns,
     /// Ordered residues (nucleotides). Residues missing any required
     /// canonical backbone atom are dropped during construction; `P` is
     /// required except at the 5'-terminal residue.
@@ -70,8 +70,8 @@ impl Entity for NAEntity {
     fn molecule_type(&self) -> MoleculeType {
         self.na_type
     }
-    fn atoms(&self) -> &[Atom] {
-        &self.atoms
+    fn columns(&self) -> &AtomColumns {
+        &self.columns
     }
     fn bonds(&self) -> &[CovalentBond] {
         &self.bonds
@@ -189,7 +189,7 @@ impl NAEntity {
         build_na(
             self.id,
             self.na_type,
-            self.atoms.clone(),
+            self.columns.to_atoms(),
             self.residues.clone(),
             self.pdb_chain_id.clone(),
             level,
@@ -210,11 +210,9 @@ impl NAEntity {
         let mut p_positions = Vec::new();
         for residue in &self.residues {
             for idx in residue.atom_range.clone() {
-                let name = std::str::from_utf8(&self.atoms[idx].name)
-                    .unwrap_or("")
-                    .trim();
+                let a = self.atom(idx);
+                let name = std::str::from_utf8(&a.name).unwrap_or("").trim();
                 if name == "P" {
-                    let a = &self.atoms[idx];
                     p_positions.push(a.position);
                 }
             }
@@ -258,12 +256,12 @@ impl NAEntity {
 
             let mut atom_map: HashMap<String, Vec3> = HashMap::new();
             for idx in residue.atom_range.clone() {
-                let name = std::str::from_utf8(&self.atoms[idx].name)
+                let a = self.atom(idx);
+                let name = std::str::from_utf8(&a.name)
                     .unwrap_or("")
                     .trim()
                     .trim_matches('\0')
                     .to_owned();
-                let a = &self.atoms[idx];
                 let _ = atom_map.insert(name, a.position);
             }
 
@@ -337,7 +335,7 @@ fn build_na(
     NAEntity {
         id,
         na_type,
-        atoms,
+        columns: AtomColumns::from_atoms(atoms),
         residues,
         segment_breaks,
         bonds,

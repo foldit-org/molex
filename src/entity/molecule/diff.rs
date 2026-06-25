@@ -17,9 +17,9 @@
 
 use thiserror::Error;
 
-use super::atom::AtomRef;
+use super::atom::AtomColumns;
 use super::polymer::Residue;
-use super::{Atom, EntityId, MoleculeEntity};
+use super::{EntityId, MoleculeEntity};
 use crate::ops::edit::AssemblyEdit;
 
 /// Why two entities can't be expressed as an [`AssemblyEdit`] delta.
@@ -98,7 +98,7 @@ impl MoleculeEntity {
                 if self.positions() != new.positions() {
                     edits.push(AssemblyEdit::SetEntityCoords {
                         entity,
-                        coords: new.positions(),
+                        coords: new.positions().to_vec(),
                     });
                 }
                 Ok(edits)
@@ -125,15 +125,15 @@ struct ResidueChange {
 fn classify_residue(
     a: &Residue,
     b: &Residue,
-    a_atoms: &[Atom],
-    b_atoms: &[Atom],
+    a_atoms: &AtomColumns,
+    b_atoms: &AtomColumns,
 ) -> ResidueChange {
     let mutated = a.name != b.name
         || a.atom_range.len() != b.atom_range.len()
-        || a_atoms[a.atom_range.clone()]
-            .iter()
-            .map(AtomRef::from_atom)
-            .zip(b_atoms[b.atom_range.clone()].iter().map(AtomRef::from_atom))
+        || a.atom_range
+            .clone()
+            .map(|i| a_atoms.atom_ref(i))
+            .zip(b.atom_range.clone().map(|i| b_atoms.atom_ref(i)))
             .any(|(x, y)| {
                 x.element != y.element
                     || x.name != y.name
@@ -147,10 +147,11 @@ fn classify_residue(
         };
     }
     let variants_changed = a.variants != b.variants;
-    let moved = a_atoms[a.atom_range.clone()]
-        .iter()
-        .map(AtomRef::from_atom)
-        .zip(b_atoms[b.atom_range.clone()].iter().map(AtomRef::from_atom))
+    let moved = a
+        .atom_range
+        .clone()
+        .map(|i| a_atoms.atom_ref(i))
+        .zip(b.atom_range.clone().map(|i| b_atoms.atom_ref(i)))
         .any(|(x, y)| x.position != y.position);
     ResidueChange {
         mutated: false,
@@ -169,8 +170,8 @@ fn diff_polymer(
     let (Some(a_res), Some(b_res)) = (prior.residues(), new.residues()) else {
         return Vec::new();
     };
-    let a_atoms = prior.atom_set();
-    let b_atoms = new.atom_set();
+    let a_atoms = prior.columns();
+    let b_atoms = new.columns();
     let changes: Vec<ResidueChange> = a_res
         .iter()
         .zip(b_res)
@@ -194,7 +195,7 @@ fn diff_polymer(
         if changes.iter().any(|c| c.moved) {
             edits.push(AssemblyEdit::SetEntityCoords {
                 entity,
-                coords: new.positions(),
+                coords: new.positions().to_vec(),
             });
         }
         return edits;
@@ -212,7 +213,7 @@ fn diff_polymer(
                 entity,
                 residue_idx: i,
                 new_name: b_res[i].name,
-                new_atoms: b_atoms[rb].to_vec(),
+                new_atoms: rb.map(|j| b_atoms.gather(j)).collect(),
                 new_variants: b_res[i].variants.clone(),
             });
         } else {
@@ -227,7 +228,7 @@ fn diff_polymer(
                 edits.push(AssemblyEdit::SetResidueCoords {
                     entity,
                     residue_idx: i,
-                    coords: b_atoms[rb].iter().map(|a| a.position).collect(),
+                    coords: b_atoms.position[rb].to_vec(),
                 });
             }
         }

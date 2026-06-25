@@ -182,10 +182,8 @@ fn bench_infer_bonds(c: &mut Criterion, fixtures: &[Fixture]) {
             |b, asm| {
                 b.iter(|| {
                     for entity in asm.entities() {
-                        black_box(infer_bonds(
-                            black_box(entity.atom_set()),
-                            0.45,
-                        ));
+                        let atoms = entity.columns().to_atoms();
+                        black_box(infer_bonds(black_box(&atoms), 0.45));
                     }
                 });
             },

@@ -84,12 +84,18 @@ fn clear_last_error() {
     });
 }
 
-// Opaque handle types
+// Handle types
 //
-// These are zero-sized tag types. Pointers in the FFI are tagged with
-// these but always cast back to the real inner type before dereference.
-// Defining them as 0-sized with no fields stops cbindgen from drilling
-// into the inner Rust types and leaking molex internals into `molex.h`.
+// The assembly / entity / residue handles are zero-sized tag types.
+// Pointers in the FFI are tagged with these but always cast back to the
+// real inner type before dereference. Defining them as 0-sized with no
+// fields stops cbindgen from drilling into the inner Rust types and
+// leaking molex internals into `molex.h`.
+//
+// `molex_Atom` is the exception: with atoms stored as struct-of-arrays
+// columns there is no contiguous `Atom` to borrow, so the atom handle is a
+// by-value `{ entity, index }` pair that locates the atom in its entity's
+// columns. cbindgen does emit its two fields, which is intentional.
 
 /// Owned, top-level assembly handle. Free with [`molex_assembly_free`].
 pub struct molex_Assembly;
@@ -100,8 +106,19 @@ pub struct molex_Entity;
 /// Non-owning view of a single polymer residue within an entity.
 pub struct molex_Residue;
 
-/// Non-owning view of a single atom within an entity.
-pub struct molex_Atom;
+/// By-value handle locating a single atom within an entity's columns.
+///
+/// Carries a borrowed `entity` pointer plus the atom's `index`. A null
+/// `entity` is the invalid/out-of-bounds sentinel; the `molex_atom_*`
+/// accessors return 0/null for it.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct molex_Atom {
+    /// Entity the atom belongs to (borrowed; null means invalid).
+    pub entity: *const molex_Entity,
+    /// Atom index into the entity's columns.
+    pub index: usize,
+}
 
 /// Discriminant for an entity's molecule classification across the FFI
 /// boundary. Stable integer codes so C consumers can pattern-match

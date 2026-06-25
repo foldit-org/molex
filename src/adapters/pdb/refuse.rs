@@ -112,7 +112,7 @@ pub(super) fn validate_writable<E: std::borrow::Borrow<MoleculeEntity>>(
         let res_count = match e {
             MoleculeEntity::Protein(p) => p.residues.len(),
             MoleculeEntity::NucleicAcid(n) => n.residues.len(),
-            MoleculeEntity::Bulk(b) => b.atoms.len(),
+            MoleculeEntity::Bulk(b) => b.columns.len(),
             MoleculeEntity::SmallMolecule(_) => 1,
         };
         if res_count > MAX_PDB_RESIDUES_PER_CHAIN {

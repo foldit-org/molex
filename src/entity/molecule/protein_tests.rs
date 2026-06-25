@@ -106,12 +106,13 @@ fn new_does_not_fabricate_missing_atoms() {
         1,
         "ALA must survive (backbone intact)"
     );
+    let p_atoms = protein.columns().to_atoms();
     assert_eq!(
-        protein.atoms.len(),
+        p_atoms.len(),
         input_count,
         "pure construction must fabricate no atoms"
     );
-    let names = residue_atom_names(&protein.atoms, &protein.residues[0]);
+    let names = residue_atom_names(&p_atoms, &protein.residues[0]);
     assert!(
         !names.iter().any(|n| n == "CB"),
         "CB must not be fabricated on the pure path; got {names:?}"
@@ -132,7 +133,8 @@ fn new_normalized_completes_missing_sidechain_atoms() {
         Completion::Heavy,
     );
     assert_eq!(protein.residues.len(), 1, "ALA must survive completion");
-    let names = residue_atom_names(&protein.atoms, &protein.residues[0]);
+    let p_atoms = protein.columns().to_atoms();
+    let names = residue_atom_names(&p_atoms, &protein.residues[0]);
     assert!(
         names.iter().any(|n| n == "CB"),
         "CB must be fabricated by new_normalized; got {names:?}"
@@ -188,7 +190,8 @@ fn new_normalized_rescues_backbone_incomplete_residue() {
         1,
         "completion must rescue the backbone-incomplete residue"
     );
-    let names = residue_atom_names(&protein.atoms, &protein.residues[0]);
+    let p_atoms = protein.columns().to_atoms();
+    let names = residue_atom_names(&p_atoms, &protein.residues[0]);
     assert!(
         names.iter().any(|n| n == "CA"),
         "the missing backbone CA must be fabricated; got {names:?}"
@@ -204,14 +207,16 @@ fn normalize_completes_surviving_residue_sidechain() {
     let id = EntityIdAllocator::new().allocate();
     let pure = ProteinEntity::new(id, atoms, residues, "A".to_owned());
     assert_eq!(pure.residues.len(), 1, "backbone-intact ALA must survive");
-    let pure_names = residue_atom_names(&pure.atoms, &pure.residues[0]);
+    let pure_atoms = pure.columns().to_atoms();
+    let pure_names = residue_atom_names(&pure_atoms, &pure.residues[0]);
     assert!(
         !pure_names.iter().any(|n| n == "CB"),
         "pure construction must not fabricate CB; got {pure_names:?}"
     );
 
     let completed = pure.normalize();
-    let names = residue_atom_names(&completed.atoms, &completed.residues[0]);
+    let completed_atoms = completed.columns().to_atoms();
+    let names = residue_atom_names(&completed_atoms, &completed.residues[0]);
     assert!(
         names.iter().any(|n| n == "CB"),
         "normalize must fabricate the missing CB on the survivor; got \
@@ -455,10 +460,11 @@ fn canonical_ordering_reorders_scrambled_input() {
     let protein = alanine_scrambled_protein();
     assert_eq!(protein.residues.len(), 1);
     let r = &protein.residues[0];
+    let p_atoms = protein.columns().to_atoms();
     let names: Vec<&str> = r
         .atom_range
         .clone()
-        .map(|i| std::str::from_utf8(&protein.atoms[i].name).unwrap().trim())
+        .map(|i| std::str::from_utf8(&p_atoms[i].name).unwrap().trim())
         .collect();
     // The four backbone atoms come first, then CB, then the parsed HA.
     // Completion is heavy-only by default and this residue is already

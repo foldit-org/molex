@@ -160,10 +160,7 @@ fn assembly_bytes_single_atom_ion() {
         roundtripped.entities()[0].molecule_type(),
         MoleculeType::Ion
     );
-    assert!(
-        (roundtripped.entities()[0].atom_set()[0].position.x - 5.5).abs()
-            < 1e-6
-    );
+    assert!((roundtripped.entities()[0].positions()[0].x - 5.5).abs() < 1e-6);
 }
 
 #[test]

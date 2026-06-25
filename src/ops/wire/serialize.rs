@@ -3,8 +3,9 @@
 use super::variants::serialize_variants_section;
 use super::{molecule_type_to_wire, ASSEMBLY_MAGIC, ASSEMBLY_VERSION};
 use crate::assembly::Assembly;
-use crate::entity::molecule::atom::Atom;
+use crate::entity::molecule::atom::{AtomColumns, AtomRef};
 use crate::entity::molecule::polymer::Residue;
+use crate::entity::molecule::traits::Entity;
 use crate::entity::molecule::MoleculeEntity;
 use crate::ops::error::AdapterError;
 
@@ -118,13 +119,13 @@ fn write_chain_id(chain_id: &str, buffer: &mut Vec<u8>) {
 fn write_entity_atoms(entity: &MoleculeEntity, buffer: &mut Vec<u8>) {
     match entity {
         MoleculeEntity::Protein(e) => {
-            write_polymer_atoms(&e.atoms, &e.residues, buffer);
+            write_polymer_atoms(e.columns(), &e.residues, buffer);
         }
         MoleculeEntity::NucleicAcid(e) => {
-            write_polymer_atoms(&e.atoms, &e.residues, buffer);
+            write_polymer_atoms(e.columns(), &e.residues, buffer);
         }
         MoleculeEntity::SmallMolecule(e) => {
-            for atom in &e.atoms {
+            for atom in e.atoms_iter() {
                 write_atom_row(atom, e.residue_name, 1, buffer);
             }
         }
@@ -135,7 +136,7 @@ fn write_entity_atoms(entity: &MoleculeEntity, buffer: &mut Vec<u8>) {
                 clippy::cast_possible_wrap,
                 reason = "atom count fits in i32 for valid structures"
             )]
-            for (i, atom) in e.atoms.iter().enumerate() {
+            for (i, atom) in e.atoms_iter().enumerate() {
                 write_atom_row(atom, e.residue_name, (i as i32) + 1, buffer);
             }
         }
@@ -143,14 +144,14 @@ fn write_entity_atoms(entity: &MoleculeEntity, buffer: &mut Vec<u8>) {
 }
 
 fn write_polymer_atoms(
-    atoms: &[Atom],
+    columns: &AtomColumns,
     residues: &[Residue],
     buffer: &mut Vec<u8>,
 ) {
     for residue in residues {
         for idx in residue.atom_range.clone() {
             write_atom_row(
-                &atoms[idx],
+                columns.atom_ref(idx),
                 residue.name,
                 residue.label_seq_id,
                 buffer,
@@ -160,7 +161,7 @@ fn write_polymer_atoms(
 }
 
 pub(crate) fn write_atom_row(
-    atom: &Atom,
+    atom: AtomRef<'_>,
     res_name: [u8; 3],
     res_num: i32,
     buffer: &mut Vec<u8>,
@@ -170,7 +171,7 @@ pub(crate) fn write_atom_row(
     buffer.extend_from_slice(&atom.position.z.to_be_bytes());
     buffer.extend_from_slice(&res_name);
     buffer.extend_from_slice(&res_num.to_be_bytes());
-    buffer.extend_from_slice(&atom.name);
+    buffer.extend_from_slice(atom.name);
     let sym = atom.element.symbol();
     let sym_bytes = sym.as_bytes();
     buffer.push(sym_bytes.first().copied().unwrap_or(b'X'));

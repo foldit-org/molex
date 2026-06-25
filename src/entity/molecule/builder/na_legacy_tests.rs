@@ -112,10 +112,12 @@ fn legacy_single_char_dna_strand_ingests_as_dna() {
     assert_eq!(residue_names(na), vec!["DA", "DC", "DG", "DT"]);
 
     // Backbone atoms present under v3 names after normalization.
+    use crate::entity::molecule::traits::Entity;
+    let na_atoms = na.columns().to_atoms();
     let r0_names: Vec<&str> = na.residues[0]
         .atom_range
         .clone()
-        .map(|i| std::str::from_utf8(&na.atoms[i].name).unwrap().trim())
+        .map(|i| std::str::from_utf8(&na_atoms[i].name).unwrap().trim())
         .collect();
     for v3 in ["P", "O5'", "C5'", "C4'", "C3'", "O3'"] {
         assert!(

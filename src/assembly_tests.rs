@@ -352,17 +352,20 @@ fn assert_heavy_atoms_preserved(
     all_atom: &ProteinEntity,
 ) {
     use crate::entity::molecule::protein::trimmed_atom_name;
+    use crate::entity::molecule::traits::Entity;
 
+    let heavy_all = heavy.columns().to_atoms();
+    let all_atom_all = all_atom.columns().to_atoms();
     let last = all_atom.residues.len().saturating_sub(1);
     for (ri, (h_res, a_res)) in
         heavy.residues.iter().zip(&all_atom.residues).enumerate()
     {
         let heavy_atoms: Vec<_> =
-            h_res.atom_range.clone().map(|i| &heavy.atoms[i]).collect();
+            h_res.atom_range.clone().map(|i| &heavy_all[i]).collect();
         let aa_heavy: Vec<_> = a_res
             .atom_range
             .clone()
-            .map(|i| &all_atom.atoms[i])
+            .map(|i| &all_atom_all[i])
             .filter(|a| a.element != Element::H)
             .collect();
         // Source heavy atoms come first, preserved by name and position.
@@ -408,7 +411,11 @@ fn to_all_atom_adds_hydrogens_keeps_heavy_and_is_idempotent() {
     let heavy_protein =
         heavy.entity(eid).unwrap().as_protein().unwrap().clone();
     assert!(
-        heavy_protein.atoms.iter().all(|a| a.element != Element::H),
+        heavy_protein
+            .columns
+            .element
+            .iter()
+            .all(|e| *e != Element::H),
         "heavy-only build must carry no hydrogens"
     );
 
@@ -418,13 +425,13 @@ fn to_all_atom_adds_hydrogens_keeps_heavy_and_is_idempotent() {
     let aa_protein =
         all_atom.entity(eid).unwrap().as_protein().unwrap().clone();
     assert!(
-        aa_protein.atoms.len() > heavy_protein.atoms.len(),
+        aa_protein.columns.len() > heavy_protein.columns.len(),
         "all-atom projection must add atoms (got {} vs {})",
-        aa_protein.atoms.len(),
-        heavy_protein.atoms.len()
+        aa_protein.columns.len(),
+        heavy_protein.columns.len()
     );
     assert!(
-        aa_protein.atoms.iter().any(|a| a.element == Element::H),
+        aa_protein.columns.element.contains(&Element::H),
         "all-atom projection must fabricate hydrogens"
     );
 
@@ -437,8 +444,8 @@ fn to_all_atom_adds_hydrogens_keeps_heavy_and_is_idempotent() {
     let twice_protein =
         twice.entity(eid).unwrap().as_protein().unwrap().clone();
     assert_eq!(
-        twice_protein.atoms.len(),
-        aa_protein.atoms.len(),
+        twice_protein.columns.len(),
+        aa_protein.columns.len(),
         "to_all_atom must be idempotent"
     );
 }

@@ -197,7 +197,7 @@ mod tests {
         let MoleculeEntity::SmallMolecule(e) = lig else {
             unreachable!("Ligand mol_type must build a SmallMolecule");
         };
-        assert!(e.atoms.is_empty());
+        assert!(e.columns.is_empty());
         assert_eq!(e.residue_name, [b' '; 3]);
 
         let water =

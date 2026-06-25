@@ -303,7 +303,8 @@ impl MoleculeEntity {
 
     /// Flat-atom index range for the residue at `residue_index`, in the
     /// residue-order space that flattens this entity's atoms (the order
-    /// `collect_atom_data` / `walk_flat_atoms` produce), not storage space.
+    /// `AtomTable::from_entities` / `walk_flat_atoms` produce), not storage
+    /// space.
     ///
     /// The start is the running sum of prior residues' atom counts; the length
     /// is this residue's atom count. Differs from [`Residue::atom_range`],

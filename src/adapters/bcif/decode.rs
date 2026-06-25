@@ -1,3 +1,5 @@
+// foldit:allow-long-file: BinaryCIF decode pipeline + selective-category msgpack
+// walk (skip_value/read_value share the marker grammar); cohesive decode unit.
 //! BinaryCIF decode pipeline: pull the single coordinate data block out of
 //! a MessagePack-encoded BinaryCIF byte stream, run the `_entity` /
 //! `_entity_poly` hint pre-pass, then iterate `_atom_site` rows into an
@@ -7,7 +9,8 @@ use std::collections::HashMap;
 use std::io::Read;
 
 use super::codec::{
-    decode_column, decode_msgpack, ColData, MsgVal, StringColumn,
+    decode_column, read_array_len, read_map_len, read_str, read_value,
+    skip_value, ColData, MsgVal, Reader, StringColumn,
 };
 use super::hint::resolve_hint;
 use super::refuse::multi_block_error;
@@ -130,40 +133,105 @@ struct ColumnRaw {
     mask: Option<MsgVal>,
 }
 
+/// The only categories the parser reads. Every other category in the file is
+/// walked for structure but its column trees are skipped, never allocated.
+fn is_read_category(name: &str) -> bool {
+    matches!(name, "_atom_site" | "_entity" | "_entity_poly")
+}
+
 fn open_block(bytes: &[u8]) -> Result<BlockView, AdapterError> {
     let data = decompress_if_gzip(bytes)?;
-    let mut root = decode_msgpack(&data)?;
-    let blocks = root
-        .take("dataBlocks")
-        .and_then(MsgVal::into_array)
-        .ok_or_else(|| {
-            AdapterError::InvalidFormat("Missing 'dataBlocks'".into())
-        })?;
-    if blocks.is_empty() {
+    let mut rd: Reader = std::io::Cursor::new(&data);
+
+    // root map -> the single `dataBlocks` array
+    let block_count = walk_into_array(&mut rd, "dataBlocks", "root")?;
+    if block_count == 0 {
         return Err(AdapterError::InvalidFormat("No data blocks found".into()));
     }
-    if blocks.len() > 1 {
-        return Err(multi_block_error(blocks.len()));
+    if block_count > 1 {
+        return Err(multi_block_error(block_count));
     }
-    let Some(mut block) = blocks.into_iter().next() else {
-        return Err(AdapterError::InvalidFormat("No data blocks found".into()));
-    };
-    let raw_categories = block
-        .take("categories")
-        .and_then(MsgVal::into_array)
-        .ok_or_else(|| {
-            AdapterError::InvalidFormat(
-                "Missing 'categories' in data block".into(),
-            )
-        })?;
-    let mut categories: Vec<CategoryView> =
-        Vec::with_capacity(raw_categories.len());
-    for cat in raw_categories {
-        if let Some(view) = parse_category(cat)? {
+
+    // block map -> the `categories` array
+    let cat_count = walk_into_array(&mut rd, "categories", "data block")?;
+    let mut categories: Vec<CategoryView> = Vec::new();
+    for _ in 0..cat_count {
+        if let Some(view) = read_category_selective(&mut rd)? {
             categories.push(view);
         }
     }
     Ok(BlockView { categories })
+}
+
+/// From a map at the cursor, find the array-valued entry named `key`, skip the
+/// map's other entries, descend into that array, and return its element count.
+/// `ctx` names the enclosing map for error messages.
+fn walk_into_array(
+    rd: &mut Reader,
+    key: &str,
+    ctx: &str,
+) -> Result<usize, AdapterError> {
+    let entries = read_map_len(rd)?;
+    for _ in 0..entries {
+        let k = read_str(rd)?;
+        if k == key {
+            return read_array_len(rd);
+        }
+        skip_value(rd)?;
+    }
+    Err(AdapterError::InvalidFormat(format!(
+        "Missing '{key}' in {ctx}"
+    )))
+}
+
+/// Read one category map. Builds the full column tree only when the category is
+/// one the parser reads; otherwise the column array is skipped (no `MsgVal`
+/// allocation) and the category is dropped from the view. `name` may appear in
+/// any key position, so the `columns` value is skipped on first pass and
+/// re-read from its recorded offset once the name proves it is wanted.
+fn read_category_selective(
+    rd: &mut Reader,
+) -> Result<Option<CategoryView>, AdapterError> {
+    let entries = read_map_len(rd)?;
+    let mut name: Option<String> = None;
+    let mut row_count: Option<MsgVal> = None;
+    let mut columns_at: Option<u64> = None;
+
+    for _ in 0..entries {
+        let key = read_str(rd)?;
+        match key.as_str() {
+            "name" => name = Some(read_str(rd)?),
+            "rowCount" => row_count = Some(read_value(rd)?),
+            "columns" => {
+                columns_at = Some(rd.position());
+                skip_value(rd)?;
+            }
+            _ => skip_value(rd)?,
+        }
+    }
+
+    let Some(name) = name else {
+        return Ok(None);
+    };
+    if !is_read_category(&name) {
+        return Ok(None);
+    }
+
+    // The first pass left the cursor at the end of the category map. Re-reading
+    // `columns` rewinds it, so restore this end before returning — `columns` is
+    // not guaranteed to be the map's last entry.
+    let map_end = rd.position();
+    let mut pairs: Vec<(MsgVal, MsgVal)> =
+        vec![(MsgVal::Str("name".into()), MsgVal::Str(name))];
+    if let Some(rc) = row_count {
+        pairs.push((MsgVal::Str("rowCount".into()), rc));
+    }
+    if let Some(at) = columns_at {
+        rd.set_position(at);
+        pairs.push((MsgVal::Str("columns".into()), read_value(rd)?));
+        rd.set_position(map_end);
+    }
+    parse_category(MsgVal::Map(pairs))
 }
 
 fn parse_category(

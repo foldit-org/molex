@@ -4,15 +4,15 @@
 //! the object API (`Assembly.to_arrays` / `Entity.to_arrays`) and the
 //! bytes-fed `assembly_bytes_to_arrays` transport helper all route through,
 //! so the numpy building lives in exactly one place. The flat per-atom column
-//! collection is shared with the Biotite bridge via
-//! [`crate::adapters::atomworks::collect_atom_data`].
+//! marshaling (the native -> vocab de-vocab) is shared with the Biotite bridge
+//! via [`crate::adapters::atomworks::columns`].
 
 use std::collections::HashMap;
 
 use numpy::{IntoPyArray, PyArrayMethods};
 use pyo3::prelude::*;
 
-use crate::adapters::atomworks::{collect_atom_data, AtomData};
+use crate::adapters::atomworks::columns;
 use crate::adapters::table::AtomTable;
 use crate::entity::molecule::MoleculeEntity;
 use crate::ops::wire::deserialize_assembly;
@@ -89,10 +89,9 @@ pub(crate) fn entities_to_arrays<E: std::borrow::Borrow<MoleculeEntity>>(
     py: Python,
     entities: &[E],
 ) -> PyResult<AtomArrays> {
-    let total_atoms: usize =
-        entities.iter().map(|e| e.borrow().atom_count()).sum();
-    let data = collect_atom_data(entities, total_atoms);
-    atom_data_to_arrays(py, data, total_atoms)
+    let table = AtomTable::from_entities(entities);
+    let len = table.len();
+    table_to_arrays(py, &table, 0..len)
 }
 
 /// Lookup from per-entity atom identity to `to_arrays()` flat index space.
@@ -123,49 +122,63 @@ pub(crate) fn flat_atoms<E: std::borrow::Borrow<MoleculeEntity>>(
     FlatAtoms { flat_of }
 }
 
-/// Turn already-collected per-atom columns into numpy arrays.
+/// Marshal a flat-atom `range` of `table` into numpy columns, de-vocabbing
+/// through the shared [`columns`] layer.
 ///
-/// Split out of [`entities_to_arrays`] so a sliced subset of the columns (a
-/// single residue's atoms, via [`AtomData::slice_atoms`]) can reach numpy
-/// without re-collecting: the per-residue read collects once over the parent
-/// entity, slices, and lands here. `total_atoms` is the atom count of `data`
-/// (the number of rows in each column), so coords reshapes to `(total_atoms,
-/// 3)`.
+/// The whole-entity read passes `0..table.len()`; the per-residue read passes
+/// that residue's contiguous flat run, so a single residue's atoms reach numpy
+/// without building any intermediate column bundle. `range.len()` is the row
+/// count, so coords reshapes to `(n, 3)`.
 ///
 /// # Errors
 ///
 /// Returns `PyErr` if any numpy operation fails.
-pub(crate) fn atom_data_to_arrays(
+pub(crate) fn table_to_arrays(
     py: Python,
-    data: AtomData,
-    total_atoms: usize,
+    table: &AtomTable,
+    range: std::ops::Range<usize>,
 ) -> PyResult<AtomArrays> {
     let numpy = py.import("numpy")?;
+    let n = range.len();
 
     // Numeric columns: move the owned vecs straight into numpy (no float64/
     // int64 intermediate, no astype copy). `into_pyarray` yields float32 /
-    // int32 directly; coords reshape to (total_atoms, 3) is a metadata view.
-    let coords = data
-        .coords_flat
+    // int32 directly; coords reshape to (n, 3) is a metadata view.
+    let coords = columns::coords_flat(table, range.clone())
         .into_pyarray(py)
-        .reshape((total_atoms, 3))?;
-    let res_ids = data.res_ids.into_pyarray(py);
-    let occupancies = data.occupancies.into_pyarray(py);
-    let b_factors = data.b_factors.into_pyarray(py);
-    let entity_ids = data.aw_entity_ids.into_pyarray(py);
-    let chain_types = data.aw_chain_types.into_pyarray(py);
+        .reshape((n, 3))?;
+    let res_ids = columns::res_ids(table, range.clone()).into_pyarray(py);
+    let occupancies =
+        columns::occupancies(table, range.clone()).into_pyarray(py);
+    let b_factors = columns::b_factors(table, range.clone()).into_pyarray(py);
+    let entity_ids = columns::entity_ids(table, range.clone()).into_pyarray(py);
+    let chain_types =
+        columns::chain_types(table, range.clone()).into_pyarray(py);
 
     Ok(AtomArrays {
         coords: coords.into_any().unbind(),
-        atom_names: numpy.call_method1("array", (&data.atom_names,))?.unbind(),
-        elements: numpy.call_method1("array", (&data.elements,))?.unbind(),
+        atom_names: numpy
+            .call_method1(
+                "array",
+                (columns::atom_names(table, range.clone()),),
+            )?
+            .unbind(),
+        elements: numpy
+            .call_method1("array", (columns::elements(table, range.clone()),))?
+            .unbind(),
         res_ids: res_ids.into_any().unbind(),
-        res_names: numpy.call_method1("array", (&data.res_names,))?.unbind(),
-        chain_ids: numpy.call_method1("array", (&data.chain_ids,))?.unbind(),
+        res_names: numpy
+            .call_method1("array", (columns::res_names(table, range.clone()),))?
+            .unbind(),
+        chain_ids: numpy
+            .call_method1("array", (columns::chain_ids(table, range.clone()),))?
+            .unbind(),
         occupancies: occupancies.into_any().unbind(),
         b_factors: b_factors.into_any().unbind(),
         entity_ids: entity_ids.into_any().unbind(),
-        mol_types: numpy.call_method1("array", (&data.aw_mol_types,))?.unbind(),
+        mol_types: numpy
+            .call_method1("array", (columns::mol_types(table, range),))?
+            .unbind(),
         chain_types: chain_types.into_any().unbind(),
     })
 }

@@ -124,9 +124,61 @@ impl MsgVal {
 
 // MessagePack decoder
 
-pub(crate) fn decode_msgpack(data: &[u8]) -> Result<MsgVal, AdapterError> {
-    let mut cursor = std::io::Cursor::new(data);
-    read_value(&mut cursor)
+pub(crate) type Reader<'a> = std::io::Cursor<&'a [u8]>;
+
+/// Read one map header and return its entry count, erroring if the next value
+/// is not a map.
+pub(crate) fn read_map_len(rd: &mut Reader) -> Result<usize, AdapterError> {
+    use rmp::Marker;
+    match read_marker(rd)? {
+        Marker::FixMap(len) => Ok(usize::from(len)),
+        Marker::Map16 => Ok(usize::from(u16::from_be_bytes(read_bytes(rd)?))),
+        Marker::Map32 => Ok(u32::from_be_bytes(read_bytes(rd)?) as usize),
+        other => Err(AdapterError::InvalidFormat(format!(
+            "msgpack: expected map, found {other:?}"
+        ))),
+    }
+}
+
+/// Read one array header and return its element count, erroring if the next
+/// value is not an array.
+pub(crate) fn read_array_len(rd: &mut Reader) -> Result<usize, AdapterError> {
+    use rmp::Marker;
+    match read_marker(rd)? {
+        Marker::FixArray(len) => Ok(usize::from(len)),
+        Marker::Array16 => Ok(usize::from(u16::from_be_bytes(read_bytes(rd)?))),
+        Marker::Array32 => Ok(u32::from_be_bytes(read_bytes(rd)?) as usize),
+        other => Err(AdapterError::InvalidFormat(format!(
+            "msgpack: expected array, found {other:?}"
+        ))),
+    }
+}
+
+/// Read one string value, erroring if the next value is not a string. Used to
+/// pull a map key during the selective block walk.
+pub(crate) fn read_str(rd: &mut Reader) -> Result<String, AdapterError> {
+    use rmp::Marker;
+    let len = match read_marker(rd)? {
+        Marker::FixStr(len) => usize::from(len),
+        Marker::Str8 => usize::from(read_bytes::<1>(rd)?[0]),
+        Marker::Str16 => usize::from(u16::from_be_bytes(read_bytes(rd)?)),
+        Marker::Str32 => u32::from_be_bytes(read_bytes(rd)?) as usize,
+        other => {
+            return Err(AdapterError::InvalidFormat(format!(
+                "msgpack: expected string, found {other:?}"
+            )))
+        }
+    };
+    match read_string(rd, len)? {
+        MsgVal::Str(s) => Ok(s),
+        _ => unreachable!("read_string yields MsgVal::Str"),
+    }
+}
+
+fn read_marker(rd: &mut Reader) -> Result<rmp::Marker, AdapterError> {
+    rmp::decode::read_marker(rd).map_err(|e| {
+        AdapterError::InvalidFormat(format!("msgpack marker: {e:?}"))
+    })
 }
 
 fn read_bytes<const N: usize>(
@@ -143,12 +195,10 @@ fn read_bytes<const N: usize>(
     clippy::too_many_lines,
     reason = "msgpack format requires exhaustive marker matching"
 )]
-fn read_value(rd: &mut std::io::Cursor<&[u8]>) -> Result<MsgVal, AdapterError> {
+pub(crate) fn read_value(rd: &mut Reader) -> Result<MsgVal, AdapterError> {
     use rmp::Marker;
 
-    let marker = rmp::decode::read_marker(rd).map_err(|e| {
-        AdapterError::InvalidFormat(format!("msgpack marker: {e:?}"))
-    })?;
+    let marker = read_marker(rd)?;
 
     match marker {
         Marker::Null => Ok(MsgVal::Nil),
@@ -232,10 +282,7 @@ fn read_value(rd: &mut std::io::Cursor<&[u8]>) -> Result<MsgVal, AdapterError> {
     }
 }
 
-fn read_string(
-    rd: &mut std::io::Cursor<&[u8]>,
-    len: usize,
-) -> Result<MsgVal, AdapterError> {
+fn read_string(rd: &mut Reader, len: usize) -> Result<MsgVal, AdapterError> {
     let mut buf = vec![0u8; len];
     rd.read_exact(&mut buf).map_err(|e| {
         AdapterError::InvalidFormat(format!("msgpack string read: {e}"))
@@ -246,10 +293,7 @@ fn read_string(
     Ok(MsgVal::Str(s))
 }
 
-fn read_bin(
-    rd: &mut std::io::Cursor<&[u8]>,
-    len: usize,
-) -> Result<MsgVal, AdapterError> {
+fn read_bin(rd: &mut Reader, len: usize) -> Result<MsgVal, AdapterError> {
     let mut buf = vec![0u8; len];
     rd.read_exact(&mut buf).map_err(|e| {
         AdapterError::InvalidFormat(format!("msgpack bin read: {e}"))
@@ -257,10 +301,7 @@ fn read_bin(
     Ok(MsgVal::Bin(buf))
 }
 
-fn read_array(
-    rd: &mut std::io::Cursor<&[u8]>,
-    len: usize,
-) -> Result<MsgVal, AdapterError> {
+fn read_array(rd: &mut Reader, len: usize) -> Result<MsgVal, AdapterError> {
     let mut arr = Vec::with_capacity(len);
     for _ in 0..len {
         arr.push(read_value(rd)?);
@@ -268,10 +309,7 @@ fn read_array(
     Ok(MsgVal::Array(arr))
 }
 
-fn read_map(
-    rd: &mut std::io::Cursor<&[u8]>,
-    len: usize,
-) -> Result<MsgVal, AdapterError> {
+fn read_map(rd: &mut Reader, len: usize) -> Result<MsgVal, AdapterError> {
     let mut pairs = Vec::with_capacity(len);
     for _ in 0..len {
         let k = read_value(rd)?;
@@ -279,6 +317,95 @@ fn read_map(
         pairs.push((k, v));
     }
     Ok(MsgVal::Map(pairs))
+}
+
+/// Advance the cursor past one msgpack value without allocating any
+/// [`MsgVal`]. Parses the same structure [`read_value`] does — enough to know
+/// the value's extent — but builds nothing: Str/Bin advance over the payload,
+/// Array/Map recurse over their elements, scalars consume their fixed width.
+#[allow(
+    clippy::too_many_lines,
+    reason = "msgpack format requires exhaustive marker matching"
+)]
+pub(crate) fn skip_value(rd: &mut Reader) -> Result<(), AdapterError> {
+    use rmp::Marker;
+
+    match read_marker(rd)? {
+        Marker::Null
+        | Marker::True
+        | Marker::False
+        | Marker::FixPos(_)
+        | Marker::FixNeg(_) => {}
+
+        Marker::U8 | Marker::I8 => skip_bytes(rd, 1)?,
+        Marker::U16 | Marker::I16 => skip_bytes(rd, 2)?,
+        Marker::U32 | Marker::I32 | Marker::F32 => skip_bytes(rd, 4)?,
+        Marker::U64 | Marker::I64 | Marker::F64 => skip_bytes(rd, 8)?,
+
+        Marker::FixStr(len) => skip_bytes(rd, usize::from(len))?,
+        Marker::Str8 | Marker::Bin8 => {
+            let len = usize::from(read_bytes::<1>(rd)?[0]);
+            skip_bytes(rd, len)?;
+        }
+        Marker::Str16 | Marker::Bin16 => {
+            let len = usize::from(u16::from_be_bytes(read_bytes(rd)?));
+            skip_bytes(rd, len)?;
+        }
+        Marker::Str32 | Marker::Bin32 => {
+            let len = u32::from_be_bytes(read_bytes(rd)?) as usize;
+            skip_bytes(rd, len)?;
+        }
+
+        Marker::FixArray(len) => skip_n(rd, usize::from(len))?,
+        Marker::Array16 => {
+            let len = usize::from(u16::from_be_bytes(read_bytes(rd)?));
+            skip_n(rd, len)?;
+        }
+        Marker::Array32 => {
+            let len = u32::from_be_bytes(read_bytes(rd)?) as usize;
+            skip_n(rd, len)?;
+        }
+
+        Marker::FixMap(len) => skip_n(rd, usize::from(len) * 2)?,
+        Marker::Map16 => {
+            let len = usize::from(u16::from_be_bytes(read_bytes(rd)?));
+            skip_n(rd, len * 2)?;
+        }
+        Marker::Map32 => {
+            let len = u32::from_be_bytes(read_bytes(rd)?) as usize;
+            skip_n(rd, len * 2)?;
+        }
+
+        other => {
+            return Err(AdapterError::InvalidFormat(format!(
+                "Unsupported msgpack marker: {other:?}"
+            )))
+        }
+    }
+    Ok(())
+}
+
+/// Advance the cursor `n` bytes, erroring if that runs past the end of the
+/// underlying slice (matching `read_exact`'s truncation check without copying).
+fn skip_bytes(rd: &mut Reader, n: usize) -> Result<(), AdapterError> {
+    let pos = rd.position();
+    let end = pos
+        .checked_add(n as u64)
+        .filter(|&e| e <= rd.get_ref().len() as u64);
+    let Some(end) = end else {
+        return Err(AdapterError::InvalidFormat(
+            "msgpack skip past end of input".into(),
+        ));
+    };
+    rd.set_position(end);
+    Ok(())
+}
+
+fn skip_n(rd: &mut Reader, n: usize) -> Result<(), AdapterError> {
+    for _ in 0..n {
+        skip_value(rd)?;
+    }
+    Ok(())
 }
 
 // BinaryCIF encoding chain decoder

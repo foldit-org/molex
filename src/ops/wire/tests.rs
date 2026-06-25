@@ -227,6 +227,49 @@ fn assembly_bytes_polymer_roundtrip_preserves_residues() {
 }
 
 #[test]
+fn nonempty_dropped_tail_polymer_roundtrips() {
+    // A polymer with a non-empty dropped-residue tail: one complete ALA
+    // (N/CA/C/O) followed by a backbone-incomplete residue (CB+CG only).
+    // canonicalize drops the incomplete residue from the residue list but
+    // leaves its two atoms in the storage columns, unreferenced — so
+    // columns().len() (6) exceeds the sum of residue atom_range lengths (4).
+    // The body walks residue-range atoms (4); the header must declare 4, not
+    // 6, or deserialize reads past the atom data and fails "Data too short".
+    let id = EntityIdAllocator::new().allocate();
+    let atoms = {
+        let mut v = ala_residue_atoms(1.0);
+        v.push(atom_at("CB", Element::C, 5.0));
+        v.push(atom_at("CG", Element::C, 6.0));
+        v
+    };
+    let residues = vec![residue("ALA", 1, 0..4), residue("XYZ", 2, 4..6)];
+    let protein = MoleculeEntity::Protein(ProteinEntity::new(
+        id,
+        atoms,
+        residues,
+        "A".to_owned(),
+    ));
+
+    // canonicalize kept residue 1 (4 atoms) and dropped residue 2 to the tail.
+    let p = protein.as_protein().unwrap();
+    assert_eq!(p.residues.len(), 1, "incomplete residue dropped");
+    assert_eq!(p.columns.len(), 6, "dropped atoms stay in the columns");
+    let referenced: usize = p.residues.iter().map(|r| r.atom_range.len()).sum();
+    assert_eq!(referenced, 4, "non-empty tail: 6 stored, 4 referenced");
+
+    // Round-trip must not error: the header now declares the 4 body rows.
+    let bytes = assembly_bytes(&[protein]).unwrap();
+    let rt = deserialize_assembly(&bytes).unwrap();
+
+    let rt_protein = rt.entities()[0].as_protein().unwrap();
+    assert_eq!(rt_protein.residues.len(), 1);
+    assert_eq!(rt_protein.residues[0].label_seq_id, 1);
+    // The body emits only the kept residue's atoms; the tail is dropped on the
+    // wire (no residue references it), so the rebuilt entity carries 4 atoms.
+    assert_eq!(rt.entities()[0].atom_count(), 4);
+}
+
+#[test]
 fn assembly_bytes_na_roundtrip() {
     let atoms = vec![
         atom_at("P", Element::P, 0.0),

@@ -82,12 +82,17 @@ pub(crate) fn serialize_entities<E: std::borrow::Borrow<MoleculeEntity>>(
     #[allow(clippy::cast_possible_truncation)] // entity count fits in u32
     buffer.extend_from_slice(&(entities.len() as u32).to_be_bytes());
 
-    // Per-entity headers (chain string lives here, not per atom).
+    // Per-entity headers (chain string lives here, not per atom). The
+    // `atom_count` is the number of rows the body writes for this entity, not
+    // the storage column length: a polymer's dropped, backbone-incomplete
+    // residues leave unreferenced atoms in the columns that the residue-ordered
+    // body walk never emits, so the header counts from that same walk.
     for entity in entities {
         let entity = entity.borrow();
         buffer.push(molecule_type_to_wire(entity.molecule_type()));
+        let body_rows = AtomTable::flat_atom_count(entity);
         #[allow(clippy::cast_possible_truncation)] // atom count fits in u32
-        buffer.extend_from_slice(&(entity.atom_count() as u32).to_be_bytes());
+        buffer.extend_from_slice(&(body_rows as u32).to_be_bytes());
         buffer.extend_from_slice(&entity.id().raw().to_be_bytes());
         write_chain_id(entity.pdb_chain_id().unwrap_or(""), &mut buffer);
     }
@@ -117,9 +122,9 @@ fn write_chain_id(chain_id: &str, buffer: &mut Vec<u8>) {
 
 /// Write one entity's atom rows via the single canonical flatten
 /// ([`AtomTable::for_each_flat_row`]): residue-ordered atoms for polymers, raw
-/// order with synthesized residue numbers for non-polymers — the exact body
-/// the per-entity header's `atom_count()` describes. `formal_charge` and
-/// `observed` are not written (the wire carries neither).
+/// order with synthesized residue numbers for non-polymers — the exact body the
+/// per-entity header's row count ([`AtomTable::flat_atom_count`]) describes.
+/// `formal_charge` and `observed` are not written (the wire carries neither).
 fn write_entity_atoms(entity: &MoleculeEntity, buffer: &mut Vec<u8>) {
     AtomTable::for_each_flat_row(
         std::slice::from_ref(entity),

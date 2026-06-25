@@ -14,10 +14,10 @@ use std::sync::Arc;
 
 use pyo3::prelude::*;
 
-use super::arrays::{atom_data_to_arrays, entities_to_arrays, AtomArrays};
+use super::arrays::{entities_to_arrays, table_to_arrays, AtomArrays};
 use super::resolve_index;
 use super::walk::{entity_kind_str, molecule_type_str};
-use crate::adapters::atomworks::collect_atom_data;
+use crate::adapters::table::AtomTable;
 use crate::entity::molecule::polymer::Residue;
 use crate::entity::molecule::protein::ProteinEntity;
 use crate::entity::molecule::MoleculeEntity;
@@ -242,24 +242,20 @@ impl PyResidue {
     }
 
     /// This residue's atoms as per-atom numpy columns (an `AtomArrays`), via
-    /// the shared entities -> arrays core: the parent entity's columns are
-    /// collected once, then sliced to this residue's contiguous run of atoms.
-    /// The flat slice range comes from the native
+    /// the shared entities -> arrays core: the parent entity is flattened once
+    /// into an `AtomTable`, then this residue's contiguous flat run is
+    /// marshaled to numpy. The flat range comes from the native
     /// [`MoleculeEntity::residue_flat_range`], which sums the prior residues'
-    /// atom counts in the same order the shared collector flattens them.
+    /// atom counts in the same order [`AtomTable::from_entities`] flattens
+    /// them.
     ///
     /// # Errors
     ///
     /// `PyErr` if numpy is unavailable or a numpy operation fails.
     pub fn to_arrays(&self, py: Python) -> PyResult<AtomArrays> {
         let range = self.inner.residue_flat_range(self.residue_index);
-        let count = range.len();
-
-        let entity_atoms = self.inner.atom_count();
-        let data =
-            collect_atom_data(std::slice::from_ref(&self.inner), entity_atoms);
-        let sliced = data.slice_atoms(range);
-        atom_data_to_arrays(py, sliced, count)
+        let table = AtomTable::from_entities(std::slice::from_ref(&self.inner));
+        table_to_arrays(py, &table, range)
     }
 
     /// Concise repr: `<Residue {name} {seq_id}{ins_code}>`.

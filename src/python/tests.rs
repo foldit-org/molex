@@ -189,3 +189,109 @@ fn wrong_kind_is_value_error() {
         assert!(name.ends_with("ValueError"), "got {name}");
     });
 }
+
+// The native numpy egress (`entities_to_arrays`, what `Assembly.to_arrays`
+// and `Entity.to_arrays` call) builds its six numeric columns straight from
+// owned Rust vecs via `into_pyarray`, with no float64/int64 intermediate or
+// `astype` copy. Guard the dtype, shape, AND values of the returned numpy
+// arrays directly, so a regression in that path — wrong dtype, wrong shape, or
+// wrong/transposed values — is caught at the numpy boundary the Python caller
+// actually sees.
+#[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "dtype, shape, and value assertions per numeric column"
+)]
+fn to_arrays_numeric_columns_have_expected_dtype_shape_and_values() {
+    use pyo3::types::PyAnyMethods;
+
+    use crate::adapters::atomworks::columns;
+    use crate::adapters::table::AtomTable;
+
+    let entities = pdb_str_to_entities(WALK_PDB).expect("parse minimal PDB");
+    let asm = Assembly::new(entities);
+    let entities = asm.entities();
+    // ALA (5 atoms) + GLY (5, one completed by the protein builder) + ZN (1).
+    let total: usize = entities.iter().map(|e| e.atom_count()).sum();
+    assert_eq!(total, 11, "fixture atom count");
+
+    // Independent Rust oracle for the values the numpy columns must carry,
+    // marshaled through the same flatten + de-vocab the egress uses.
+    let table = AtomTable::from_entities(entities);
+    let coords_flat = columns::coords_flat(&table, 0..total);
+    let oracle_res_ids = columns::res_ids(&table, 0..total);
+    let oracle_occ = columns::occupancies(&table, 0..total);
+
+    pyo3::Python::attach(|py| {
+        let numpy = py.import("numpy").expect("import numpy");
+        let arrays =
+            super::arrays::entities_to_arrays(py, entities).expect("to_arrays");
+        // Read each column through the `#[pyo3(get)]` attribute surface a
+        // Python caller sees, by binding the pyclass instance into the
+        // interpreter.
+        let arrays = pyo3::Py::new(py, arrays).expect("bind AtomArrays");
+        let arrays = arrays.bind(py);
+        let col = |name: &str| arrays.getattr(name).expect("column attr");
+
+        let f32_ty = numpy.getattr("float32").expect("numpy.float32");
+        let i32_ty = numpy.getattr("int32").expect("numpy.int32");
+        // `np.dtype == np.<scalar>` is True for the matching scalar type; this
+        // checks the column's element type without depending on the numpy
+        // crate's dtype downcast generics.
+        let assert_dtype = |name: &str, ty: &pyo3::Bound<'_, pyo3::PyAny>| {
+            let got = col(name).getattr("dtype").expect("column dtype");
+            assert!(got.eq(ty).expect("compare dtype"), "{name} dtype");
+        };
+        let f32 = |name: &str| assert_dtype(name, &f32_ty);
+        let i32 = |name: &str| assert_dtype(name, &i32_ty);
+
+        // coords: float32, shape (N, 3); every numeric dtype guarded.
+        f32("coords");
+        for name in ["occupancies", "b_factors"] {
+            f32(name);
+        }
+        for name in ["res_ids", "entity_ids", "chain_types"] {
+            i32(name);
+        }
+        assert_eq!(
+            col("coords")
+                .getattr("shape")
+                .unwrap()
+                .extract::<(usize, usize)>()
+                .expect("coords shape is 2-D"),
+            (total, 3),
+            "coords shape must be (N, 3)"
+        );
+
+        // VALUES via the `into_pyarray` path, against the Rust oracle (catches
+        // a transposed reshape or a value-corrupting move into numpy) plus
+        // independent fixture anchors. `tolist` flattens, so coords come back
+        // in the same row-major order as `coords_flat`.
+        let to_list =
+            |name: &str| col(name).call_method0("tolist").expect("tolist");
+        let coords_rows: Vec<Vec<f32>> = to_list("coords")
+            .extract()
+            .expect("coords as nested f32 list");
+        let numpy_coords: Vec<f32> =
+            coords_rows.into_iter().flatten().collect();
+        assert_eq!(numpy_coords, coords_flat, "coords values");
+        // ALA's first atom (N) sits at the origin; the trailing ZN ion sits at
+        // (10, 10, 10) — anchors that do not lean on the oracle.
+        assert_eq!(&coords_flat[..3], &[0.0_f32, 0.0, 0.0], "ALA N at origin");
+        assert_eq!(
+            &coords_flat[total * 3 - 3..],
+            &[10.0_f32, 10.0, 10.0],
+            "ZN ion at (10, 10, 10)"
+        );
+
+        let res_ids: Vec<i32> =
+            to_list("res_ids").extract().expect("res_ids list");
+        assert_eq!(res_ids, oracle_res_ids, "res_ids values");
+        // ALA atoms carry seq id 1, GLY carry 2, the trailing ZN carries 1.
+        assert_eq!(res_ids, vec![1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 1], "res ids");
+
+        let occ: Vec<f32> = to_list("occupancies").extract().expect("occ list");
+        assert_eq!(occ, oracle_occ, "occupancy values");
+        assert_eq!(occ, vec![1.0_f32; total], "fixture occupancy is 1.00");
+    });
+}

@@ -657,66 +657,82 @@ fn uc20_observed_mask() {
 
 // --- UC-21 · to_arrays flat egress columns -------------------------------
 
-/// `collect_atom_data` (the `to_arrays` egress core) flattens an entity vec
-/// into the per-atom annotation columns the numpy / Biotite bridges marshal.
-/// This baselines its output for Heavy-completed 1UBQ so a later egress
-/// restructure (rerouting through `AtomTable::from_entities`, de-vocabbing the
-/// columns) can be proven to preserve the flat result.
+/// The `to_arrays` egress flattens an entity vec into the per-atom annotation
+/// columns the numpy / Biotite bridges marshal. This baselines that output for
+/// Heavy-completed 1UBQ: the one flatten via `AtomTable::from_entities`, then
+/// the shared de-vocab `columns` layer for each per-atom column.
 ///
-/// Params: `collect_atom_data(asm.entities(), total)` over the Heavy-completed
-/// 1UBQ assembly. Golden against molex's own current output. Gated on the
-/// `python` feature because the egress core lives in the feature-gated
-/// atomworks adapter; runs under `just test-python`.
+/// Params: `AtomTable::from_entities(asm.entities())` + `columns::*` over the
+/// Heavy-completed 1UBQ assembly. Golden against molex's own egress output.
+/// Gated on the `python` feature because the marshaling layer lives in the
+/// feature-gated atomworks adapter; runs under `just test-python`.
 #[cfg(feature = "python")]
 #[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one de-vocab column build plus its baseline assertion"
+)]
 fn uc21_to_arrays_1ubq() {
-    use molex::adapters::atomworks::collect_atom_data;
+    use molex::adapters::atomworks::columns;
+    use molex::adapters::table::AtomTable;
 
     let asm = ubq_assembly(Completion::Heavy);
     let total = total_atoms(&asm);
-    let data = collect_atom_data(asm.entities(), total);
+    let table = AtomTable::from_entities(asm.entities());
+    let full = 0..total;
+    let coords_flat = columns::coords_flat(&table, full.clone());
+    let chain_ids = columns::chain_ids(&table, full.clone());
+    let res_ids = columns::res_ids(&table, full.clone());
+    let res_names = columns::res_names(&table, full.clone());
+    let atom_names = columns::atom_names(&table, full.clone());
+    let elements = columns::elements(&table, full.clone());
+    let occupancies = columns::occupancies(&table, full.clone());
+    let b_factors = columns::b_factors(&table, full.clone());
+    let aw_entity_ids = columns::entity_ids(&table, full.clone());
+    let aw_mol_types = columns::mol_types(&table, full.clone());
+    let aw_chain_types = columns::chain_types(&table, full);
 
     // One entry per atom across every parallel column; coords are three f32
     // per atom.
     assert_eq!(total, 660);
-    assert_eq!(data.coords_flat.len(), total * 3);
-    assert_eq!(data.chain_ids.len(), total);
-    assert_eq!(data.res_ids.len(), total);
-    assert_eq!(data.res_names.len(), total);
-    assert_eq!(data.atom_names.len(), total);
-    assert_eq!(data.elements.len(), total);
-    assert_eq!(data.occupancies.len(), total);
-    assert_eq!(data.b_factors.len(), total);
-    assert_eq!(data.aw_entity_ids.len(), total);
-    assert_eq!(data.aw_mol_types.len(), total);
-    assert_eq!(data.aw_chain_types.len(), total);
+    assert_eq!(coords_flat.len(), total * 3);
+    assert_eq!(chain_ids.len(), total);
+    assert_eq!(res_ids.len(), total);
+    assert_eq!(res_names.len(), total);
+    assert_eq!(atom_names.len(), total);
+    assert_eq!(elements.len(), total);
+    assert_eq!(occupancies.len(), total);
+    assert_eq!(b_factors.len(), total);
+    assert_eq!(aw_entity_ids.len(), total);
+    assert_eq!(aw_mol_types.len(), total);
+    assert_eq!(aw_chain_types.len(), total);
 
     // First atom: residue-1 (MET) backbone N on chain A, protein entity 0.
-    assert_eq!(data.res_ids[0], 1);
-    assert_eq!(data.res_names[0], "MET");
-    assert_eq!(data.atom_names[0], "N");
-    assert_eq!(data.elements[0], "N");
-    assert_eq!(data.chain_ids[0], "A");
-    assert_eq!(data.aw_entity_ids[0], 0);
-    assert_eq!(data.aw_mol_types[0], "protein");
-    assert_eq!(data.aw_chain_types[0], 6);
+    assert_eq!(res_ids[0], 1);
+    assert_eq!(res_names[0], "MET");
+    assert_eq!(atom_names[0], "N");
+    assert_eq!(elements[0], "N");
+    assert_eq!(chain_ids[0], "A");
+    assert_eq!(aw_entity_ids[0], 0);
+    assert_eq!(aw_mol_types[0], "protein");
+    assert_eq!(aw_chain_types[0], 6);
 
     // The protein is 602 atoms, then the 58-atom water bulk; entity ids and
     // mol types segment on that boundary.
     let n_prot = 602usize;
-    assert_eq!(data.aw_entity_ids[n_prot], 1);
-    assert_eq!(data.aw_mol_types[n_prot], "water");
-    assert_eq!(data.aw_chain_types[n_prot], 9);
-    assert_eq!(data.res_names[n_prot], "HOH");
+    assert_eq!(aw_entity_ids[n_prot], 1);
+    assert_eq!(aw_mol_types[n_prot], "water");
+    assert_eq!(aw_chain_types[n_prot], 9);
+    assert_eq!(res_names[n_prot], "HOH");
 
     // Coordinate + per-atom-field checksums pin the full flat result without
     // baking 660 rows. A reorder, drop, or field skew trips these.
-    let coord_sum: f64 = data.coords_flat.iter().map(|&c| f64::from(c)).sum();
-    let res_id_sum: i64 = data.res_ids.iter().map(|&r| i64::from(r)).sum();
-    let occ_sum: f64 = data.occupancies.iter().map(|&o| f64::from(o)).sum();
-    let bf_sum: f64 = data.b_factors.iter().map(|&b| f64::from(b)).sum();
-    let name_len_sum: usize = data.atom_names.iter().map(String::len).sum();
-    let elem_len_sum: usize = data.elements.iter().map(String::len).sum();
+    let coord_sum: f64 = coords_flat.iter().map(|&c| f64::from(c)).sum();
+    let res_id_sum: i64 = res_ids.iter().map(|&r| i64::from(r)).sum();
+    let occ_sum: f64 = occupancies.iter().map(|&o| f64::from(o)).sum();
+    let bf_sum: f64 = b_factors.iter().map(|&b| f64::from(b)).sum();
+    let name_len_sum: usize = atom_names.iter().map(String::len).sum();
+    let elem_len_sum: usize = elements.iter().map(String::len).sum();
 
     // Captured 2026-06-25 from molex's own egress output. The coord and
     // b_factor sums are f32->f64 accumulations of fixed inputs (tight float

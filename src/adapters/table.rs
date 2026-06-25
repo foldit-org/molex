@@ -351,6 +351,19 @@ impl AtomTable {
         });
     }
 
+    /// Number of atom rows the canonical flat walk emits for one entity — the
+    /// exact body-row count [`Self::for_each_flat_row`] yields, driven by the
+    /// same `walk_flat_atoms`. For a polymer this is Σ residue `atom_range`
+    /// lengths (atoms of dropped, backbone-incomplete residues sit in the
+    /// storage columns but are referenced by no range, so they are not
+    /// counted); for a non-polymer it is `columns().len()`.
+    #[must_use]
+    pub(crate) fn flat_atom_count(entity: &MoleculeEntity) -> usize {
+        let mut count = 0usize;
+        walk_flat_atoms(std::slice::from_ref(entity), |_row| count += 1);
+        count
+    }
+
     /// The per-atom source coordinates `(entity_raw_id, raw_idx)` in the same
     /// canonical flat order [`Self::from_entities`] lays atoms out, where
     /// `raw_idx` is the atom's index within its entity's storage columns.

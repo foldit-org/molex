@@ -1,9 +1,10 @@
 //! Benchmark for the entities -> flat-arrays egress core.
 //!
-//! `collect_atom_data` is the shared pure-Rust column collector both the numpy
-//! `to_arrays()` path and the Biotite bridge route through; this times it
-//! directly (no Python interpreter). Gated on the `python` feature because the
-//! atomworks adapter that owns the collector is itself feature-gated.
+//! Times the pure-Rust egress both the numpy `to_arrays()` path and the Biotite
+//! bridge route through: `AtomTable::from_entities` (the one flatten) plus the
+//! shared de-vocab `columns` marshaling for every per-atom column (no Python
+//! interpreter). Gated on the `python` feature because the atomworks adapter
+//! that owns the marshaling layer is itself feature-gated.
 #![allow(
     missing_docs,
     unused_results,
@@ -17,9 +18,28 @@ mod egress_bench {
     use std::path::PathBuf;
 
     use criterion::{black_box, BenchmarkId, Criterion, Throughput};
-    use molex::adapters::atomworks::collect_atom_data;
+    use molex::adapters::atomworks::columns;
     use molex::adapters::cif::mmcif_str_to_entities;
+    use molex::adapters::table::AtomTable;
     use molex::{Assembly, MoleculeEntity};
+
+    /// The pure-Rust egress both numpy and Biotite route through: the one
+    /// flatten plus the shared de-vocab marshaling for every per-atom column.
+    fn egress<E: std::borrow::Borrow<MoleculeEntity>>(entities: &[E]) {
+        let table = AtomTable::from_entities(entities);
+        let n = table.len();
+        black_box(columns::coords_flat(&table, 0..n));
+        black_box(columns::chain_ids(&table, 0..n));
+        black_box(columns::res_ids(&table, 0..n));
+        black_box(columns::res_names(&table, 0..n));
+        black_box(columns::atom_names(&table, 0..n));
+        black_box(columns::elements(&table, 0..n));
+        black_box(columns::occupancies(&table, 0..n));
+        black_box(columns::b_factors(&table, 0..n));
+        black_box(columns::entity_ids(&table, 0..n));
+        black_box(columns::mol_types(&table, 0..n));
+        black_box(columns::chain_types(&table, 0..n));
+    }
 
     /// A real structure parsed into an `Assembly`.
     struct Fixture {
@@ -73,15 +93,11 @@ mod egress_bench {
         for fx in &fixtures {
             group.throughput(Throughput::Elements(fx.atoms));
             group.bench_with_input(
-                BenchmarkId::new("collect_atom_data", fx.name),
+                BenchmarkId::new("egress", fx.name),
                 &fx.assembly,
                 |b, asm| {
-                    let total = fx.atoms as usize;
                     b.iter(|| {
-                        black_box(collect_atom_data(
-                            black_box(asm.entities()),
-                            total,
-                        ));
+                        egress(black_box(asm.entities()));
                     });
                 },
             );

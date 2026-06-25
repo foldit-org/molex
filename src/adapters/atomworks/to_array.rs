@@ -1,201 +1,15 @@
 //! Entities -> AtomArray conversion direction.
 //!
-//! Contains `collect_atom_data`, `entities_to_atom_array_impl`, and all the
-//! `entities_to_*` pyfunction wrappers.
+//! Contains `entities_to_atom_array_impl` and all the `entities_to_*`
+//! pyfunction wrappers.
 
 use pyo3::prelude::*;
 
-use super::{molecule_type_to_chain_type_id, molecule_type_to_mol_type_str};
+use super::columns;
 use crate::adapters::table::AtomTable;
 use crate::analysis::bonds::{infer_bonds, BondOrder, DEFAULT_TOLERANCE};
 use crate::entity::molecule::{MoleculeEntity, MoleculeType};
 use crate::ops::wire::deserialize_assembly;
-
-/// Flat per-atom annotation data collected from entities.
-///
-/// Every column except `coords_flat` (three `f32` per atom) and `all_bonds`
-/// (flat-index endpoints plus order) is one entry per atom, in canonical
-/// `to_arrays()` order.
-pub struct AtomData {
-    /// XYZ coordinates, three `f32` per atom.
-    pub coords_flat: Vec<f32>,
-    /// Per-atom chain identifier (`label_asym_id`, `"A"` fallback).
-    pub chain_ids: Vec<String>,
-    /// Per-atom residue sequence number.
-    pub res_ids: Vec<i32>,
-    /// Per-atom residue name.
-    pub res_names: Vec<String>,
-    /// Per-atom name.
-    pub atom_names: Vec<String>,
-    /// Per-atom element symbol.
-    pub elements: Vec<String>,
-    /// Per-atom occupancy.
-    pub occupancies: Vec<f32>,
-    /// Per-atom B-factor.
-    pub b_factors: Vec<f32>,
-    /// Per-atom AtomWorks entity id.
-    pub aw_entity_ids: Vec<i32>,
-    /// Per-atom AtomWorks molecule-type string.
-    pub aw_mol_types: Vec<String>,
-    /// Per-atom AtomWorks chain-type id.
-    pub aw_chain_types: Vec<i32>,
-    /// Bond endpoints as `(flat_atom_a, flat_atom_b, order)`.
-    pub all_bonds: Vec<(usize, usize, u8)>,
-}
-
-impl AtomData {
-    /// Restrict every parallel per-atom column to `range` (a half-open run of
-    /// flat atom indices), returning a fresh `AtomData`. `coords_flat` is keyed
-    /// by `3 * range` since it stores three floats per atom. Bonds are dropped:
-    /// they index into the full entity's atom space, so a sliced subset has no
-    /// well-defined bond list (and the native numpy read path never reads
-    /// them). Used by the per-residue array read to keep the single column
-    /// core.
-    pub(crate) fn slice_atoms(&self, range: std::ops::Range<usize>) -> Self {
-        let coords_range = (range.start * 3)..(range.end * 3);
-        Self {
-            coords_flat: self.coords_flat[coords_range].to_vec(),
-            chain_ids: self.chain_ids[range.clone()].to_vec(),
-            res_ids: self.res_ids[range.clone()].to_vec(),
-            res_names: self.res_names[range.clone()].to_vec(),
-            atom_names: self.atom_names[range.clone()].to_vec(),
-            elements: self.elements[range.clone()].to_vec(),
-            occupancies: self.occupancies[range.clone()].to_vec(),
-            b_factors: self.b_factors[range.clone()].to_vec(),
-            aw_entity_ids: self.aw_entity_ids[range.clone()].to_vec(),
-            aw_mol_types: self.aw_mol_types[range.clone()].to_vec(),
-            aw_chain_types: self.aw_chain_types[range].to_vec(),
-            all_bonds: Vec::new(),
-        }
-    }
-
-    fn with_capacity(total_atoms: usize) -> Self {
-        Self {
-            coords_flat: Vec::with_capacity(total_atoms * 3),
-            chain_ids: Vec::with_capacity(total_atoms),
-            res_ids: Vec::with_capacity(total_atoms),
-            res_names: Vec::with_capacity(total_atoms),
-            atom_names: Vec::with_capacity(total_atoms),
-            elements: Vec::with_capacity(total_atoms),
-            occupancies: Vec::with_capacity(total_atoms),
-            b_factors: Vec::with_capacity(total_atoms),
-            aw_entity_ids: Vec::with_capacity(total_atoms),
-            aw_mol_types: Vec::with_capacity(total_atoms),
-            aw_chain_types: Vec::with_capacity(total_atoms),
-            all_bonds: Vec::new(),
-        }
-    }
-}
-
-/// Collect per-atom annotation data from entities into flat vectors.
-///
-/// This is the shared pure-Rust egress core both the numpy `to_arrays()` path
-/// and the Biotite `AtomArray` bridge route through; no Python interpreter is
-/// touched. Public so the egress benchmark can time it directly.
-///
-/// The flat per-atom layout (and the non-polymer key synthesis) comes from
-/// [`AtomTable::from_entities`] — the single canonical flatten. This function
-/// marshals that native table to the vocab-bearing [`AtomData`]: the empty
-/// chain -> `"A"` fallback, the res-name / atom-name utf8-trim, the element
-/// symbol, and the `mol_type` -> str / `chain_type` -> i32 maps all live here,
-/// at the AtomWorks/Biotite edge, off the native `AtomTable`.
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
-    reason = "atom counts fit in i32 for valid structures"
-)]
-pub fn collect_atom_data<E: std::borrow::Borrow<MoleculeEntity>>(
-    entities: &[E],
-    total_atoms: usize,
-) -> AtomData {
-    let table = AtomTable::from_entities(entities);
-    let mut data = AtomData::with_capacity(total_atoms);
-
-    for i in 0..table.len() {
-        let pos = table.position[i];
-        data.coords_flat.push(pos.x);
-        data.coords_flat.push(pos.y);
-        data.coords_flat.push(pos.z);
-
-        // Polymer atoms carry the real `label_asym_id`; non-polymer atoms
-        // arrive with an empty chain and fall back to "A" so biotite always
-        // sees a non-empty chain string.
-        let chain = table.chain_id[i].as_str();
-        data.chain_ids.push(if chain.is_empty() {
-            "A".to_owned()
-        } else {
-            chain.to_owned()
-        });
-
-        data.res_ids.push(table.res_id[i]);
-
-        data.res_names.push(
-            std::str::from_utf8(&table.res_name[i])
-                .unwrap_or("UNK")
-                .trim()
-                .to_owned(),
-        );
-
-        data.atom_names.push(
-            std::str::from_utf8(&table.name[i])
-                .unwrap_or("X")
-                .trim()
-                .to_owned(),
-        );
-
-        data.elements.push(table.element[i].symbol().to_owned());
-
-        data.occupancies.push(table.occupancy[i]);
-        data.b_factors.push(table.b_factor[i]);
-
-        let mol_type = table.mol_type[i];
-        data.aw_entity_ids.push(table.entity_id[i].cast_signed());
-        data.aw_mol_types
-            .push(molecule_type_to_mol_type_str(mol_type).to_owned());
-        data.aw_chain_types
-            .push(i32::from(molecule_type_to_chain_type_id(mol_type)));
-    }
-
-    let mut atom_offset: usize = 0;
-    for entity in entities {
-        let entity = entity.borrow();
-        append_entity_bonds(&mut data, entity, atom_offset);
-        atom_offset += entity.atom_count();
-    }
-
-    data
-}
-
-/// Infer and append bonds for a single entity (ligands/cofactors/ions only).
-fn append_entity_bonds(
-    data: &mut AtomData,
-    entity: &MoleculeEntity,
-    atom_offset: usize,
-) {
-    let needs_inference = matches!(
-        entity.molecule_type(),
-        MoleculeType::Ligand | MoleculeType::Cofactor | MoleculeType::Ion
-    );
-
-    let count = entity.atom_count();
-    if needs_inference && (2..=500).contains(&count) {
-        let atoms = entity.columns().to_atoms();
-        let inferred = infer_bonds(&atoms, DEFAULT_TOLERANCE);
-        for bond in &inferred {
-            let bt = match bond.order {
-                BondOrder::Single => 1u8,
-                BondOrder::Double => 2,
-                BondOrder::Triple => 3,
-                BondOrder::Aromatic => 4,
-            };
-            data.all_bonds.push((
-                bond.atom_a + atom_offset,
-                bond.atom_b + atom_offset,
-                bt,
-            ));
-        }
-    }
-}
 
 /// Convert a `Vec<MoleculeEntity>` to an AtomWorks-compatible Biotite
 /// `AtomArray`.
@@ -224,87 +38,137 @@ pub(crate) fn entities_to_atom_array_impl<
     let biotite = py.import("biotite.structure")?;
     let atom_array = biotite.getattr("AtomArray")?.call1((total_atoms,))?;
 
-    let data = collect_atom_data(entities, total_atoms);
+    let table = AtomTable::from_entities(entities);
 
-    set_standard_annotations(&atom_array, numpy.as_any(), &data, total_atoms)?;
-    set_atomworks_annotations(&atom_array, numpy.as_any(), &data)?;
-    set_bond_list(&atom_array, biotite.as_any(), &data, total_atoms)?;
+    set_standard_annotations(&atom_array, numpy.as_any(), &table, total_atoms)?;
+    set_atomworks_annotations(&atom_array, numpy.as_any(), &table)?;
+    set_bond_list(&atom_array, biotite.as_any(), entities, total_atoms)?;
 
     Ok(atom_array.unbind())
 }
 
-/// Set standard Biotite annotations (coord, chain_id, res_id, etc.).
+/// Set standard Biotite annotations (coord, chain_id, res_id, etc.), marshaled
+/// off the native `table` through the shared de-vocab [`columns`] layer.
 fn set_standard_annotations(
     atom_array: &Bound<'_, PyAny>,
     numpy: &Bound<'_, PyAny>,
-    data: &AtomData,
+    table: &AtomTable,
     total_atoms: usize,
 ) -> PyResult<()> {
-    let coord_np = numpy.call_method1("array", (&data.coords_flat,))?;
+    let full = 0..total_atoms;
+
+    let coord_np = numpy
+        .call_method1("array", (columns::coords_flat(table, full.clone()),))?;
     let coord_np = coord_np.call_method1("reshape", ((total_atoms, 3),))?;
     let coord_np =
         coord_np.call_method1("astype", (numpy.getattr("float32")?,))?;
     atom_array.setattr("coord", coord_np)?;
 
-    let chain_np = numpy.call_method1("array", (&data.chain_ids,))?;
+    let chain_np = numpy
+        .call_method1("array", (columns::chain_ids(table, full.clone()),))?;
     atom_array.setattr("chain_id", chain_np)?;
 
-    let res_np = numpy.call_method1("array", (&data.res_ids,))?;
+    let res_np = numpy
+        .call_method1("array", (columns::res_ids(table, full.clone()),))?;
     let res_np = res_np.call_method1("astype", (numpy.getattr("int32")?,))?;
     atom_array.setattr("res_id", res_np)?;
 
-    let resname_np = numpy.call_method1("array", (&data.res_names,))?;
+    let resname_np = numpy
+        .call_method1("array", (columns::res_names(table, full.clone()),))?;
     atom_array.setattr("res_name", resname_np)?;
 
-    let atomname_np = numpy.call_method1("array", (&data.atom_names,))?;
+    let atomname_np = numpy
+        .call_method1("array", (columns::atom_names(table, full.clone()),))?;
     atom_array.setattr("atom_name", atomname_np)?;
 
-    let element_np = numpy.call_method1("array", (&data.elements,))?;
+    let element_np = numpy
+        .call_method1("array", (columns::elements(table, full.clone()),))?;
     atom_array.setattr("element", element_np)?;
 
-    let occ_np = numpy.call_method1("array", (&data.occupancies,))?;
+    let occ_np = numpy
+        .call_method1("array", (columns::occupancies(table, full.clone()),))?;
     let occ_np = occ_np.call_method1("astype", (numpy.getattr("float32")?,))?;
     atom_array.setattr("occupancy", occ_np)?;
 
-    let bf_np = numpy.call_method1("array", (&data.b_factors,))?;
+    let bf_np =
+        numpy.call_method1("array", (columns::b_factors(table, full),))?;
     let bf_np = bf_np.call_method1("astype", (numpy.getattr("float32")?,))?;
     atom_array.setattr("b_factor", bf_np)?;
 
     Ok(())
 }
 
-/// Set AtomWorks-specific annotations (entity_id, mol_type, chain_type).
+/// Set AtomWorks-specific annotations (entity_id, mol_type, chain_type),
+/// marshaled off the native `table` through the shared de-vocab [`columns`]
+/// layer.
 fn set_atomworks_annotations(
     atom_array: &Bound<'_, PyAny>,
     numpy: &Bound<'_, PyAny>,
-    data: &AtomData,
+    table: &AtomTable,
 ) -> PyResult<()> {
-    let eid_np = numpy.call_method1("array", (&data.aw_entity_ids,))?;
+    let full = 0..table.len();
+
+    let eid_np = numpy
+        .call_method1("array", (columns::entity_ids(table, full.clone()),))?;
     let eid_np = eid_np.call_method1("astype", (numpy.getattr("int32")?,))?;
     let _ = atom_array.call_method1("set_annotation", ("entity_id", eid_np))?;
 
-    let mt_np = numpy.call_method1("array", (&data.aw_mol_types,))?;
+    let mt_np = numpy
+        .call_method1("array", (columns::mol_types(table, full.clone()),))?;
     let _ = atom_array.call_method1("set_annotation", ("mol_type", mt_np))?;
 
-    let ct_np = numpy.call_method1("array", (&data.aw_chain_types,))?;
+    let ct_np =
+        numpy.call_method1("array", (columns::chain_types(table, full),))?;
     let ct_np = ct_np.call_method1("astype", (numpy.getattr("int32")?,))?;
     let _ = atom_array.call_method1("set_annotation", ("chain_type", ct_np))?;
 
     Ok(())
 }
 
-/// Build and attach a BondList to the AtomArray.
-fn set_bond_list(
+/// Infer bonds for ligand/cofactor/ion entities and attach the resulting
+/// `BondList` to the AtomArray. Bonds are a Biotite-only concern: endpoints are
+/// reported per-entity, offset into flat `to_arrays()` index space by the
+/// running atom count (the same flat order [`AtomTable::from_entities`] lays
+/// atoms out).
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "atom counts fit in i32 for valid structures"
+)]
+fn set_bond_list<E: std::borrow::Borrow<MoleculeEntity>>(
     atom_array: &Bound<'_, PyAny>,
     biotite: &Bound<'_, PyAny>,
-    data: &AtomData,
+    entities: &[E],
     total_atoms: usize,
 ) -> PyResult<()> {
     let bond_list_cls = biotite.getattr("BondList")?;
     let bond_list = bond_list_cls.call1((total_atoms,))?;
-    for (a, b, bt) in &data.all_bonds {
-        let _ = bond_list.call_method1("add_bond", (*a, *b, *bt))?;
+
+    let mut atom_offset: usize = 0;
+    for entity in entities {
+        let entity = entity.borrow();
+        let needs_inference = matches!(
+            entity.molecule_type(),
+            MoleculeType::Ligand | MoleculeType::Cofactor | MoleculeType::Ion
+        );
+        let count = entity.atom_count();
+        if needs_inference && (2..=500).contains(&count) {
+            let atoms = entity.columns().to_atoms();
+            for bond in &infer_bonds(&atoms, DEFAULT_TOLERANCE) {
+                let bt = match bond.order {
+                    BondOrder::Single => 1u8,
+                    BondOrder::Double => 2,
+                    BondOrder::Triple => 3,
+                    BondOrder::Aromatic => 4,
+                };
+                let _ = bond_list.call_method1(
+                    "add_bond",
+                    (bond.atom_a + atom_offset, bond.atom_b + atom_offset, bt),
+                )?;
+            }
+        }
+        atom_offset += count;
     }
+
     atom_array.setattr("bonds", bond_list)?;
     Ok(())
 }
@@ -536,18 +400,22 @@ mod tests {
     }
 
     #[test]
-    fn collect_atom_data_empty_entities() {
+    fn columns_empty_entities() {
         let entities: Vec<MoleculeEntity> = vec![];
-        let data = collect_atom_data(&entities, 0);
-        assert!(data.coords_flat.is_empty());
-        assert!(data.chain_ids.is_empty());
-        assert!(data.res_ids.is_empty());
-        assert!(data.aw_entity_ids.is_empty());
-        assert!(data.all_bonds.is_empty());
+        let table = AtomTable::from_entities(&entities);
+        assert_eq!(table.len(), 0);
+        assert!(columns::coords_flat(&table, 0..0).is_empty());
+        assert!(columns::chain_ids(&table, 0..0).is_empty());
+        assert!(columns::res_ids(&table, 0..0).is_empty());
+        assert!(columns::entity_ids(&table, 0..0).is_empty());
     }
 
     #[test]
-    fn collect_atom_data_flat_columns_match_entities() {
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one assertion per de-vocab column over the fixture"
+    )]
+    fn columns_flat_match_entities() {
         let mut alloc = EntityIdAllocator::new();
         let p = dipeptide(alloc.allocate());
         let l = ligand(alloc.allocate());
@@ -556,20 +424,32 @@ mod tests {
         let total: usize = p.atom_count() + l.atom_count();
         let entities = vec![p, l];
 
-        let data = collect_atom_data(&entities, total);
+        let table = AtomTable::from_entities(&entities);
+        let full = 0..total;
+        let coords_flat = columns::coords_flat(&table, full.clone());
+        let chain_ids = columns::chain_ids(&table, full.clone());
+        let res_ids = columns::res_ids(&table, full.clone());
+        let res_names = columns::res_names(&table, full.clone());
+        let atom_names = columns::atom_names(&table, full.clone());
+        let elements = columns::elements(&table, full.clone());
+        let occupancies = columns::occupancies(&table, full.clone());
+        let b_factors = columns::b_factors(&table, full.clone());
+        let aw_entity_ids = columns::entity_ids(&table, full.clone());
+        let aw_mol_types = columns::mol_types(&table, full.clone());
+        let aw_chain_types = columns::chain_types(&table, full);
 
         // Every parallel column has one entry per atom.
-        assert_eq!(data.coords_flat.len(), total * 3);
-        assert_eq!(data.chain_ids.len(), total);
-        assert_eq!(data.res_ids.len(), total);
-        assert_eq!(data.res_names.len(), total);
-        assert_eq!(data.atom_names.len(), total);
-        assert_eq!(data.elements.len(), total);
-        assert_eq!(data.occupancies.len(), total);
-        assert_eq!(data.b_factors.len(), total);
-        assert_eq!(data.aw_entity_ids.len(), total);
-        assert_eq!(data.aw_mol_types.len(), total);
-        assert_eq!(data.aw_chain_types.len(), total);
+        assert_eq!(coords_flat.len(), total * 3);
+        assert_eq!(chain_ids.len(), total);
+        assert_eq!(res_ids.len(), total);
+        assert_eq!(res_names.len(), total);
+        assert_eq!(atom_names.len(), total);
+        assert_eq!(elements.len(), total);
+        assert_eq!(occupancies.len(), total);
+        assert_eq!(b_factors.len(), total);
+        assert_eq!(aw_entity_ids.len(), total);
+        assert_eq!(aw_mol_types.len(), total);
+        assert_eq!(aw_chain_types.len(), total);
 
         // Coords are stored row-major (x, y, z) per atom in entity order:
         // protein atoms first, then ligand atoms. Walking the entities in
@@ -583,15 +463,15 @@ mod tests {
                 flat.push(p.z);
             }
         }
-        assert_eq!(data.coords_flat, flat);
+        assert_eq!(coords_flat, flat);
 
         // entity_id column is segmented by entity: first N atoms carry the
         // protein id, the rest carry the ligand id.
         let n_prot = entities[0].atom_count();
-        for &eid in &data.aw_entity_ids[..n_prot] {
+        for &eid in &aw_entity_ids[..n_prot] {
             assert_eq!(eid, p_id);
         }
-        for &eid in &data.aw_entity_ids[n_prot..] {
+        for &eid in &aw_entity_ids[n_prot..] {
             assert_eq!(eid, l_id);
         }
 
@@ -607,65 +487,75 @@ mod tests {
         }
         expected_res_ids
             .extend(std::iter::repeat_n(1, entities[1].atom_count()));
-        assert_eq!(data.res_ids, expected_res_ids);
+        assert_eq!(res_ids, expected_res_ids);
 
         // res_name column: trimmed 3-char codes, segmented by residue.
-        assert_eq!(&data.res_names[..n_prot - 4], &["ALA"; 5]);
-        assert_eq!(&data.res_names[n_prot - 4..n_prot], &["GLY"; 4]);
-        assert_eq!(&data.res_names[n_prot..], &["LIG"; 3]);
+        assert_eq!(&res_names[..n_prot - 4], &["ALA"; 5]);
+        assert_eq!(&res_names[n_prot - 4..n_prot], &["GLY"; 4]);
+        assert_eq!(&res_names[n_prot..], &["LIG"; 3]);
 
         // chain_id: the polymer carries its real label_asym_id; the
         // ligand has no chain so falls back to "A".
-        for c in &data.chain_ids[..n_prot] {
+        for c in &chain_ids[..n_prot] {
             assert_eq!(c, "A");
         }
 
         // mol_type / chain_type annotations match the source classification.
-        assert!(data.aw_mol_types[..n_prot].iter().all(|s| s == "protein"));
-        assert!(data.aw_mol_types[n_prot..].iter().all(|s| s == "ligand"));
-        assert!(data.aw_chain_types[..n_prot].iter().all(|&c| c == 6));
-        assert!(data.aw_chain_types[n_prot..].iter().all(|&c| c == 8));
+        assert!(aw_mol_types[..n_prot].iter().all(|s| s == "protein"));
+        assert!(aw_mol_types[n_prot..].iter().all(|s| s == "ligand"));
+        assert!(aw_chain_types[..n_prot].iter().all(|&c| c == 6));
+        assert!(aw_chain_types[n_prot..].iter().all(|&c| c == 8));
     }
 
     #[test]
-    fn slice_atoms_extracts_one_residue_run() {
+    fn columns_range_extracts_one_residue_run() {
         // The dipeptide lays out ALA (atoms 0..5) then GLY (atoms 5..9). The
-        // per-residue read path collects the whole entity, then slices the flat
-        // columns to the residue's contiguous run at offset = sum of prior
-        // residues' atom counts. Slicing to GLY's run (offset 5, count 4) must
-        // reproduce exactly the GLY atoms and only those.
+        // per-residue read path marshals the flat columns over the residue's
+        // contiguous run at offset = sum of prior residues' atom counts.
+        // Marshaling GLY's run (offset 5, count 4) must reproduce exactly the
+        // GLY atoms and only those.
         let mut alloc = EntityIdAllocator::new();
         let p = dipeptide(alloc.allocate());
-        let total = p.atom_count();
         let entities = vec![p];
-        let data = collect_atom_data(&entities, total);
+        let table = AtomTable::from_entities(&entities);
 
         // GLY is residue index 1: offset = ALA's 5 atoms, count = GLY's 4.
-        let gly = data.slice_atoms(5..9);
-
-        assert_eq!(gly.coords_flat.len(), 4 * 3);
-        assert_eq!(gly.coords_flat, data.coords_flat[15..27]);
-        assert_eq!(gly.res_names, vec!["GLY"; 4]);
-        assert_eq!(gly.res_ids, vec![2, 2, 2, 2]);
-        assert_eq!(gly.atom_names, vec!["N", "CA", "C", "O"]);
-        assert_eq!(gly.elements, vec!["N", "C", "C", "O"]);
-        // Slicing drops bonds (they index the full entity's atom space).
-        assert!(gly.all_bonds.is_empty());
+        let gly = 5..9;
+        let coords = columns::coords_flat(&table, gly.clone());
+        assert_eq!(coords.len(), 4 * 3);
+        assert_eq!(coords, columns::coords_flat(&table, 0..9)[15..27]);
+        assert_eq!(columns::res_names(&table, gly.clone()), vec!["GLY"; 4]);
+        assert_eq!(columns::res_ids(&table, gly.clone()), vec![2, 2, 2, 2]);
+        assert_eq!(
+            columns::atom_names(&table, gly.clone()),
+            vec!["N", "CA", "C", "O"]
+        );
+        assert_eq!(columns::elements(&table, gly), vec!["N", "C", "C", "O"]);
     }
 
     #[test]
-    fn collect_atom_data_preserves_atom_order_and_names() {
+    fn columns_preserve_atom_order_and_names() {
         let mut alloc = EntityIdAllocator::new();
         let l = ligand(alloc.allocate());
         let total = l.atom_count();
         let entities = vec![l];
-        let data = collect_atom_data(&entities, total);
+        let table = AtomTable::from_entities(&entities);
+        let full = 0..total;
 
         // Atom names are trimmed and appear in stored order.
-        assert_eq!(data.atom_names, vec!["C1", "O1", "N1"]);
-        assert_eq!(data.elements, vec!["C", "O", "N"]);
+        assert_eq!(
+            columns::atom_names(&table, full.clone()),
+            vec!["C1", "O1", "N1"]
+        );
+        assert_eq!(
+            columns::elements(&table, full.clone()),
+            vec!["C", "O", "N"]
+        );
         // Default occupancy/b_factor flow through unchanged.
-        assert_eq!(data.occupancies, vec![1.0, 1.0, 1.0]);
-        assert_eq!(data.b_factors, vec![0.0, 0.0, 0.0]);
+        assert_eq!(
+            columns::occupancies(&table, full.clone()),
+            vec![1.0, 1.0, 1.0]
+        );
+        assert_eq!(columns::b_factors(&table, full), vec![0.0, 0.0, 0.0]);
     }
 }

@@ -32,6 +32,7 @@
 //! atom_array = molex.entities_to_atom_array_parsed(assembly_bytes, "3nez.cif.gz")
 //! ```
 
+pub mod columns;
 mod from_array;
 mod to_array;
 
@@ -46,13 +47,6 @@ pub use to_array::{
     entities_to_atom_array, entities_to_atom_array_parsed,
     entities_to_atom_array_plus,
 };
-// The shared per-atom column collector. Marshals the native
-// `AtomTable::from_entities` flatten into the vocab-bearing `AtomData` the
-// Biotite bridge in `to_array.rs` and the native numpy read path in
-// `python::arrays` consume. `collect_atom_data`/`AtomData` are public so
-// the egress benchmark can time the pure-Rust core without a Python
-// interpreter.
-pub use to_array::{collect_atom_data, AtomData};
 
 use crate::entity::molecule::MoleculeType;
 

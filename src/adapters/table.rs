@@ -1,3 +1,5 @@
+// foldit:allow-long-file: the AtomTable interchange plus the one
+// into_entities/from_entities grouping core and the shared flat-atom walk.
 //! Native, format-neutral, key-bearing flat atom interchange.
 //!
 //! `AtomTable` is the one columnar table the partition and concat cores run

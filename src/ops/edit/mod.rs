@@ -15,6 +15,9 @@
 //! structure is not recomputed here; callers opt in via
 //! `Assembly::recompute_ss`.
 
+/// Whole-assembly sanitation filters (`without_waters`, `heavy_only`).
+mod filter;
+
 use std::sync::Arc;
 
 use glam::Vec3;

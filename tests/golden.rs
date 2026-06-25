@@ -529,3 +529,69 @@ fn uc17_contacts_1ubq() {
 
 const CONTACT_COUNT_4A: usize = 3611;
 const NEIGHBOR_COUNT_4A: usize = 11;
+
+// --- UC-18 · without_waters ---------------------------------------------
+
+/// `without_waters()` drops bulk water/solvent entities whole, keeping every
+/// other entity and atom unchanged. 1UBQ at `Completion::Heavy` is one
+/// protein chain plus a water bulk; the filter removes only the water.
+///
+/// Params: `ubq_assembly(Completion::Heavy)`, `without_waters()`. Golden
+/// against molex's own entity/atom counts.
+#[test]
+fn uc18_without_waters_1ubq() {
+    let asm = ubq_assembly(Completion::Heavy);
+
+    // Captured 2026-06-25: 2 entities (protein 602 atoms + water bulk 58
+    // atoms), 660 atoms total.
+    assert_eq!(asm.entities().len(), 2);
+    assert_eq!(total_atoms(&asm), 660);
+
+    let waterless = asm.without_waters();
+
+    // The single water bulk is gone; the protein passes through unchanged.
+    assert_eq!(waterless.entities().len(), 1);
+    assert_eq!(total_atoms(&waterless), 602);
+    assert!(
+        waterless
+            .entities()
+            .iter()
+            .all(|e| e.molecule_type() != molex::MoleculeType::Water
+                && e.molecule_type() != molex::MoleculeType::Solvent),
+        "no water or solvent entity survives"
+    );
+}
+
+// --- UC-19 · heavy_only -------------------------------------------------
+
+/// `heavy_only()` drops every hydrogen and fabricates nothing: the heavy-atom
+/// count is preserved. Starting from heavy-only 1UBQ, `to_all_atom()` adds
+/// template hydrogens, then `heavy_only()` must strip exactly those back out,
+/// returning to the original heavy count.
+///
+/// Params: `ubq_assembly(Completion::Heavy)`, `to_all_atom()`, `heavy_only()`.
+/// Golden against molex's own counts.
+#[test]
+fn uc19_heavy_only() {
+    let heavy = ubq_assembly(Completion::Heavy);
+    // Captured 2026-06-25: heavy-only 1UBQ is 660 atoms with no hydrogens.
+    let heavy_atoms = total_atoms(&heavy);
+    assert_eq!(heavy_atoms, 660);
+    assert_eq!(count_hydrogens(&heavy), 0);
+
+    let protonated = heavy.to_all_atom();
+    // Captured 2026-06-25: protonation adds 569 hydrogens (660 -> 1229).
+    assert_eq!(total_atoms(&protonated), 1229);
+    assert_eq!(count_hydrogens(&protonated), 569);
+
+    let stripped = protonated.heavy_only();
+
+    // No hydrogen survives, and the heavy-atom count is exactly the
+    // pre-protonation count: nothing was fabricated.
+    assert_eq!(count_hydrogens(&stripped), 0, "heavy_only carries no H");
+    assert_eq!(
+        total_atoms(&stripped),
+        heavy_atoms,
+        "heavy-atom count preserved (no fabrication)"
+    );
+}

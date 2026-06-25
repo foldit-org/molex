@@ -514,14 +514,6 @@ def atom_array_to_entities(atom_array: Any) -> bytes:
     bytes."""
     ...
 
-def assembly_bytes_to_atom_array(bytes: bytes) -> Any:
-    """Convert assembly wire bytes to a Biotite `AtomArray`."""
-    ...
-
-def assembly_bytes_to_atom_array_plus(bytes: bytes) -> Any:
-    """Convert assembly wire bytes to an AtomWorks `AtomArrayPlus`."""
-    ...
-
 def entities_to_atom_array_parsed(
     assembly_bytes: bytes, source_path: str | None = ...
 ) -> Any:

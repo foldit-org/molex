@@ -44,7 +44,6 @@ use self::nucleic_acid::NAEntity;
 use self::protein::ProteinEntity;
 use self::small_molecule::SmallMoleculeEntity;
 use self::traits::Entity;
-use crate::analysis::aabb::Aabb;
 use crate::bond::CovalentBond;
 use crate::chemistry::amino_acids::{modified_aa_one_letter, AminoAcid};
 use crate::chemistry::nucleotides::Nucleotide;
@@ -397,12 +396,6 @@ impl MoleculeEntity {
         }
     }
 
-    /// Compute the axis-aligned bounding box for this entity's atoms.
-    #[must_use]
-    pub fn aabb(&self) -> Option<Aabb> {
-        Aabb::from_positions(self.positions())
-    }
-
     /// Human-readable label (e.g. "Protein Chain A", "Ligand (ATP)", "Zn2+
     /// Ion").
     #[must_use]
@@ -640,16 +633,6 @@ mod tests {
     fn residue_count_for_protein() {
         let entity = two_residue_protein();
         assert_eq!(entity.residue_count(), 2);
-    }
-
-    #[test]
-    fn aabb_is_some_for_nonempty_entity() {
-        let entity = two_residue_protein();
-        let aabb = entity.aabb();
-        assert!(aabb.is_some());
-        let bb = aabb.unwrap();
-        assert!(bb.min.x <= 1.0);
-        assert!(bb.max.x >= 22.0);
     }
 
     #[test]

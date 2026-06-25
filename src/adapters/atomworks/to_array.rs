@@ -219,49 +219,6 @@ pub fn entities_to_atom_array_plus(
     Ok(as_plus.call1((atom_array,))?.unbind())
 }
 
-/// Convert assembly wire bytes to a Biotite `AtomArray`.
-///
-/// Pass assembly wire bytes (the output of `serialize_assembly` /
-/// `assembly_bytes`).
-///
-/// # Errors
-///
-/// Returns `PyErr` if the bytes cannot be deserialized or if Python/Biotite
-/// operations fail.
-#[pyfunction]
-#[allow(clippy::needless_pass_by_value)]
-pub fn assembly_bytes_to_atom_array(
-    py: Python,
-    bytes: Vec<u8>,
-) -> PyResult<Py<PyAny>> {
-    let assembly = deserialize_assembly(&bytes).map_err(|e| {
-        PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
-    })?;
-    entities_to_atom_array_impl(py, assembly.entities())
-}
-
-/// Convert assembly wire bytes to an `AtomArrayPlus`.
-///
-/// # Errors
-///
-/// Returns `PyErr` if the bytes cannot be deserialized or if
-/// Python/AtomWorks operations fail.
-#[pyfunction]
-#[allow(clippy::needless_pass_by_value)]
-pub fn assembly_bytes_to_atom_array_plus(
-    py: Python,
-    bytes: Vec<u8>,
-) -> PyResult<Py<PyAny>> {
-    let assembly = deserialize_assembly(&bytes).map_err(|e| {
-        PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
-    })?;
-    let atom_array = entities_to_atom_array_impl(py, assembly.entities())?;
-    let as_plus = py
-        .import("atomworks.io.utils.atom_array_plus")?
-        .getattr("as_atom_array_plus")?;
-    Ok(as_plus.call1((atom_array,))?.unbind())
-}
-
 /// Convert `Vec<MoleculeEntity>` to AtomArray, then run through
 /// `atomworks.io.parser.parse()` for full cleaning.
 ///

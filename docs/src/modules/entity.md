@@ -25,7 +25,6 @@ Common methods available on all variants (delegated to the inner type):
 | `atom_count()` | `usize` | Number of atoms |
 | `positions()` | `Vec<Vec3>` | All atom positions |
 | `label()` | `String` | Human-readable label (e.g. "Protein A", "Ligand (ATP)") |
-| `aabb()` | `Option<Aabb>` | Axis-aligned bounding box |
 | `residue_count()` | `usize` | Residues (polymer) or molecules (bulk) |
 
 Variant-specific downcasting: `as_protein()`, `as_nucleic_acid()`, `as_small_molecule()`, `as_bulk()`.

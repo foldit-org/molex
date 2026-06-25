@@ -38,12 +38,10 @@ mod to_array;
 
 // Re-export all public items so they remain accessible at the same paths.
 pub use from_array::{
-    atom_array_to_entities, atom_array_to_entity_vec, parse_file_full,
-    parse_file_to_entities,
+    atom_array_to_entities, parse_file_full, parse_file_to_entities,
 };
 use pyo3::prelude::*;
 pub use to_array::{
-    assembly_bytes_to_atom_array, assembly_bytes_to_atom_array_plus,
     entities_to_atom_array, entities_to_atom_array_parsed,
     entities_to_atom_array_plus,
 };

@@ -72,22 +72,6 @@ let disulfides: Vec<CovalentBond> = detect_disulfides(&entities);
 
 Scans every protein entity for CYS SG atoms and emits one `CovalentBond` (with `AtomId` endpoints) per SG-SG pair within 1.5 to 2.5 angstroms. `Assembly` does not store disulfides; the same pairs surface for rendering via `assembly.detect_fallback_connections()` under `ConnectionType::Disulfide`.
 
-## Bounding box (`analysis::aabb`)
-
-```rust,ignore
-use molex::analysis::Aabb;
-
-let aabb = Aabb::from_positions(&positions)?;
-aabb.center();   // Vec3 -- geometric center
-aabb.extents();  // Vec3 -- size along each axis
-aabb.radius();   // f32 -- bounding sphere radius
-
-let merged = aabb.union(&other_aabb);
-let combined = Aabb::from_aabbs(&[aabb1, aabb2, aabb3])?;
-```
-
-Also available directly on entities: `entity.aabb()`.
-
 ## Volumetric (`analysis::volumetric`)
 
 Voxel-grid analysis used for surface and cavity work:

@@ -93,7 +93,4 @@ atom_array_to_entities(atom_array: PyObject) -> PyResult<Vec<u8>>
 entities_to_atom_array_parsed(assembly_bytes: Vec<u8>, filename: &str) -> PyResult<PyObject>
 parse_file_to_entities(path: &str) -> PyResult<Vec<u8>>
 parse_file_full(path: &str) -> PyResult<PyObject>
-
-assembly_bytes_to_atom_array(bytes: Vec<u8>) -> PyResult<PyObject>
-assembly_bytes_to_atom_array_plus(bytes: Vec<u8>) -> PyResult<PyObject>
 ```

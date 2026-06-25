@@ -225,33 +225,6 @@ fn normalize_completes_surviving_residue_sidechain() {
     );
 }
 
-// -- Sidechain tests --
-
-#[test]
-fn sidechain_empty() {
-    let sc = Sidechain::empty();
-    assert!(sc.is_empty());
-    assert!(sc.atoms.is_empty());
-    assert!(sc.bonds.is_empty());
-}
-
-#[test]
-fn sidechain_is_empty_with_atoms() {
-    let sc = Sidechain {
-        atoms: vec![Atom {
-            position: Vec3::ZERO,
-            occupancy: 1.0,
-            b_factor: 0.0,
-            element: Element::C,
-            name: *b"CB  ",
-            formal_charge: 0,
-            observed: true,
-        }],
-        bonds: Vec::new(),
-    };
-    assert!(!sc.is_empty());
-}
-
 // -- to_backbone tests --
 
 #[test]

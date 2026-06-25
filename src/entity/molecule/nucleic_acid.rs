@@ -1,7 +1,5 @@
 //! Nucleic acid entity: a single DNA or RNA chain instance.
 
-use std::collections::HashMap;
-
 use glam::Vec3;
 
 use super::atom::{Atom, AtomColumns};
@@ -77,27 +75,6 @@ impl Entity for NAEntity {
     fn bonds(&self) -> &[CovalentBond] {
         &self.bonds
     }
-}
-
-const HEX_RING_ATOMS: &[&str] = &["N1", "C2", "N3", "C4", "C5", "C6"];
-const PENT_RING_ATOMS: &[&str] = &["C4", "C5", "N7", "C8", "N9"];
-
-fn ndb_base_color(res_name: &str) -> Option<[f32; 3]> {
-    match res_name {
-        "DA" | "A" | "ADE" | "RAD" => Some([0.85, 0.20, 0.20]),
-        "DG" | "G" | "GUA" | "RGU" => Some([0.20, 0.80, 0.20]),
-        "DC" | "C" | "CYT" | "RCY" => Some([0.90, 0.90, 0.20]),
-        "DT" | "THY" => Some([0.20, 0.20, 0.85]),
-        "DU" | "U" | "URA" => Some([0.20, 0.85, 0.85]),
-        _ => None,
-    }
-}
-
-fn is_purine(res_name: &str) -> bool {
-    matches!(
-        res_name,
-        "DA" | "DG" | "DI" | "A" | "G" | "ADE" | "GUA" | "I" | "RAD" | "RGU"
-    )
 }
 
 impl NAEntity {
@@ -195,111 +172,6 @@ impl NAEntity {
             self.pdb_chain_id.clone(),
             level,
         )
-    }
-
-    /// Extract phosphorus (P) atom positions, split into segments at
-    /// gaps where consecutive P-P distance exceeds ~8 A.
-    #[must_use]
-    #[allow(
-        clippy::excessive_nesting,
-        reason = "gap-splitting logic is inherently nested"
-    )]
-    pub fn extract_p_atom_segments(&self) -> Vec<Vec<Vec3>> {
-        const MAX_PHOSPHATE_BOND_DIST_SQ: f32 =
-            MAX_PHOSPHATE_BOND_DIST * MAX_PHOSPHATE_BOND_DIST;
-
-        let mut p_positions = Vec::new();
-        for residue in &self.residues {
-            for idx in residue.atom_range.clone() {
-                let a = self.atom(idx);
-                let name = std::str::from_utf8(&a.name).unwrap_or("").trim();
-                if name == "P" {
-                    p_positions.push(a.position);
-                }
-            }
-        }
-
-        // Split at large gaps (missing residues)
-        let mut result = Vec::new();
-        let mut segment = Vec::new();
-        for pos in p_positions {
-            if let Some(&prev) = segment.last() {
-                if pos.distance_squared(prev) > MAX_PHOSPHATE_BOND_DIST_SQ {
-                    if segment.len() >= 2 {
-                        result.push(std::mem::take(&mut segment));
-                    } else {
-                        segment.clear();
-                    }
-                }
-            }
-            segment.push(pos);
-        }
-        if segment.len() >= 2 {
-            result.push(segment);
-        }
-
-        result
-    }
-
-    /// Extract base ring geometry for each nucleotide residue.
-    #[must_use]
-    #[allow(clippy::too_many_lines)]
-    pub fn extract_base_rings(&self) -> Vec<NucleotideRing> {
-        let mut rings = Vec::new();
-
-        for residue in &self.residues {
-            let res_name =
-                std::str::from_utf8(&residue.name).unwrap_or("").trim();
-
-            let Some(color) = ndb_base_color(res_name) else {
-                continue;
-            };
-
-            let mut atom_map: HashMap<String, Vec3> = HashMap::new();
-            for idx in residue.atom_range.clone() {
-                let a = self.atom(idx);
-                let name = std::str::from_utf8(&a.name)
-                    .unwrap_or("")
-                    .trim()
-                    .trim_matches('\0')
-                    .to_owned();
-                let _ = atom_map.insert(name, a.position);
-            }
-
-            let hex_ring: Vec<Vec3> = HEX_RING_ATOMS
-                .iter()
-                .filter_map(|name| atom_map.get(*name).copied())
-                .collect();
-            if hex_ring.len() != 6 {
-                continue;
-            }
-
-            let pent_ring = if is_purine(res_name) {
-                let pent: Vec<Vec3> = PENT_RING_ATOMS
-                    .iter()
-                    .filter_map(|name| atom_map.get(*name).copied())
-                    .collect();
-                if pent.len() == 5 {
-                    pent
-                } else {
-                    Vec::new()
-                }
-            } else {
-                Vec::new()
-            };
-
-            let c1_prime =
-                atom_map.get("C1'").or_else(|| atom_map.get("C1*")).copied();
-
-            rings.push(NucleotideRing {
-                hex_ring,
-                pent_ring,
-                color,
-                c1_prime,
-            });
-        }
-
-        rings
     }
 }
 

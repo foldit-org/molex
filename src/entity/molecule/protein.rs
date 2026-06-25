@@ -2,8 +2,8 @@
 // derivation.
 //! Protein types and entity.
 //!
-//! Per-residue types (`ResidueBackbone`, `Sidechain`) and the
-//! `ProteinEntity` chain instance with segment break metadata.
+//! Per-residue types (`ResidueBackbone`) and the `ProteinEntity` chain
+//! instance with segment break metadata.
 
 use glam::Vec3;
 
@@ -35,38 +35,6 @@ pub struct ResidueBackbone {
     pub c: Vec3,
     /// Carbonyl oxygen atom position.
     pub o: Vec3,
-}
-
-/// Sidechain atoms and bond topology for a single protein residue.
-///
-/// `Vec<Atom>` holds the atoms (positions + names + elements). Bond
-/// indices are local to this sidechain's `Vec<Atom>` (0-based). The
-/// backbone-to-sidechain bond (CA->CB) is implicit: `ResidueBackbone.ca`
-/// connects to the first atom in `atoms` when the sidechain is non-empty.
-#[derive(Debug, Clone)]
-pub struct Sidechain {
-    /// Sidechain atoms (CB, CG, SG, etc.).
-    pub atoms: Vec<Atom>,
-    /// Intra-residue bonds as `(atom_idx_a, atom_idx_b)` pairs, local
-    /// to this sidechain's `Vec<Atom>`.
-    pub bonds: Vec<(usize, usize)>,
-}
-
-impl Sidechain {
-    /// Create an empty sidechain (e.g. for glycine).
-    #[must_use]
-    pub fn empty() -> Self {
-        Self {
-            atoms: Vec::new(),
-            bonds: Vec::new(),
-        }
-    }
-
-    /// Whether this sidechain has no atoms (glycine).
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.atoms.is_empty()
-    }
 }
 
 // Protein entity

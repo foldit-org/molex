@@ -23,7 +23,7 @@
               │ dssp     │ │ kabsch   │ │ Assembly  │
               │ bonds    │ │ align    │ │ serialize │
               │ disulfide│ │ extract  │ │    /      │
-              │ aabb     │ │   ca     │ │deserialize│
+              │ sasa     │ │   ca     │ │deserialize│
               └──────────┘ └──────────┘ └─────┬─────┘
                                               │
                                               v
@@ -82,7 +82,6 @@ let connections = assembly.detect_fallback_connections();
 // Or call the building blocks directly:
 let bonds      = infer_bonds(atoms, DEFAULT_TOLERANCE);   // distance-based
 let disulfides = detect_disulfides(&entities);             // CYS SG-SG
-let aabb       = entity.aabb();
 ```
 
 ## 4. Transforms

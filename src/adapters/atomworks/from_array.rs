@@ -1,8 +1,7 @@
 //! AtomArray -> entities conversion direction.
 //!
 //! Contains `determine_entity_ids`, `build_entity_from_indices`,
-//! `atom_array_to_entities`, `atom_array_to_entity_vec`, and the
-//! `parse_file_*` pyfunction wrappers.
+//! `atom_array_to_entities` and the `parse_file_*` pyfunction wrappers.
 
 use std::collections::HashSet;
 
@@ -329,32 +328,6 @@ fn build_all_entities(
     }
 
     Ok(entities)
-}
-
-/// Convert an AtomArray to `Vec<MoleculeEntity>` (Rust structs).
-///
-/// Returns entity objects directly, useful when you need Rust-side
-/// access without a serialization round-trip.
-///
-/// # Errors
-///
-/// Returns `PyErr` if the atom array cannot be converted or deserialized.
-pub fn atom_array_to_entity_vec(
-    py: Python,
-    atom_array: &Bound<'_, PyAny>,
-) -> PyResult<Vec<MoleculeEntity>> {
-    let atom_array_py: Py<PyAny> = atom_array.clone().unbind();
-    let bytes = atom_array_to_entities(py, atom_array_py)?;
-    crate::ops::wire::deserialize_assembly(&bytes)
-        .map(|a| {
-            a.entities()
-                .iter()
-                .map(|e| MoleculeEntity::clone(e))
-                .collect()
-        })
-        .map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
-        })
 }
 
 // Convenience: parse from file through AtomWorks, return entities

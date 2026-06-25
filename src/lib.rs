@@ -38,7 +38,7 @@ pub mod python;
 // Entity-first public API
 // The most commonly used types, re-exported at the crate root.
 
-pub use analysis::{detect_disulfides, Aabb, BondOrder, HBond, SSType};
+pub use analysis::{detect_disulfides, BondOrder, HBond, SSType};
 pub use assembly::Assembly;
 pub use atom_id::AtomId;
 pub use bond::CovalentBond;
@@ -49,9 +49,7 @@ pub use entity::molecule::bulk::BulkEntity;
 pub use entity::molecule::id::EntityId;
 pub use entity::molecule::nucleic_acid::NAEntity;
 pub use entity::molecule::polymer::Residue;
-pub use entity::molecule::protein::{
-    ProteinEntity, ResidueBackbone, Sidechain,
-};
+pub use entity::molecule::protein::{ProteinEntity, ResidueBackbone};
 pub use entity::molecule::small_molecule::SmallMoleculeEntity;
 pub use entity::molecule::{
     Completion, EntityKind, MoleculeEntity, MoleculeType, NucleotideRing,
@@ -81,14 +79,6 @@ fn molex(_py: Python, m: &Bound<PyModule>) -> PyResult<()> {
     )?)?;
     m.add_function(wrap_pyfunction!(
         adapters::atomworks::atom_array_to_entities,
-        m
-    )?)?;
-    m.add_function(wrap_pyfunction!(
-        adapters::atomworks::assembly_bytes_to_atom_array,
-        m
-    )?)?;
-    m.add_function(wrap_pyfunction!(
-        adapters::atomworks::assembly_bytes_to_atom_array_plus,
         m
     )?)?;
     // Native, Biotite-free read: per-atom columns as numpy arrays.

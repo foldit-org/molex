@@ -1,7 +1,5 @@
 //! Structural analysis: bond detection, secondary structure, and geometry.
 
-/// Axis-aligned bounding box.
-pub mod aabb;
 /// Bond detection: covalent, hydrogen, and disulfide.
 pub mod bonds;
 /// Atom-atom and residue/chain contact enumeration.
@@ -17,7 +15,6 @@ pub mod ss;
 /// Volumetric analysis: voxel grids, SDFs, cavity detection, surfaces.
 pub mod volumetric;
 
-pub use aabb::Aabb;
 pub use bonds::{
     detect_disulfides, infer_bonds, BondOrder, HBond, InferredBond,
     DEFAULT_TOLERANCE,

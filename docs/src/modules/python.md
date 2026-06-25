@@ -47,10 +47,6 @@ atom_array = molex.entities_to_atom_array_plus(assembly_bytes)
 # Convert with AtomWorks cleaning pipeline (leaving group removal,
 # charge correction, missing atom imputation)
 atom_array = molex.entities_to_atom_array_parsed(assembly_bytes, "3nez.cif.gz")
-
-# Decode assembly bytes directly into an AtomArray
-atom_array = molex.assembly_bytes_to_atom_array(assembly_bytes)
-atom_array = molex.assembly_bytes_to_atom_array_plus(assembly_bytes)
 ```
 
 ### AtomWorks -> molex

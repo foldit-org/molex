@@ -26,7 +26,7 @@ use criterion::{
 use glam::Vec3;
 use molex::adapters::cif::mmcif_str_to_entities;
 use molex::analysis::sasa::DEFAULT_N_POINTS;
-use molex::analysis::{assembly_sasa, infer_bonds};
+use molex::analysis::{assembly_sasa, infer_bonds, ContactLevel};
 use molex::ops::transform::kabsch_alignment;
 use molex::{Assembly, MoleculeEntity};
 
@@ -192,6 +192,23 @@ fn bench_infer_bonds(c: &mut Criterion, fixtures: &[Fixture]) {
     group.finish();
 }
 
+fn bench_contacts(c: &mut Criterion, fixtures: &[Fixture]) {
+    let mut group = c.benchmark_group("contacts");
+    for fx in fixtures {
+        group.throughput(Throughput::Elements(fx.atoms));
+        group.bench_with_input(
+            BenchmarkId::new("contacts", fx.name),
+            &fx.assembly,
+            |b, asm| {
+                b.iter(|| {
+                    black_box(asm.contacts(4.0, ContactLevel::Atom, false));
+                });
+            },
+        );
+    }
+    group.finish();
+}
+
 fn bench_analysis(c: &mut Criterion) {
     bench_kabsch_alignment(c);
     let fixtures = load_fixtures();
@@ -199,6 +216,7 @@ fn bench_analysis(c: &mut Criterion) {
     bench_recompute_ss(c, &fixtures);
     bench_phi_psi(c, &fixtures);
     bench_infer_bonds(c, &fixtures);
+    bench_contacts(c, &fixtures);
 }
 
 criterion_group!(benches, bench_analysis);

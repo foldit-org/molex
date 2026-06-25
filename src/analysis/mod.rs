@@ -4,8 +4,12 @@
 pub mod aabb;
 /// Bond detection: covalent, hydrogen, and disulfide.
 pub mod bonds;
+/// Atom-atom and residue/chain contact enumeration.
+pub mod contacts;
 /// Mass-weighted geometry: center of mass and radius of gyration.
 pub mod geometry;
+/// Uniform spatial hash for near-linear neighbor queries.
+pub(crate) mod grid;
 /// Shrake-Rupley solvent-accessible surface area.
 pub mod sasa;
 /// Secondary structure detection and parsing.
@@ -18,6 +22,7 @@ pub use bonds::{
     detect_disulfides, infer_bonds, BondOrder, HBond, InferredBond,
     DEFAULT_TOLERANCE,
 };
+pub use contacts::{Contact, ContactLevel};
 pub use sasa::assembly_sasa;
 pub use volumetric::{
     binary_to_sdf, compute_gaussian_field, compute_ses_sdf, detect_cavities,

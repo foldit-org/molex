@@ -21,8 +21,8 @@ use std::path::PathBuf;
 
 use glam::{Mat3, Vec3};
 use molex::adapters::cif::{mmcif_str_to_entities, mmcif_str_to_entities_with};
-use molex::analysis::assembly_sasa;
 use molex::analysis::sasa::DEFAULT_N_POINTS;
+use molex::analysis::{assembly_sasa, ContactLevel};
 use molex::entity::molecule::atom::Atom;
 use molex::entity::molecule::id::EntityIdAllocator;
 use molex::entity::molecule::protein::ProteinEntity;
@@ -489,3 +489,43 @@ fn uc16_sequence_1ubq() {
     let asm = Assembly::new(vec![MoleculeEntity::Protein(ent)]);
     assert_eq!(asm.sequence(), vec!["M".to_owned()]);
 }
+
+// --- UC-17 · spatial contacts + neighbor search -------------------------
+
+/// Atom-atom contacts and a point neighbor search over heavy-atom 1UBQ.
+///
+/// Params: `ubq_assembly(Completion::Heavy)`. `contacts(4.0, Atom, false)` and
+/// `neighbor_search` at the first atom's position. Golden against molex's own
+/// counts; the full-cover cross-check asserts `n*(n-1)/2` independent of the
+/// captured constants.
+#[test]
+fn uc17_contacts_1ubq() {
+    let asm = ubq_assembly(Completion::Heavy);
+
+    let n_atoms: usize = asm.entities().iter().map(|e| e.atom_count()).sum();
+
+    let contacts = asm.contacts(4.0, ContactLevel::Atom, false);
+    // Captured 2026-06-25: heavy-atom 1UBQ, 4.0 A atom-atom contacts.
+    assert_eq!(contacts.len(), CONTACT_COUNT_4A);
+
+    // neighbor_search at the first atom's own position must return at least
+    // that atom plus its close covalent neighbors.
+    let first = &asm.entities()[0];
+    let center = first.positions()[0];
+    let center_id = molex::AtomId {
+        entity: first.id(),
+        index: 0,
+    };
+    let hits = asm.neighbor_search(center, 4.0);
+    // Captured 2026-06-25: atoms within 4.0 A of atom 0, including atom 0.
+    assert_eq!(hits.len(), NEIGHBOR_COUNT_4A);
+    assert!(hits.contains(&center_id), "must find the query atom itself");
+
+    // Sanity: at a cutoff spanning the whole structure every atom pairs with
+    // every other exactly once, independent of geometry.
+    let full = asm.contacts(1000.0, ContactLevel::Atom, false);
+    assert_eq!(full.len(), n_atoms * (n_atoms - 1) / 2);
+}
+
+const CONTACT_COUNT_4A: usize = 3611;
+const NEIGHBOR_COUNT_4A: usize = 11;

@@ -932,6 +932,7 @@ impl PyAtomRow {
             element,
             name: self.name,
             formal_charge: 0,
+            observed: true,
         }
     }
 

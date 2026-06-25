@@ -20,6 +20,7 @@ fn atom_at(name: &str, element: Element, x: f32, y: f32, z: f32) -> Atom {
         element,
         name: n,
         formal_charge: 0,
+        observed: true,
     }
 }
 
@@ -244,6 +245,7 @@ fn sidechain_is_empty_with_atoms() {
             element: Element::C,
             name: *b"CB  ",
             formal_charge: 0,
+            observed: true,
         }],
         bonds: Vec::new(),
     };

@@ -5,21 +5,21 @@
 //! table (coordinates, presence mask, encoded atom names) plus a residue table
 //! (per-residue atom range and 3-letter name). This adapter builds molex
 //! entities directly from those host-resident columns through the shared
-//! `reconstruct` core, with no Biotite `AtomArray` in between.
+//! [`AtomTable`] partition core, with no Biotite `AtomArray` in between.
 //!
 //! The conversion logic lives in a pure-Rust core over native slices, so it is
 //! unit-testable without a Python interpreter. The
 //! [`boltz_structure_to_entities`] `#[pyfunction]` is a thin shim that borrows
 //! the numpy arrays and forwards to the core.
 
+use compact_str::CompactString;
 use numpy::{PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
 
-use crate::adapters::reconstruct::{build_entity, ReconstructRow};
+use crate::adapters::table::AtomTable;
 use crate::assembly::Assembly;
 use crate::element::Element;
 use crate::entity::molecule::atom::Atom;
-use crate::entity::molecule::id::EntityId;
 use crate::entity::molecule::MoleculeType;
 use crate::ops::wire::serialize_assembly;
 
@@ -65,32 +65,32 @@ pub(crate) struct BoltzColumns<'a> {
 pub(crate) fn boltz_columns_to_assembly_bytes(
     columns: &BoltzColumns<'_>,
 ) -> Result<Vec<u8>, crate::ops::error::AdapterError> {
-    let rows = boltz_columns_to_rows(columns);
-    if rows.is_empty() {
+    let table = boltz_columns_to_table(columns);
+    if table.is_empty() {
         return serialize_assembly(&Assembly::new(vec![]));
     }
-    let entity =
-        build_entity(EntityId::from_raw(0), MoleculeType::Protein, rows);
-    serialize_assembly(&Assembly::new(vec![entity]))
+    serialize_assembly(&Assembly::new(table.into_entities()))
 }
 
-/// Decode the Boltz columns into ordered per-atom reconstruction rows.
+/// Decode the Boltz columns into an ordered single-protein-entity
+/// [`AtomTable`].
 ///
-/// The conversion logic in isolation, before the shared reconstruction core
-/// groups rows into a protein entity (which canonicalizes atom order and may
-/// drop backbone-incomplete residues). Absent atoms and atoms with a
+/// The conversion logic in isolation, before [`AtomTable::into_entities`]
+/// groups the rows into a protein entity (which canonicalizes atom order and
+/// may drop backbone-incomplete residues). Absent atoms and atoms with a
 /// non-finite coordinate are skipped, so the result has at most one row per
-/// present, finite source atom.
-fn boltz_columns_to_rows(columns: &BoltzColumns<'_>) -> Vec<ReconstructRow> {
+/// present, finite source atom. Every row is tagged entity 0, chain "A",
+/// [`MoleculeType::Protein`].
+fn boltz_columns_to_table(columns: &BoltzColumns<'_>) -> AtomTable {
     let n_atoms = columns.coords.len();
+    let mut table = AtomTable::with_capacity(n_atoms);
     if n_atoms == 0 {
-        return Vec::new();
+        return table;
     }
     let n_residues = columns.res_names.len();
     let atom_to_residue = map_atoms_to_residues(columns, n_atoms);
     let is_atom37 = n_atoms == n_residues.saturating_mul(37);
 
-    let mut rows: Vec<ReconstructRow> = Vec::with_capacity(n_atoms);
     for (i, coord) in columns.coords.iter().enumerate() {
         let present = columns.is_present.get(i).copied().unwrap_or(false);
         if !present || coord.iter().any(|c| c.is_nan()) {
@@ -113,21 +113,24 @@ fn boltz_columns_to_rows(columns: &BoltzColumns<'_>) -> Vec<ReconstructRow> {
             reason = "residue index fits in i32 for model outputs"
         )]
         let res_num = res_i as i32;
-        rows.push(ReconstructRow {
-            atom: Atom {
+        table.push_row(
+            &Atom {
                 position: glam::Vec3::new(coord[0], coord[1], coord[2]),
                 occupancy: 1.0,
                 b_factor,
                 element: Element::from_atom_name(an_str),
                 name: atom_name,
                 formal_charge: 0,
+                observed: true,
             },
-            chain_id: "A".to_owned(),
-            res_name,
+            0,
+            CompactString::new("A"),
+            MoleculeType::Protein,
             res_num,
-        });
+            res_name,
+        );
     }
-    rows
+    table
 }
 
 /// Per-atom residue index, derived from the per-residue `(atom_idx, atom_num)`
@@ -326,11 +329,6 @@ mod tests {
         out
     }
 
-    /// The 4-byte, space-padded name of a decoded row.
-    fn name_of(row: &ReconstructRow) -> [u8; 4] {
-        row.atom.name
-    }
-
     #[test]
     fn boltz_two_residues_decode_names_coords_grouping_and_residue_names() {
         // Two residues: ALA with N/CA/C, GLY with N/CA. Atom names are in the
@@ -359,34 +357,34 @@ mod tests {
             res_names: &res_names,
             plddt: None,
         };
-        let rows = boltz_columns_to_rows(&columns);
+        let table = boltz_columns_to_table(&columns);
 
-        assert_eq!(rows.len(), 5);
+        assert_eq!(table.len(), 5);
 
         // Atom names decoded from the int8[4] encoding, in source order.
-        assert_eq!(name_of(&rows[0]), *b"N   ");
-        assert_eq!(name_of(&rows[1]), *b"CA  ");
-        assert_eq!(name_of(&rows[2]), *b"C   ");
-        assert_eq!(name_of(&rows[3]), *b"N   ");
-        assert_eq!(name_of(&rows[4]), *b"CA  ");
+        assert_eq!(table.name[0], *b"N   ");
+        assert_eq!(table.name[1], *b"CA  ");
+        assert_eq!(table.name[2], *b"C   ");
+        assert_eq!(table.name[3], *b"N   ");
+        assert_eq!(table.name[4], *b"CA  ");
 
         // Elements inferred from atom names.
-        assert_eq!(rows[0].atom.element, Element::N);
-        assert_eq!(rows[1].atom.element, Element::C);
+        assert_eq!(table.element[0], Element::N);
+        assert_eq!(table.element[1], Element::C);
 
         // Coordinates survive in order, exact f32.
-        for (i, row) in rows.iter().enumerate() {
-            assert_eq!(row.atom.position.x, coords[i][0]);
-            assert_eq!(row.atom.position.y, coords[i][1]);
-            assert_eq!(row.atom.position.z, coords[i][2]);
+        for (pos, coord) in table.position.iter().zip(&coords) {
+            assert_eq!(pos.x, coord[0]);
+            assert_eq!(pos.y, coord[1]);
+            assert_eq!(pos.z, coord[2]);
         }
 
         // Residue grouping: the first three atoms map to residue 0 (ALA),
-        // the last two to residue 1 (GLY); residue index is the row res_num.
-        assert_eq!([rows[0].res_num, rows[1].res_num, rows[2].res_num], [0; 3]);
-        assert_eq!([rows[3].res_num, rows[4].res_num], [1, 1]);
-        assert_eq!(rows[0].res_name, *b"ALA");
-        assert_eq!(rows[3].res_name, *b"GLY");
+        // the last two to residue 1 (GLY); the residue index is the row res_id.
+        assert_eq!([table.res_id[0], table.res_id[1], table.res_id[2]], [0; 3]);
+        assert_eq!([table.res_id[3], table.res_id[4]], [1, 1]);
+        assert_eq!(table.res_name[0], *b"ALA");
+        assert_eq!(table.res_name[3], *b"GLY");
     }
 
     #[test]
@@ -416,13 +414,13 @@ mod tests {
             res_names: &res_names,
             plddt: None,
         };
-        let rows = boltz_columns_to_rows(&columns);
+        let table = boltz_columns_to_table(&columns);
 
         // Slot 2 (absent) and slot 4 (NaN) dropped: N, CA, O survive.
-        assert_eq!(rows.len(), 3);
-        assert_eq!(name_of(&rows[0]), *b"N   ");
-        assert_eq!(name_of(&rows[1]), *b"CA  ");
-        assert_eq!(name_of(&rows[2]), *b"O   ");
+        assert_eq!(table.len(), 3);
+        assert_eq!(table.name[0], *b"N   ");
+        assert_eq!(table.name[1], *b"CA  ");
+        assert_eq!(table.name[2], *b"O   ");
     }
 
     #[test]
@@ -449,17 +447,17 @@ mod tests {
             res_names: &res_names,
             plddt: None,
         };
-        let rows = boltz_columns_to_rows(&columns);
+        let table = boltz_columns_to_table(&columns);
 
-        assert_eq!(rows.len(), 37);
+        assert_eq!(table.len(), 37);
         // Slots follow the canonical atom37 ordering, not the (zeroed) int8[4]
         // names.
-        assert_eq!(name_of(&rows[0]), *b"N   ");
-        assert_eq!(name_of(&rows[1]), *b"CA  ");
-        assert_eq!(name_of(&rows[2]), *b"C   ");
-        assert_eq!(name_of(&rows[3]), *b"CB  ");
-        assert_eq!(name_of(&rows[4]), *b"O   ");
-        assert_eq!(name_of(&rows[36]), *b"X   ");
+        assert_eq!(table.name[0], *b"N   ");
+        assert_eq!(table.name[1], *b"CA  ");
+        assert_eq!(table.name[2], *b"C   ");
+        assert_eq!(table.name[3], *b"CB  ");
+        assert_eq!(table.name[4], *b"O   ");
+        assert_eq!(table.name[36], *b"X   ");
     }
 
     #[test]
@@ -481,9 +479,9 @@ mod tests {
             res_names: &res_names,
             plddt: Some(&plddt),
         };
-        let rows = boltz_columns_to_rows(&columns);
+        let table = boltz_columns_to_table(&columns);
         // (1 - 0.75) * 100 == 25.
-        assert_eq!(rows[0].atom.b_factor, 25.0);
+        assert_eq!(table.b_factor[0], 25.0);
     }
 
     #[test]
@@ -504,8 +502,8 @@ mod tests {
             res_names: &res_names,
             plddt: None,
         };
-        let rows = boltz_columns_to_rows(&columns);
-        assert_eq!(rows[0].res_name, *b"UNK");
+        let table = boltz_columns_to_table(&columns);
+        assert_eq!(table.res_name[0], *b"UNK");
     }
 
     #[test]

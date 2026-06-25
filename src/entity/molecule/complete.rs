@@ -54,7 +54,8 @@ const MIN_ANCHOR_ATOMS: usize = 3;
 /// straight-line inputs while staying comfortably clear of f32 round-off.
 const COLLINEAR_TOLERANCE: f32 = 1e-3;
 
-/// A monotonic completion level: `Raw < Heavy < AllAtom`.
+/// A completion level: what the construction pass is allowed to fabricate
+/// and whether it keeps parsed hydrogens.
 ///
 /// `Raw` skips completion entirely: the residue's atom set is used
 /// exactly as given, fabricating nothing and preserving any input
@@ -64,7 +65,11 @@ const COLLINEAR_TOLERANCE: f32 = 1e-3;
 /// heavy template atoms and drops input hydrogens; the host and rosetta
 /// consume heavy atoms only and re-derive hydrogens downstream, so it is
 /// the file-ingest level. `AllAtom` additionally places template
-/// hydrogens for callers that need a fully protonated model.
+/// hydrogens for callers that need a fully protonated model. `HeavyRaw`
+/// skips completion like `Raw` but drops parsed hydrogens: it is the
+/// heavy-only strip path, where an already-complete model must shed its
+/// protons without re-running the rigid fit that would invent atoms a
+/// pure strip never does.
 ///
 /// Callers select a level at construction through the opt-in completing
 /// constructors ([`super::protein::ProteinEntity::new_normalized`] /
@@ -78,17 +83,28 @@ pub enum Completion {
     Heavy,
     /// Fabricate absent heavy atoms and template hydrogens.
     AllAtom,
+    /// Skip completion (like `Raw`) but drop parsed hydrogens: the
+    /// non-fabricating heavy-only strip.
+    HeavyRaw,
+}
+
+/// Whether the construction pass fabricates missing template atoms.
+/// `Raw` and `HeavyRaw` skip the rigid-fit pass entirely; `Heavy` and
+/// `AllAtom` run it.
+fn fabricates(level: Completion) -> bool {
+    matches!(level, Completion::Heavy | Completion::AllAtom)
 }
 
 /// Whether canonicalize should carry parsed hydrogens through into the
-/// output entity. Only [`Completion::Heavy`] strips them: it is the
-/// file-ingest level, where the host and rosetta consume heavy atoms
-/// only, so a fully-protonated input PDB must not leak its hydrogens into
-/// the canonical entity. `Raw` and `AllAtom` keep them (the former by
-/// preserving the parse verbatim, the latter because hydrogens are part
-/// of the all-atom model).
+/// output entity. [`Completion::Heavy`] strips them as the file-ingest
+/// level, where the host and rosetta consume heavy atoms only, so a
+/// fully-protonated input PDB must not leak its hydrogens into the
+/// canonical entity; [`Completion::HeavyRaw`] strips them as the
+/// non-fabricating heavy-only path. `Raw` and `AllAtom` keep them (the
+/// former by preserving the parse verbatim, the latter because hydrogens
+/// are part of the all-atom model).
 pub(super) fn keep_hydrogens(level: Completion) -> bool {
-    level != Completion::Heavy
+    !matches!(level, Completion::Heavy | Completion::HeavyRaw)
 }
 
 /// What a single residue's completion is allowed to fabricate: the
@@ -110,10 +126,10 @@ struct Scope {
 /// standard amino acid, or that are too sparse to fit, are emitted
 /// unchanged.
 ///
-/// `level` selects what is fabricated: [`Completion::Raw`] skips
-/// the pass and returns the atoms unchanged; [`Completion::Heavy`]
-/// (the file-ingest path) places only heavy atoms; [`Completion::AllAtom`]
-/// additionally places template hydrogens.
+/// `level` selects what is fabricated: [`Completion::Raw`] and
+/// [`Completion::HeavyRaw`] skip the pass and return the atoms unchanged;
+/// [`Completion::Heavy`] (the file-ingest path) places only heavy atoms;
+/// [`Completion::AllAtom`] additionally places template hydrogens.
 pub(super) fn complete_protein_residues(
     atoms: &[Atom],
     residues: &[Residue],
@@ -172,7 +188,7 @@ fn complete_residues(
             new_atoms.push(atoms[idx].clone());
         }
 
-        if level != Completion::Raw {
+        if fabricates(level) {
             if let Some(template) = resolve(residue.name) {
                 append_missing_atoms(
                     atoms,
@@ -421,6 +437,7 @@ fn placed_atom(t: &TemplateAtom, rot: Mat3, trans: Vec3) -> Atom {
         // `Atom.name`; `trimmed_atom_name` strips it back off.
         name: pad_atom_name(t.name.as_str()),
         formal_charge: 0,
+        observed: false,
     }
 }
 

@@ -8,13 +8,12 @@ use std::sync::Arc;
 
 use crate::assembly::Assembly;
 use crate::element::Element;
-use crate::entity::molecule::atom::{Atom, AtomColumns};
+use crate::entity::molecule::atom::Atom;
 use crate::entity::molecule::bulk::BulkEntity;
 use crate::entity::molecule::nucleic_acid::NAEntity;
-use crate::entity::molecule::polymer::Residue;
 use crate::entity::molecule::protein::ProteinEntity;
 use crate::entity::molecule::small_molecule::SmallMoleculeEntity;
-use crate::entity::molecule::{MoleculeEntity, MoleculeType};
+use crate::entity::molecule::{Completion, MoleculeEntity, MoleculeType};
 
 impl Assembly {
     /// Project to a fresh `Assembly` with bulk water and solvent entities
@@ -44,12 +43,13 @@ impl Assembly {
     /// Project to a fresh `Assembly` with every hydrogen atom dropped,
     /// keeping all heavy atoms exactly as observed.
     ///
-    /// Each entity is rebuilt from its non-hydrogen (`element != Element::H`)
-    /// atoms through the pure, non-completing constructors, so no atom is
-    /// fabricated: a residue stays exactly as heavy as it was parsed.
-    /// Polymer entities re-index their residues over the stripped atom list;
-    /// an entity that already carries no hydrogen keeps its `Arc`. Does not
-    /// mutate `self`. For ML inputs that consume heavy atoms only.
+    /// Each entity is rebuilt with its hydrogens dropped and nothing
+    /// fabricated, so a residue stays exactly as heavy as it was parsed.
+    /// Polymer entities go through the non-fabricating heavy-only strip
+    /// (`Completion::HeavyRaw`), which canonicalizes the heavy atoms without
+    /// running the rigid-fit completion pass; an entity that already carries
+    /// no hydrogen keeps its `Arc`. Does not mutate `self`. For ML inputs
+    /// that consume heavy atoms only.
     #[must_use]
     pub fn heavy_only(&self) -> Assembly {
         let entities: Vec<Arc<MoleculeEntity>> = self
@@ -69,31 +69,30 @@ impl Assembly {
 
 /// Rebuild `entity` without its hydrogen atoms, fabricating nothing.
 ///
-/// Polymer entities re-gather each residue's heavy atoms into a contiguous
-/// atom list and hand the re-ranged residues to the pure `new` constructor
-/// (`Completion::Raw`: skips completion, so no atom is invented). Non-polymer
-/// entities filter their flat atom list and rebuild directly.
+/// Polymer entities hand their full atom set and residues to the completing
+/// constructor at [`Completion::HeavyRaw`], which skips the rigid-fit pass
+/// (so no atom is invented) but drops parsed hydrogens in the canonicalize
+/// reorder. Non-polymer entities filter their flat atom list and rebuild
+/// directly.
 fn strip_hydrogens(entity: &MoleculeEntity) -> MoleculeEntity {
     match entity {
         MoleculeEntity::Protein(p) => {
-            let (atoms, residues) =
-                heavy_polymer_atoms(&p.columns, &p.residues);
-            MoleculeEntity::Protein(ProteinEntity::new(
+            MoleculeEntity::Protein(ProteinEntity::new_normalized(
                 p.id,
-                atoms,
-                residues,
+                p.columns.to_atoms(),
+                p.residues.clone(),
                 p.pdb_chain_id.clone(),
+                Completion::HeavyRaw,
             ))
         }
         MoleculeEntity::NucleicAcid(n) => {
-            let (atoms, residues) =
-                heavy_polymer_atoms(&n.columns, &n.residues);
-            MoleculeEntity::NucleicAcid(NAEntity::new(
+            MoleculeEntity::NucleicAcid(NAEntity::new_normalized(
                 n.id,
                 n.na_type,
-                atoms,
-                residues,
+                n.columns.to_atoms(),
+                n.residues.clone(),
                 n.pdb_chain_id.clone(),
+                Completion::HeavyRaw,
             ))
         }
         MoleculeEntity::SmallMolecule(s) => {
@@ -123,32 +122,4 @@ fn heavy_atoms(entity: &MoleculeEntity) -> Vec<Atom> {
         .into_iter()
         .filter(|a| a.element != Element::H)
         .collect()
-}
-
-/// Re-gather a polymer's heavy atoms residue by residue, emitting a fresh
-/// atom list and residues whose `atom_range` indexes the stripped list.
-///
-/// Only atoms referenced by some residue are carried, matching the entity's
-/// own model where atoms of dropped residues are left unreferenced. The
-/// re-ranged residues let the pure `new` constructor re-partition without
-/// fabrication.
-fn heavy_polymer_atoms(
-    columns: &AtomColumns,
-    residues: &[Residue],
-) -> (Vec<Atom>, Vec<Residue>) {
-    let mut atoms: Vec<Atom> = Vec::with_capacity(columns.len());
-    let mut out: Vec<Residue> = Vec::with_capacity(residues.len());
-    for residue in residues {
-        let start = atoms.len();
-        for idx in residue.atom_range.clone() {
-            if columns.element[idx] != Element::H {
-                atoms.push(columns.gather(idx));
-            }
-        }
-        out.push(Residue {
-            atom_range: start..atoms.len(),
-            ..residue.clone()
-        });
-    }
-    (atoms, out)
 }

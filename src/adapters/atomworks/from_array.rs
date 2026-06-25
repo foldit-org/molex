@@ -6,12 +6,13 @@
 
 use std::collections::HashSet;
 
+use compact_str::CompactString;
 use glam::Vec3;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 use super::{chain_type_id_to_molecule_type, mol_type_str_to_molecule_type};
-use crate::adapters::reconstruct::{build_entity, ReconstructRow};
+use crate::adapters::table::{empty_entity, AtomTable};
 use crate::assembly::Assembly;
 use crate::element::Element;
 use crate::entity::molecule::atom::Atom;
@@ -72,32 +73,44 @@ struct AtomArrayRefs<'py> {
 }
 
 /// Build a single `MoleculeEntity` from a group of atom indices.
+///
+/// IDs are sequential across entities (entity N gets id N), so each row is
+/// tagged with `output_idx` and `AtomTable::into_entities` mints
+/// `EntityId::from_raw(output_idx)` for the one entity it yields.
 fn build_entity_from_indices(
     indices: &[usize],
     output_idx: usize,
     mol_type: MoleculeType,
     arrays: &AtomArrayRefs<'_>,
 ) -> PyResult<MoleculeEntity> {
-    let mut rows = Vec::with_capacity(indices.len());
-    for &i in indices {
-        rows.push(read_atom_array_row(arrays, i)?);
-    }
-
-    // IDs are sequential across entities (entity N gets id N), so the id is
-    // just the output index. No allocator round-trip needed.
     #[allow(
         clippy::cast_possible_truncation,
         reason = "entity count fits in u32 for valid structures"
     )]
-    let id = EntityId::from_raw(output_idx as u32);
+    let entity_id = output_idx as u32;
 
-    Ok(build_entity(id, mol_type, rows))
+    let mut table = AtomTable::with_capacity(indices.len());
+    for &i in indices {
+        push_atom_array_row(&mut table, arrays, i, entity_id, mol_type)?;
+    }
+
+    // Every entity group carries at least one atom (groups derive from
+    // filtering a non-empty per-atom id list), so into_entities yields
+    // exactly one entity. A zero-atom group falls back to the shared empty
+    // entity of the right type (no chain id; biotite groups carry none here),
+    // matching the prior per-entity constructor's behaviour.
+    Ok(table.into_entities().pop().unwrap_or_else(|| {
+        empty_entity(EntityId::from_raw(entity_id), mol_type, String::new())
+    }))
 }
 
-fn read_atom_array_row(
+fn push_atom_array_row(
+    table: &mut AtomTable,
     arrays: &AtomArrayRefs<'_>,
     i: usize,
-) -> PyResult<ReconstructRow> {
+    entity_id: u32,
+    mol_type: MoleculeType,
+) -> PyResult<()> {
     let coord_i = arrays.coord.get_item(i)?;
     let x: f32 = coord_i.get_item(0)?.extract()?;
     let y: f32 = coord_i.get_item(1)?.extract()?;
@@ -121,19 +134,23 @@ fn read_atom_array_row(
     let res_num: i32 = arrays.res_id_arr.get_item(i)?.extract()?;
     let (atom_name, element) = extract_atom_name_and_element(arrays, i)?;
 
-    Ok(ReconstructRow {
-        atom: Atom {
+    table.push_row(
+        &Atom {
             position: Vec3::new(x, y, z),
             occupancy,
             b_factor,
             element,
             name: atom_name,
             formal_charge: 0,
+            observed: true,
         },
-        chain_id,
-        res_name,
+        entity_id,
+        CompactString::new(chain_id),
+        mol_type,
         res_num,
-    })
+        res_name,
+    );
+    Ok(())
 }
 
 /// Extract chain ID string for atom `i`.

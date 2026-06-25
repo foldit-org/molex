@@ -7,6 +7,7 @@ use glam::Vec3;
 use super::atom::{Atom, AtomColumns};
 use super::complete::{complete_na_residues, keep_hydrogens, Completion};
 use super::id::EntityId;
+use super::polymer::residue_name_to_idx;
 use super::protein::trimmed_atom_name;
 use super::traits::{Entity, Polymer};
 use super::{MoleculeType, Residue};
@@ -563,11 +564,8 @@ fn emit_na_residue_bonds(
     r: &Residue,
     bonds: &mut Vec<CovalentBond>,
 ) {
-    let mut name_to_idx: HashMap<AtomName, usize> = HashMap::new();
-    for idx in r.atom_range.clone() {
-        let key = AtomName::from_bytes(trimmed_atom_name(&atoms[idx].name));
-        let _ = name_to_idx.insert(key, idx);
-    }
+    let name_to_idx =
+        residue_name_to_idx(r.atom_range.clone(), |idx| atoms[idx].name);
     let Some(nt) = Nucleotide::from_code(r.name) else {
         return;
     };

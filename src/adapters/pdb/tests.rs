@@ -443,6 +443,7 @@ fn writer_refuses_overflowing_atom_count() {
             element: Element::O,
             name: *b"O   ",
             formal_charge: 0,
+            observed: true,
         })
         .collect();
     let bulk = BulkEntity::new(

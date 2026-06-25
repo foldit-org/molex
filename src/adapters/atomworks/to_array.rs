@@ -6,9 +6,8 @@
 use pyo3::prelude::*;
 
 use super::{molecule_type_to_chain_type_id, molecule_type_to_mol_type_str};
+use crate::adapters::table::AtomTable;
 use crate::analysis::bonds::{infer_bonds, BondOrder, DEFAULT_TOLERANCE};
-use crate::entity::molecule::atom::{Atom, AtomRef};
-use crate::entity::molecule::polymer::Residue;
 use crate::entity::molecule::{MoleculeEntity, MoleculeType};
 use crate::ops::wire::deserialize_assembly;
 
@@ -88,207 +87,83 @@ impl AtomData {
     }
 }
 
-/// One atom as visited by [`for_each_flat_atom`], with the per-atom
-/// residue/chain context the column build needs.
-///
-/// `entity_raw_id` and `raw_idx` together identify the atom within its entity;
-/// `flat` index space is just the order in which these are yielded. `chain_id`,
-/// `res_name`, and `res_num` are the residue-level values to stamp on this
-/// atom's columns (a non-polymer atom carries the entity's residue name, an
-/// empty chain, and a synthetic per-atom or fixed residue number).
-pub(crate) struct FlatAtom<'a> {
-    pub entity_raw_id: u32,
-    pub raw_idx: usize,
-    pub atom: &'a Atom,
-    pub chain_id: &'a str,
-    pub res_name: [u8; 3],
-    pub res_num: i32,
-}
-
-/// Visit every atom of `entities` in the canonical `to_arrays()` order.
-///
-/// This is the single producer of `to_arrays()` index space: entities in slice
-/// order; within a polymer entity, atoms in residue order via each residue's
-/// `atom_range` (an atom not referenced by any range is skipped); within a
-/// non-polymer entity, raw atom order. Both the column build
-/// ([`collect_atom_data`]) and the flat bond-index map
-/// (`crate::python::arrays::flat_atoms`) drive this walk so the ordering rule
-/// lives in exactly one place.
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
-    reason = "atom counts fit in i32/u32 for valid structures"
-)]
-pub(crate) fn for_each_flat_atom<E: std::borrow::Borrow<MoleculeEntity>>(
-    entities: &[E],
-    mut f: impl FnMut(FlatAtom<'_>),
-) {
-    for entity in entities {
-        let entity = entity.borrow();
-        let entity_raw_id = entity.id().raw();
-        let atoms = entity.columns().to_atoms();
-
-        match entity {
-            MoleculeEntity::Protein(e) => {
-                emit_polymer(
-                    &mut f,
-                    entity_raw_id,
-                    &atoms,
-                    &e.residues,
-                    &e.pdb_chain_id,
-                );
-            }
-            MoleculeEntity::NucleicAcid(e) => {
-                emit_polymer(
-                    &mut f,
-                    entity_raw_id,
-                    &atoms,
-                    &e.residues,
-                    &e.pdb_chain_id,
-                );
-            }
-            MoleculeEntity::SmallMolecule(e) => {
-                for (raw_idx, atom) in atoms.iter().enumerate() {
-                    f(FlatAtom {
-                        entity_raw_id,
-                        raw_idx,
-                        atom,
-                        chain_id: "",
-                        res_name: e.residue_name,
-                        res_num: 1,
-                    });
-                }
-            }
-            MoleculeEntity::Bulk(e) => {
-                for (raw_idx, atom) in atoms.iter().enumerate() {
-                    f(FlatAtom {
-                        entity_raw_id,
-                        raw_idx,
-                        atom,
-                        chain_id: "",
-                        res_name: e.residue_name,
-                        res_num: (raw_idx as i32) + 1,
-                    });
-                }
-            }
-        }
-    }
-}
-
-fn emit_polymer(
-    f: &mut impl FnMut(FlatAtom<'_>),
-    entity_raw_id: u32,
-    atoms: &[Atom],
-    residues: &[Residue],
-    chain_id: &str,
-) {
-    for residue in residues {
-        for raw_idx in residue.atom_range.clone() {
-            f(FlatAtom {
-                entity_raw_id,
-                raw_idx,
-                atom: &atoms[raw_idx],
-                chain_id,
-                res_name: residue.name,
-                res_num: residue.label_seq_id,
-            });
-        }
-    }
-}
-
 /// Collect per-atom annotation data from entities into flat vectors.
 ///
 /// This is the shared pure-Rust egress core both the numpy `to_arrays()` path
 /// and the Biotite `AtomArray` bridge route through; no Python interpreter is
 /// touched. Public so the egress benchmark can time it directly.
+///
+/// The flat per-atom layout (and the non-polymer key synthesis) comes from
+/// [`AtomTable::from_entities`] — the single canonical flatten. This function
+/// marshals that native table to the vocab-bearing [`AtomData`]: the empty
+/// chain -> `"A"` fallback, the res-name / atom-name utf8-trim, the element
+/// symbol, and the `mol_type` -> str / `chain_type` -> i32 maps all live here,
+/// at the AtomWorks/Biotite edge, off the native `AtomTable`.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    reason = "atom counts fit in i32 for valid structures"
+)]
 pub fn collect_atom_data<E: std::borrow::Borrow<MoleculeEntity>>(
     entities: &[E],
     total_atoms: usize,
 ) -> AtomData {
+    let table = AtomTable::from_entities(entities);
     let mut data = AtomData::with_capacity(total_atoms);
-    let mut atom_offset: usize = 0;
 
+    for i in 0..table.len() {
+        let pos = table.position[i];
+        data.coords_flat.push(pos.x);
+        data.coords_flat.push(pos.y);
+        data.coords_flat.push(pos.z);
+
+        // Polymer atoms carry the real `label_asym_id`; non-polymer atoms
+        // arrive with an empty chain and fall back to "A" so biotite always
+        // sees a non-empty chain string.
+        let chain = table.chain_id[i].as_str();
+        data.chain_ids.push(if chain.is_empty() {
+            "A".to_owned()
+        } else {
+            chain.to_owned()
+        });
+
+        data.res_ids.push(table.res_id[i]);
+
+        data.res_names.push(
+            std::str::from_utf8(&table.res_name[i])
+                .unwrap_or("UNK")
+                .trim()
+                .to_owned(),
+        );
+
+        data.atom_names.push(
+            std::str::from_utf8(&table.name[i])
+                .unwrap_or("X")
+                .trim()
+                .to_owned(),
+        );
+
+        data.elements.push(table.element[i].symbol().to_owned());
+
+        data.occupancies.push(table.occupancy[i]);
+        data.b_factors.push(table.b_factor[i]);
+
+        let mol_type = table.mol_type[i];
+        data.aw_entity_ids.push(table.entity_id[i].cast_signed());
+        data.aw_mol_types
+            .push(molecule_type_to_mol_type_str(mol_type).to_owned());
+        data.aw_chain_types
+            .push(i32::from(molecule_type_to_chain_type_id(mol_type)));
+    }
+
+    let mut atom_offset: usize = 0;
     for entity in entities {
         let entity = entity.borrow();
-        let mol_type = entity.molecule_type();
-        let ctx = EntityCtx {
-            entity_id: entity.id().raw().cast_signed(),
-            mol_type_str: molecule_type_to_mol_type_str(mol_type),
-            chain_type_id: i32::from(molecule_type_to_chain_type_id(mol_type)),
-        };
-        for_each_flat_atom(std::slice::from_ref(&entity), |fa| {
-            append_atom_row(
-                &mut data,
-                &ctx,
-                AtomRef::from_atom(fa.atom),
-                fa.chain_id,
-                fa.res_name,
-                fa.res_num,
-            );
-        });
         append_entity_bonds(&mut data, entity, atom_offset);
         atom_offset += entity.atom_count();
     }
 
     data
-}
-
-struct EntityCtx<'a> {
-    entity_id: i32,
-    mol_type_str: &'a str,
-    chain_type_id: i32,
-}
-
-#[allow(
-    clippy::too_many_arguments,
-    reason = "row payload is best passed positionally; bundling into a struct \
-              just to satisfy a lint trades clarity for noise"
-)]
-fn append_atom_row(
-    data: &mut AtomData,
-    ctx: &EntityCtx<'_>,
-    atom: AtomRef<'_>,
-    chain_id: &str,
-    res_name: [u8; 3],
-    res_num: i32,
-) {
-    data.coords_flat.push(atom.position.x);
-    data.coords_flat.push(atom.position.y);
-    data.coords_flat.push(atom.position.z);
-
-    // Polymer atoms carry the real `label_asym_id`; non-polymer atoms arrive
-    // with an empty chain and fall back to "A" so biotite always sees a
-    // non-empty chain string.
-    data.chain_ids.push(if chain_id.is_empty() {
-        "A".to_owned()
-    } else {
-        chain_id.to_owned()
-    });
-
-    data.res_ids.push(res_num);
-
-    data.res_names.push(
-        std::str::from_utf8(&res_name)
-            .unwrap_or("UNK")
-            .trim()
-            .to_owned(),
-    );
-
-    data.atom_names.push(
-        std::str::from_utf8(atom.name)
-            .unwrap_or("X")
-            .trim()
-            .to_owned(),
-    );
-
-    data.elements.push(atom.element.symbol().to_owned());
-
-    data.occupancies.push(*atom.occupancy);
-    data.b_factors.push(*atom.b_factor);
-
-    data.aw_entity_ids.push(ctx.entity_id);
-    data.aw_mol_types.push(ctx.mol_type_str.to_owned());
-    data.aw_chain_types.push(ctx.chain_type_id);
 }
 
 /// Infer and append bonds for a single entity (ligands/cofactors/ions only).
@@ -585,7 +460,9 @@ mod tests {
 
     use super::*;
     use crate::element::Element;
+    use crate::entity::molecule::atom::Atom;
     use crate::entity::molecule::id::EntityIdAllocator;
+    use crate::entity::molecule::polymer::Residue;
     use crate::entity::molecule::protein::ProteinEntity;
     use crate::entity::molecule::small_molecule::SmallMoleculeEntity;
 
@@ -597,6 +474,7 @@ mod tests {
             element: el,
             name,
             formal_charge: 0,
+            observed: true,
         }
     }
 

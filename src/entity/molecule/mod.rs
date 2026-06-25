@@ -494,6 +494,7 @@ mod tests {
             element,
             name: n,
             formal_charge: 0,
+            observed: true,
         }
     }
 

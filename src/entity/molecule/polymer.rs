@@ -1,7 +1,10 @@
 //! Polymer residue type.
 
+use std::collections::HashMap;
 use std::ops::Range;
 
+use super::protein::trimmed_atom_name;
+use crate::chemistry::atom_name::AtomName;
 use crate::chemistry::variant::VariantTag;
 
 /// A single residue within a polymer entity.
@@ -44,4 +47,22 @@ impl Residue {
     pub fn seq_id(&self) -> i32 {
         self.auth_seq_id.unwrap_or(self.label_seq_id)
     }
+}
+
+/// Map each atom in `range` to its index, keyed by trimmed [`AtomName`].
+///
+/// `name_at` yields the raw 4-byte atom name for an index, decoupling the
+/// map from atom storage (callers front it with either a `&[Atom]` slice
+/// or an `AtomColumns` name column). On a residue carrying duplicate
+/// trimmed names, the last occurrence in `range` wins.
+pub(super) fn residue_name_to_idx(
+    range: Range<usize>,
+    name_at: impl Fn(usize) -> [u8; 4],
+) -> HashMap<AtomName, usize> {
+    let mut map: HashMap<AtomName, usize> = HashMap::new();
+    for idx in range {
+        let key = AtomName::from_bytes(trimmed_atom_name(&name_at(idx)));
+        let _ = map.insert(key, idx);
+    }
+    map
 }

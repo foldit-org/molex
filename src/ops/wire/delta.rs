@@ -37,7 +37,7 @@
 use glam::Vec3;
 use thiserror::Error;
 
-use super::deserialize::{read_atom_row, AtomRow};
+use super::deserialize::read_atom_row;
 use super::serialize::write_atom_row;
 use super::variants::{read_variant, write_variant};
 use crate::chemistry::variant::VariantTag;
@@ -276,9 +276,12 @@ fn read_edit<'b>(
                         "Truncated atom row in delta MutateResidue".to_owned(),
                     ));
                 }
-                let row: AtomRow = read_atom_row(cur)?;
+                // res_name / res_num are placeholders under MutateResidue
+                // (the receiver gets new_name + residue_idx separately), so
+                // only the atom payload is kept.
+                let (atom, _res_name, _res_num) = read_atom_row(cur)?;
                 cur = &cur[ATOM_ROW_BYTES..];
-                new_atoms.push(row.atom);
+                new_atoms.push(atom);
             }
             let (new_variants, cur) = read_variant_list(cur)?;
             Ok((

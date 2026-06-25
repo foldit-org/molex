@@ -233,6 +233,7 @@ mod tests {
             element: Element::C,
             name: *b"C   ",
             formal_charge: 0,
+            observed: true,
         }
     }
 

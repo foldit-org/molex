@@ -449,6 +449,7 @@ impl AtomChoice {
             element: self.element,
             name: self.auth_atom_id.unwrap_or(self.label_atom_id),
             formal_charge: self.formal_charge,
+            observed: true,
         }
     }
 }

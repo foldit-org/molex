@@ -24,6 +24,7 @@ fn atom_at(name: &str, element: Element, x: f32) -> Atom {
         element,
         name: n,
         formal_charge: 0,
+        observed: true,
     }
 }
 
@@ -233,7 +234,9 @@ fn topology_edits_are_rejected_at_serialize_time() {
             entity: id,
             coords: vec![Vec3::ZERO],
         },
-        AssemblyEdit::AddEntity { entity },
+        AssemblyEdit::AddEntity {
+            entity: Box::new(entity),
+        },
     ];
 
     let err = serialize_edits(&edits).unwrap_err();

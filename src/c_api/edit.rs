@@ -195,6 +195,7 @@ fn build_atom_list(
             element,
             name: r.name,
             formal_charge: 0,
+            observed: true,
         });
     }
     Some(out)
@@ -555,6 +556,7 @@ mod tests {
                 element: elem,
                 name,
                 formal_charge: 0,
+                observed: true,
             }
         };
         vec![

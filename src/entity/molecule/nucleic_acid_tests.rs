@@ -20,6 +20,7 @@ fn atom_with(name: &str, el: Element, x: f32) -> Atom {
         element: el,
         name: n,
         formal_charge: 0,
+        observed: true,
     }
 }
 
@@ -136,6 +137,7 @@ fn rna_adenine_missing_o2_prime() -> NAEntity {
                 element: a.element,
                 name,
                 formal_charge: 0,
+                observed: true,
             }
         })
         .collect();
@@ -208,6 +210,7 @@ fn da_heavy_atoms(keep: impl Fn(&str) -> bool) -> Vec<Atom> {
                 element: a.element,
                 name,
                 formal_charge: 0,
+                observed: true,
             }
         })
         .collect()

@@ -10,13 +10,13 @@ use glam::Vec3;
 use super::atom::{Atom, AtomColumns};
 use super::complete::{complete_protein_residues, keep_hydrogens, Completion};
 use super::id::EntityId;
+use super::polymer::residue_name_to_idx;
 use super::traits::{Entity, Polymer};
 use super::{MoleculeType, Residue};
 use crate::analysis::{BondOrder, SSType};
 use crate::atom_id::AtomId;
 use crate::bond::CovalentBond;
 use crate::chemistry::amino_acids::AminoAcid;
-use crate::chemistry::atom_name::AtomName;
 use crate::element::Element;
 
 // Per-residue types
@@ -356,8 +356,6 @@ impl ProteinEntity {
     /// kernel as [`Self::phi_psi`].
     #[must_use]
     pub fn chi_angles(&self) -> Vec<Vec<Option<f32>>> {
-        use std::collections::HashMap;
-
         let positions = self.positions();
         self.residues
             .iter()
@@ -365,13 +363,10 @@ impl ProteinEntity {
                 let Some(aa) = AminoAcid::from_code(r.name) else {
                     return Vec::new();
                 };
-                let mut name_to_idx: HashMap<AtomName, usize> = HashMap::new();
-                for idx in r.atom_range.clone() {
-                    let key = AtomName::from_bytes(trimmed_atom_name(
-                        &self.columns.name[idx],
-                    ));
-                    let _ = name_to_idx.insert(key, idx);
-                }
+                let name_to_idx =
+                    residue_name_to_idx(r.atom_range.clone(), |idx| {
+                        self.columns.name[idx]
+                    });
                 aa.chi_atoms()
                     .iter()
                     .map(|quad| {
@@ -608,8 +603,6 @@ fn emit_protein_residue_bonds(
     r: &Residue,
     bonds: &mut Vec<CovalentBond>,
 ) {
-    use std::collections::HashMap;
-
     let start = r.atom_range.start;
     let aid = |offset: usize| AtomId {
         entity: entity_id,
@@ -634,11 +627,8 @@ fn emit_protein_residue_bonds(
     let Some(aa) = AminoAcid::from_code(r.name) else {
         return;
     };
-    let mut name_to_idx: HashMap<AtomName, usize> = HashMap::new();
-    for idx in r.atom_range.clone() {
-        let key = AtomName::from_bytes(trimmed_atom_name(&atoms[idx].name));
-        let _ = name_to_idx.insert(key, idx);
-    }
+    let name_to_idx =
+        residue_name_to_idx(r.atom_range.clone(), |idx| atoms[idx].name);
     for (name_a, name_b) in aa.bonds() {
         if let (Some(&ia), Some(&ib)) =
             (name_to_idx.get(name_a), name_to_idx.get(name_b))
@@ -662,7 +652,8 @@ fn emit_protein_residue_bonds(
 ///
 /// Emits: universal backbone bonds (N-CA, CA-C, C=O) per residue,
 /// sidechain/anchor bonds from [`AminoAcid::bonds()`] matched by
-/// [`AtomName`] within the residue, and inter-residue peptide bonds
+/// [`AtomName`](crate::chemistry::atom_name::AtomName) within the residue,
+/// and inter-residue peptide bonds
 /// `C(i)-N(i+1)` between consecutive kept residues that are not
 /// separated by a segment break.
 #[allow(
@@ -740,11 +731,12 @@ fn find_atom_by_name<E: Entity>(
     residue: &Residue,
     name: &str,
 ) -> Option<Vec3> {
+    let cols = entity.columns();
     for idx in residue.atom_range.clone() {
-        let a = entity.atom(idx);
-        let atom_name = std::str::from_utf8(&a.name).unwrap_or("").trim();
+        let atom_name =
+            std::str::from_utf8(&cols.name[idx]).unwrap_or("").trim();
         if atom_name == name {
-            return Some(a.position);
+            return Some(cols.position[idx]);
         }
     }
     None

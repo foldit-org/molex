@@ -24,6 +24,7 @@ fn atom_at(name: &str, element: Element, x: f32) -> Atom {
         element,
         name: n,
         formal_charge: 0,
+        observed: true,
     }
 }
 

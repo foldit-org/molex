@@ -5,13 +5,13 @@ pub mod cif;
 pub mod dcd;
 pub mod mrc;
 pub mod pdb;
+/// Native, key-bearing flat atom interchange and the single partition core.
+pub mod table;
 
 #[cfg(feature = "python")]
 pub mod atomworks;
 #[cfg(feature = "python")]
 pub mod ml;
-#[cfg(feature = "python")]
-pub(crate) mod reconstruct;
 
 // Entity-first re-exports.
 pub use bcif::{

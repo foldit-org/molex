@@ -20,6 +20,7 @@ fn mk_atom(name: [u8; 4], el: Element, pos: Vec3) -> Atom {
         element: el,
         name,
         formal_charge: 0,
+        observed: true,
     }
 }
 

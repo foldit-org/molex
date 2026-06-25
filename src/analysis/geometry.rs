@@ -68,6 +68,19 @@ impl Assembly {
         }
         (weighted_sq / total).sqrt()
     }
+
+    /// Per-atom provenance over every atom of every entity, in the same flat
+    /// order [`Self::center_of_mass`] and the atom-count sum walk: `true` for
+    /// a parsed atom, `false` for one fabricated by completion. The mask
+    /// length equals the assembly's total atom count.
+    #[must_use]
+    pub fn observed_mask(&self) -> Vec<bool> {
+        let mut mask = Vec::new();
+        for entity in self.entities() {
+            mask.extend_from_slice(&entity.columns().observed);
+        }
+        mask
+    }
 }
 
 #[cfg(test)]

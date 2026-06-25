@@ -21,6 +21,9 @@ pub struct Atom {
     pub name: [u8; 4],
     /// Formal charge (signed). 0 means neutral.
     pub formal_charge: i8,
+    /// Provenance: `true` if parsed from the input, `false` if fabricated by
+    /// completion. Metadata only, never part of atom identity.
+    pub observed: bool,
 }
 
 /// A borrowed, layout-agnostic view of one atom's fields.
@@ -65,7 +68,7 @@ impl<'a> AtomRef<'a> {
 ///
 /// Each [`Atom`] field becomes a parallel column. The columns are kept the
 /// same length and in the same order, so index `i` addresses one atom
-/// across all six.
+/// across all seven.
 ///
 /// Built from a `Vec<Atom>` via [`AtomColumns::from_atoms`]; that transpose
 /// is the bit-identical contract — the column at index `i` carries exactly
@@ -86,6 +89,8 @@ pub struct AtomColumns {
     pub name: Vec<[u8; 4]>,
     /// Formal charges (signed). 0 means neutral.
     pub formal_charge: Vec<i8>,
+    /// Per-atom provenance: `true` parsed, `false` fabricated by completion.
+    pub observed: Vec<bool>,
 }
 
 impl AtomColumns {
@@ -113,6 +118,7 @@ impl AtomColumns {
             element: Vec::with_capacity(atoms.len()),
             name: Vec::with_capacity(atoms.len()),
             formal_charge: Vec::with_capacity(atoms.len()),
+            observed: Vec::with_capacity(atoms.len()),
         };
         for atom in atoms {
             out.position.push(atom.position);
@@ -121,6 +127,7 @@ impl AtomColumns {
             out.element.push(atom.element);
             out.name.push(atom.name);
             out.formal_charge.push(atom.formal_charge);
+            out.observed.push(atom.observed);
         }
         out
     }
@@ -143,6 +150,7 @@ impl AtomColumns {
             element: self.element[i],
             name: self.name[i],
             formal_charge: self.formal_charge[i],
+            observed: self.observed[i],
         }
     }
 
@@ -190,7 +198,11 @@ impl AtomColumns {
         );
         drop(
             self.formal_charge
-                .splice(range, atoms.iter().map(|a| a.formal_charge)),
+                .splice(range.clone(), atoms.iter().map(|a| a.formal_charge)),
+        );
+        drop(
+            self.observed
+                .splice(range, atoms.iter().map(|a| a.observed)),
         );
     }
 }

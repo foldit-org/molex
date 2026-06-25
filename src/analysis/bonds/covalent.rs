@@ -113,6 +113,7 @@ mod tests {
             element,
             name: *b"X   ",
             formal_charge: 0,
+            observed: true,
         }
     }
 

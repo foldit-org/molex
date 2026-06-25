@@ -92,8 +92,9 @@ pub enum AssemblyEdit {
     /// Append a new entity to the assembly. The contained entity's
     /// `id()` must not collide with any existing entity in the target.
     AddEntity {
-        /// Entity to append.
-        entity: MoleculeEntity,
+        /// Entity to append. Boxed to keep the enum small: an inline
+        /// `MoleculeEntity` is far larger than every other variant.
+        entity: Box<MoleculeEntity>,
     },
 
     /// Remove an entity from the assembly. The apply path returns
@@ -201,7 +202,7 @@ impl Assembly {
                 variants,
             } => apply_set_variants(self, *entity, *residue_idx, variants),
             AssemblyEdit::AddEntity { entity } => {
-                apply_add_entity(self, entity.clone())
+                apply_add_entity(self, (**entity).clone())
             }
             AssemblyEdit::RemoveEntity { entity } => {
                 apply_remove_entity(self, *entity)

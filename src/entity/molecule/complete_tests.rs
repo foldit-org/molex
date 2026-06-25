@@ -24,6 +24,7 @@ fn atom_at(name: &str, element: Element, p: Vec3) -> Atom {
         element,
         name: pad_atom_name(name),
         formal_charge: 0,
+        observed: true,
     }
 }
 

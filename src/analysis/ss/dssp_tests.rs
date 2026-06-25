@@ -439,6 +439,7 @@ fn ideal_helix_classifies_as_helix_via_real_geometry() {
         element,
         name: *name,
         formal_charge: 0,
+        observed: true,
     };
     let mut atoms = Vec::with_capacity(N_RES * 4);
     let mut residues = Vec::with_capacity(N_RES);

@@ -41,17 +41,16 @@ pub use from_array::{
     parse_file_to_entities,
 };
 use pyo3::prelude::*;
-pub(crate) use to_array::for_each_flat_atom;
 pub use to_array::{
     assembly_bytes_to_atom_array, assembly_bytes_to_atom_array_plus,
     entities_to_atom_array, entities_to_atom_array_parsed,
     entities_to_atom_array_plus,
 };
-// The shared per-atom column collector and the canonical atom walk it
-// drives. Used by the Biotite bridge in `to_array.rs` and by the native
-// numpy read path in `python::arrays` (the walk also maps bond endpoints
-// into flat space). `collect_atom_data`/`AtomData` are public so the
-// egress benchmark can time the pure-Rust core without a Python
+// The shared per-atom column collector. Marshals the native
+// `AtomTable::from_entities` flatten into the vocab-bearing `AtomData` the
+// Biotite bridge in `to_array.rs` and the native numpy read path in
+// `python::arrays` consume. `collect_atom_data`/`AtomData` are public so
+// the egress benchmark can time the pure-Rust core without a Python
 // interpreter.
 pub use to_array::{collect_atom_data, AtomData};
 

@@ -169,6 +169,7 @@ fn mk_atom(name: [u8; 4], el: Element, pos: Vec3) -> Atom {
         element: el,
         name,
         formal_charge: 0,
+        observed: true,
     }
 }
 
@@ -594,4 +595,145 @@ fn uc19_heavy_only() {
         heavy_atoms,
         "heavy-atom count preserved (no fabrication)"
     );
+}
+
+// --- UC-20 · observed provenance mask -----------------------------------
+
+/// `Assembly::observed_mask()` flags parsed atoms `true` and
+/// completion-fabricated atoms `false`, one entry per atom in the same flat
+/// order as the atom-count walk.
+///
+/// Params: 1UBQ parsed at `Completion::Raw` (nothing fabricated -> all
+/// `true`) and projected through `to_all_atom()` (template hydrogens
+/// fabricated -> the added atoms are `false`). 1UBQ is deposited
+/// heavy-complete and carries no hydrogens, so the only fabricated atoms are
+/// the template protons; every fabricated entry is therefore a hydrogen and
+/// every original heavy atom stays observed. Golden against molex's own
+/// counts (see uc13/uc19: 660 -> 1229, 569 hydrogens added).
+#[test]
+fn uc20_observed_mask() {
+    let raw = ubq_assembly(Completion::Raw);
+    let raw_mask = raw.observed_mask();
+    assert_eq!(
+        raw_mask.len(),
+        total_atoms(&raw),
+        "mask is one entry per atom"
+    );
+    assert!(
+        raw_mask.iter().all(|&o| o),
+        "Raw fabricates nothing: every atom is observed"
+    );
+
+    let all_atom = raw.to_all_atom();
+    let mask = all_atom.observed_mask();
+    assert_eq!(
+        mask.len(),
+        total_atoms(&all_atom),
+        "mask is one entry per atom"
+    );
+
+    // 1UBQ fabricates no heavy atoms (deposited heavy-complete), so every
+    // fabricated atom is a template hydrogen: the `false` count equals the
+    // atom-count growth, and every flagged atom is a hydrogen.
+    let fabricated = mask.iter().filter(|&&o| !o).count();
+    assert_eq!(fabricated, total_atoms(&all_atom) - total_atoms(&raw));
+    assert_eq!(fabricated, 569, "all-atom 1UBQ fabricates 569 hydrogens");
+
+    let elements: Vec<Element> = all_atom
+        .entities()
+        .iter()
+        .flat_map(|e| e.elements().iter().copied())
+        .collect();
+    assert_eq!(elements.len(), mask.len());
+    for (el, observed) in elements.iter().zip(&mask) {
+        if !observed {
+            assert_eq!(*el, Element::H, "fabricated atoms are template H");
+        }
+    }
+    // The observed atoms are exactly the original parsed heavy set.
+    let observed_count = mask.iter().filter(|&&o| o).count();
+    assert_eq!(observed_count, total_atoms(&raw));
+}
+
+// --- UC-21 · to_arrays flat egress columns -------------------------------
+
+/// `collect_atom_data` (the `to_arrays` egress core) flattens an entity vec
+/// into the per-atom annotation columns the numpy / Biotite bridges marshal.
+/// This baselines its output for Heavy-completed 1UBQ so a later egress
+/// restructure (rerouting through `AtomTable::from_entities`, de-vocabbing the
+/// columns) can be proven to preserve the flat result.
+///
+/// Params: `collect_atom_data(asm.entities(), total)` over the Heavy-completed
+/// 1UBQ assembly. Golden against molex's own current output. Gated on the
+/// `python` feature because the egress core lives in the feature-gated
+/// atomworks adapter; runs under `just test-python`.
+#[cfg(feature = "python")]
+#[test]
+fn uc21_to_arrays_1ubq() {
+    use molex::adapters::atomworks::collect_atom_data;
+
+    let asm = ubq_assembly(Completion::Heavy);
+    let total = total_atoms(&asm);
+    let data = collect_atom_data(asm.entities(), total);
+
+    // One entry per atom across every parallel column; coords are three f32
+    // per atom.
+    assert_eq!(total, 660);
+    assert_eq!(data.coords_flat.len(), total * 3);
+    assert_eq!(data.chain_ids.len(), total);
+    assert_eq!(data.res_ids.len(), total);
+    assert_eq!(data.res_names.len(), total);
+    assert_eq!(data.atom_names.len(), total);
+    assert_eq!(data.elements.len(), total);
+    assert_eq!(data.occupancies.len(), total);
+    assert_eq!(data.b_factors.len(), total);
+    assert_eq!(data.aw_entity_ids.len(), total);
+    assert_eq!(data.aw_mol_types.len(), total);
+    assert_eq!(data.aw_chain_types.len(), total);
+
+    // First atom: residue-1 (MET) backbone N on chain A, protein entity 0.
+    assert_eq!(data.res_ids[0], 1);
+    assert_eq!(data.res_names[0], "MET");
+    assert_eq!(data.atom_names[0], "N");
+    assert_eq!(data.elements[0], "N");
+    assert_eq!(data.chain_ids[0], "A");
+    assert_eq!(data.aw_entity_ids[0], 0);
+    assert_eq!(data.aw_mol_types[0], "protein");
+    assert_eq!(data.aw_chain_types[0], 6);
+
+    // The protein is 602 atoms, then the 58-atom water bulk; entity ids and
+    // mol types segment on that boundary.
+    let n_prot = 602usize;
+    assert_eq!(data.aw_entity_ids[n_prot], 1);
+    assert_eq!(data.aw_mol_types[n_prot], "water");
+    assert_eq!(data.aw_chain_types[n_prot], 9);
+    assert_eq!(data.res_names[n_prot], "HOH");
+
+    // Coordinate + per-atom-field checksums pin the full flat result without
+    // baking 660 rows. A reorder, drop, or field skew trips these.
+    let coord_sum: f64 = data.coords_flat.iter().map(|&c| f64::from(c)).sum();
+    let res_id_sum: i64 = data.res_ids.iter().map(|&r| i64::from(r)).sum();
+    let occ_sum: f64 = data.occupancies.iter().map(|&o| f64::from(o)).sum();
+    let bf_sum: f64 = data.b_factors.iter().map(|&b| f64::from(b)).sum();
+    let name_len_sum: usize = data.atom_names.iter().map(String::len).sum();
+    let elem_len_sum: usize = data.elements.iter().map(String::len).sum();
+
+    // Captured 2026-06-25 from molex's own egress output. The coord and
+    // b_factor sums are f32->f64 accumulations of fixed inputs (tight float
+    // tolerance); the rest are exact.
+    assert!(
+        (coord_sum - 48_970.287_982_434_03).abs() < 1.0,
+        "coord checksum drifted: {coord_sum}"
+    );
+    assert_eq!(res_id_sum, 25_002);
+    assert!(
+        (occ_sum - 631.599_999_666_214).abs() < 1e-2,
+        "occupancy sum drifted: {occ_sum}"
+    );
+    assert!(
+        (bf_sum - 9_448.989_999_771_118).abs() < 1.0,
+        "b_factor checksum drifted: {bf_sum}"
+    );
+    assert_eq!(name_len_sum, 1_158);
+    assert_eq!(elem_len_sum, 660);
 }

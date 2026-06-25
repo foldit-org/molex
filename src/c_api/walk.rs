@@ -510,6 +510,7 @@ mod tests {
             element: el,
             name,
             formal_charge: 0,
+            observed: true,
         }
     }
 

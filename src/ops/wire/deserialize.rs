@@ -4,20 +4,16 @@
 //! id lives in its header and atom rows are 25 bytes. Any version other
 //! than [`ASSEMBLY_VERSION`] is a clean [`AdapterError::InvalidFormat`].
 
-use std::collections::HashSet;
-
+use compact_str::CompactString;
 use glam::Vec3;
 
 use super::variants::{deserialize_variants_section, EntityVariants};
 use super::{molecule_type_from_wire, ASSEMBLY_MAGIC, ASSEMBLY_VERSION};
+use crate::adapters::table::{empty_entity, AtomTable};
 use crate::element::Element;
 use crate::entity::molecule::atom::Atom;
-use crate::entity::molecule::bulk::BulkEntity;
-use crate::entity::molecule::id::{EntityId, EntityIdAllocator};
-use crate::entity::molecule::nucleic_acid::NAEntity;
+use crate::entity::molecule::id::EntityId;
 use crate::entity::molecule::polymer::Residue;
-use crate::entity::molecule::protein::ProteinEntity;
-use crate::entity::molecule::small_molecule::SmallMoleculeEntity;
 use crate::entity::molecule::{MoleculeEntity, MoleculeType};
 use crate::ops::error::AdapterError;
 
@@ -28,15 +24,13 @@ const ATOM_ROW_BYTES: usize = 25;
 /// version + 4-byte entity count.
 const HEADERS_START: usize = 13;
 
-/// One atom row decoded from the wire, paired with the per-atom residue
-/// context used to group atoms into residues.
-pub(crate) struct AtomRow {
-    pub(crate) atom: Atom,
-    pub(crate) res_name: [u8; 3],
-    pub(crate) res_num: i32,
-}
-
-pub(crate) fn read_atom_row(cursor: &[u8]) -> Result<AtomRow, AdapterError> {
+/// Decode one wire atom row into its [`Atom`] payload plus the residue keys
+/// (name + number) the partition groups on. `occupancy`/`b_factor` are not on
+/// the wire and reset to their defaults; `formal_charge` and `observed`
+/// likewise reset (the wire carries neither).
+pub(crate) fn read_atom_row(
+    cursor: &[u8],
+) -> Result<(Atom, [u8; 3], i32), AdapterError> {
     let x = f32::from_be_bytes(cursor[0..4].try_into().map_err(|_| {
         AdapterError::SerializationError("Invalid x coordinate".to_owned())
     })?);
@@ -69,132 +63,60 @@ pub(crate) fn read_atom_row(cursor: &[u8]) -> Result<AtomRow, AdapterError> {
         .trim();
     let element = Element::from_symbol(sym_str);
 
-    Ok(AtomRow {
-        atom: Atom {
+    Ok((
+        Atom {
             position: Vec3::new(x, y, z),
             occupancy: 1.0,
             b_factor: 0.0,
             element,
             name: atom_name,
             formal_charge: 0,
+            observed: true,
         },
         res_name,
         res_num,
-    })
+    ))
 }
 
-/// Read `atom_count` atom rows from a cursor, returning the rows and
-/// the remaining bytes.
-fn read_atom_rows(
-    mut cursor: &[u8],
-    atom_count: usize,
-) -> Result<(Vec<AtomRow>, &[u8]), AdapterError> {
-    let mut rows = Vec::with_capacity(atom_count);
-    for _ in 0..atom_count {
-        rows.push(read_atom_row(cursor)?);
+/// Decode one entity's `atom_count` rows into an [`AtomTable`], tagging every
+/// row with the entity's header keys, then partition into the single
+/// `MoleculeEntity` and advance the cursor past the consumed rows.
+fn build_entity<'a>(
+    mut cursor: &'a [u8],
+    header: &EntityHeader,
+) -> Result<(MoleculeEntity, &'a [u8]), AdapterError> {
+    let mut table = AtomTable::with_capacity(header.atom_count);
+    let chain = CompactString::new(&header.chain_id);
+    for _ in 0..header.atom_count {
+        let (atom, res_name, res_num) = read_atom_row(cursor)?;
+        table.push_row(
+            &atom,
+            header.entity_id_raw,
+            chain.clone(),
+            header.mol_type,
+            res_num,
+            res_name,
+        );
         cursor = &cursor[ATOM_ROW_BYTES..];
     }
-    Ok((rows, cursor))
+
+    // A zero-atom entity yields nothing from the partition; fall back to the
+    // shared empty-entity constructor for the header's molecule type so the
+    // entity count still matches the header count (the variants zip below
+    // depends on it), carrying the header's chain id for polymers.
+    let entity = table.into_entities().pop().unwrap_or_else(|| {
+        empty_entity(
+            EntityId::from_raw(header.entity_id_raw),
+            header.mol_type,
+            header.chain_id.clone(),
+        )
+    });
+    Ok((entity, cursor))
 }
 
-/// Split atom rows into `(Vec<Atom>, Vec<Residue>)` by grouping
-/// consecutive rows sharing the same residue number.
-fn into_atoms_and_residues(rows: Vec<AtomRow>) -> (Vec<Atom>, Vec<Residue>) {
-    let mut atoms = Vec::with_capacity(rows.len());
-    let mut residues = Vec::new();
-    let mut current_res_num: Option<i32> = None;
-    let mut current_res_name: [u8; 3] = [b' '; 3];
-    let mut current_start = 0usize;
-
-    for row in rows {
-        let new_residue = current_res_num.is_none_or(|n| n != row.res_num);
-        if new_residue {
-            if let Some(rn) = current_res_num {
-                residues.push(Residue {
-                    name: current_res_name,
-                    label_seq_id: rn,
-                    auth_seq_id: None,
-                    auth_comp_id: None,
-                    ins_code: None,
-                    atom_range: current_start..atoms.len(),
-                    variants: Vec::new(),
-                });
-            }
-            current_start = atoms.len();
-            current_res_num = Some(row.res_num);
-            current_res_name = row.res_name;
-        }
-        atoms.push(row.atom);
-    }
-    if let Some(rn) = current_res_num {
-        residues.push(Residue {
-            name: current_res_name,
-            label_seq_id: rn,
-            auth_seq_id: None,
-            auth_comp_id: None,
-            ins_code: None,
-            atom_range: current_start..atoms.len(),
-            variants: Vec::new(),
-        });
-    }
-
-    (atoms, residues)
-}
-
-fn build_entity(
-    id: EntityId,
-    mol_type: MoleculeType,
-    chain_id: String,
-    rows: Vec<AtomRow>,
-) -> MoleculeEntity {
-    match mol_type {
-        MoleculeType::Protein => {
-            let (atoms, residues) = into_atoms_and_residues(rows);
-            MoleculeEntity::Protein(ProteinEntity::new(
-                id, atoms, residues, chain_id,
-            ))
-        }
-        MoleculeType::DNA | MoleculeType::RNA => {
-            let (atoms, residues) = into_atoms_and_residues(rows);
-            MoleculeEntity::NucleicAcid(NAEntity::new(
-                id, mol_type, atoms, residues, chain_id,
-            ))
-        }
-        MoleculeType::Water | MoleculeType::Solvent => {
-            let residue_name = rows.first().map_or([b' '; 3], |r| r.res_name);
-            let mut seen = HashSet::new();
-            for row in &rows {
-                let _ = seen.insert(row.res_num);
-            }
-            let molecule_count = seen.len();
-            let atoms = rows.into_iter().map(|r| r.atom).collect();
-            MoleculeEntity::Bulk(BulkEntity::new(
-                id,
-                mol_type,
-                atoms,
-                residue_name,
-                molecule_count,
-            ))
-        }
-        MoleculeType::Ligand
-        | MoleculeType::Ion
-        | MoleculeType::Cofactor
-        | MoleculeType::Lipid => {
-            let residue_name = rows.first().map_or([b' '; 3], |r| r.res_name);
-            let atoms = rows.into_iter().map(|r| r.atom).collect();
-            MoleculeEntity::SmallMolecule(SmallMoleculeEntity::new(
-                id,
-                mol_type,
-                atoms,
-                residue_name,
-            ))
-        }
-    }
-}
-
-/// One decoded entity header, carrying the originator's raw
-/// [`EntityId`] value so cross-boundary edit references resolve. `chain_id`
-/// is the entity's chain id (empty for non-polymer entities).
+/// One decoded entity header, carrying the originator's raw `EntityId`
+/// value so cross-boundary edit references resolve. `chain_id` is the
+/// entity's chain id (empty for non-polymer entities).
 struct EntityHeader {
     mol_type: MoleculeType,
     atom_count: usize,
@@ -391,13 +313,11 @@ pub(crate) fn deserialize_assembly_entities(
 
     let mut cursor = &bytes[headers_end..atoms_end];
     let mut entities = Vec::with_capacity(entity_count);
-    let mut allocator = EntityIdAllocator::new();
 
     for header in headers {
-        let (rows, rest) = read_atom_rows(cursor, header.atom_count)?;
+        let (entity, rest) = build_entity(cursor, &header)?;
         cursor = rest;
-        let id = allocator.from_raw(header.entity_id_raw);
-        entities.push(build_entity(id, header.mol_type, header.chain_id, rows));
+        entities.push(entity);
     }
 
     let per_entity_variants =

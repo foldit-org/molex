@@ -4,6 +4,8 @@
 pub mod aabb;
 /// Bond detection: covalent, hydrogen, and disulfide.
 pub mod bonds;
+/// Mass-weighted geometry: center of mass and radius of gyration.
+pub mod geometry;
 /// Shrake-Rupley solvent-accessible surface area.
 pub mod sasa;
 /// Secondary structure detection and parsing.

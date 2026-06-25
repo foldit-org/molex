@@ -117,12 +117,13 @@ class Assembly:
         entities get `""`. Reads the SS from `recompute_ss`; call that first,
         otherwise every protein string is all-`'C'`."""
         ...
-    def sasa(self, probe_radius: float = 1.4) -> float:
+    def sasa(self, probe_radius: float = 1.4, n_points: int = 960) -> float:
         """Total Shrake-Rupley solvent-accessible surface area (Angstrom^2)
         over protein atoms. Water, ions, ligands, and nucleic acids are
         excluded (freesasa/biotite protein-scope convention). Uses Bondi van
-        der Waals radii and ~960 test points per atom; `probe_radius` is the
-        solvent radius in Angstroms (1.4 for water)."""
+        der Waals radii; `probe_radius` is the solvent radius in Angstroms
+        (1.4 for water); `n_points` is the per-atom golden-spiral sample count
+        (higher is more accurate and slower)."""
         ...
     def entities(self) -> list[Entity]:
         """The assembly's entities, in order."""

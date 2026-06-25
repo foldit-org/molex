@@ -296,16 +296,16 @@ impl PyAssembly {
     /// Total solvent-accessible surface area (Shrake-Rupley) in Angstrom^2
     /// over the assembly's protein atoms. Water, ions, ligands, and nucleic
     /// acids are excluded, matching the protein-scope convention of freesasa
-    /// and biotite. Uses Bondi van der Waals radii and ~960 test points per
-    /// atom. `probe_radius` is the solvent radius in Angstroms (1.4 for water).
+    /// and biotite. Uses Bondi van der Waals radii. `probe_radius` is the
+    /// solvent radius in Angstroms (1.4 for water); `n_points` is the per-atom
+    /// golden-spiral sample count (higher is more accurate and slower).
     #[must_use]
-    #[pyo3(signature = (probe_radius = DEFAULT_PROBE_RADIUS))]
-    pub fn sasa(&self, probe_radius: f32) -> f32 {
-        crate::analysis::assembly_sasa(
-            &self.inner,
-            probe_radius,
-            DEFAULT_N_POINTS,
-        )
+    #[pyo3(signature = (
+        probe_radius = DEFAULT_PROBE_RADIUS,
+        n_points = DEFAULT_N_POINTS,
+    ))]
+    pub fn sasa(&self, probe_radius: f32, n_points: usize) -> f32 {
+        crate::analysis::assembly_sasa(&self.inner, probe_radius, n_points)
     }
 
     // Object navigation. The documented default for a normal caller: parse

@@ -75,6 +75,10 @@ harness = false
 name = "alloc"
 harness = false
 
+[[bench]]
+name = "egress"
+harness = false
+
 [lints.clippy]
 # Broad lint groups (lower priority so individual lints can override)
 all = { level = "deny", priority = -1 }

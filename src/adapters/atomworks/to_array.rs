@@ -13,18 +13,34 @@ use crate::entity::molecule::{MoleculeEntity, MoleculeType};
 use crate::ops::wire::deserialize_assembly;
 
 /// Flat per-atom annotation data collected from entities.
-pub(crate) struct AtomData {
+///
+/// Every column except `coords_flat` (three `f32` per atom) and `all_bonds`
+/// (flat-index endpoints plus order) is one entry per atom, in canonical
+/// `to_arrays()` order.
+pub struct AtomData {
+    /// XYZ coordinates, three `f32` per atom.
     pub coords_flat: Vec<f32>,
+    /// Per-atom chain identifier (`label_asym_id`, `"A"` fallback).
     pub chain_ids: Vec<String>,
+    /// Per-atom residue sequence number.
     pub res_ids: Vec<i32>,
+    /// Per-atom residue name.
     pub res_names: Vec<String>,
+    /// Per-atom name.
     pub atom_names: Vec<String>,
+    /// Per-atom element symbol.
     pub elements: Vec<String>,
+    /// Per-atom occupancy.
     pub occupancies: Vec<f32>,
+    /// Per-atom B-factor.
     pub b_factors: Vec<f32>,
+    /// Per-atom AtomWorks entity id.
     pub aw_entity_ids: Vec<i32>,
+    /// Per-atom AtomWorks molecule-type string.
     pub aw_mol_types: Vec<String>,
+    /// Per-atom AtomWorks chain-type id.
     pub aw_chain_types: Vec<i32>,
+    /// Bond endpoints as `(flat_atom_a, flat_atom_b, order)`.
     pub all_bonds: Vec<(usize, usize, u8)>,
 }
 
@@ -181,7 +197,11 @@ fn emit_polymer(
 }
 
 /// Collect per-atom annotation data from entities into flat vectors.
-pub(crate) fn collect_atom_data<E: std::borrow::Borrow<MoleculeEntity>>(
+///
+/// This is the shared pure-Rust egress core both the numpy `to_arrays()` path
+/// and the Biotite `AtomArray` bridge route through; no Python interpreter is
+/// touched. Public so the egress benchmark can time it directly.
+pub fn collect_atom_data<E: std::borrow::Borrow<MoleculeEntity>>(
     entities: &[E],
     total_atoms: usize,
 ) -> AtomData {

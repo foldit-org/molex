@@ -221,6 +221,37 @@ impl Element {
         }
     }
 
+    /// Standard atomic weight in daltons (unified atomic mass units).
+    ///
+    /// `Unknown` is treated as carbon (12.011), mirroring the
+    /// [`Self::vdw_radius`] `Unknown -> C` precedent.
+    #[must_use]
+    pub fn mass(self) -> f32 {
+        match self {
+            Element::H => 1.008,
+            Element::C | Element::Unknown => 12.011,
+            Element::N => 14.007,
+            Element::O => 15.999,
+            Element::S => 32.06,
+            Element::P => 30.974,
+            Element::Se => 78.97,
+            Element::Fe => 55.845,
+            Element::Zn => 65.38,
+            Element::Mg => 24.305,
+            Element::Ca => 40.078,
+            Element::Na => 22.990,
+            Element::Cl => 35.45,
+            Element::K => 39.098,
+            Element::Mn => 54.938,
+            Element::Co => 58.933,
+            Element::Ni => 58.693,
+            Element::Cu => 63.546,
+            Element::Br => 79.904,
+            Element::I => 126.904,
+            Element::F => 18.998,
+        }
+    }
+
     /// Van der Waals radius in angstroms.
     #[must_use]
     pub fn vdw_radius(&self) -> f32 {
@@ -564,6 +595,20 @@ mod tests {
         assert_eq!(Element::C.vdw_radius(), 1.70);
         assert_eq!(Element::N.vdw_radius(), 1.55);
         assert_eq!(Element::O.vdw_radius(), 1.52);
+    }
+
+    #[test]
+    fn mass_known_values() {
+        assert_eq!(Element::H.mass(), 1.008);
+        assert_eq!(Element::C.mass(), 12.011);
+        assert_eq!(Element::N.mass(), 14.007);
+        assert_eq!(Element::O.mass(), 15.999);
+        assert_eq!(Element::S.mass(), 32.06);
+    }
+
+    #[test]
+    fn mass_unknown_treated_as_carbon() {
+        assert_eq!(Element::Unknown.mass(), Element::C.mass());
     }
 
     #[test]

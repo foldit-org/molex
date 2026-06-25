@@ -345,6 +345,47 @@ impl ProteinEntity {
             .collect()
     }
 
+    /// Sidechain torsion (χ) angles per residue, in degrees in (-180, 180]
+    /// (IUPAC sign), one inner `Vec` per residue in residue order.
+    ///
+    /// The inner vector holds χ1..χN for the residue type
+    /// ([`AminoAcid::chi_atoms`]); a χ is `None` when any of its four atoms is
+    /// absent from the residue. Non-standard residue names (unparseable by
+    /// [`AminoAcid::from_code`]) and residues with no rotatable sidechain
+    /// torsion (Ala, Gly) yield an empty inner vector. Uses the same torsion
+    /// kernel as [`Self::phi_psi`].
+    #[must_use]
+    pub fn chi_angles(&self) -> Vec<Vec<Option<f32>>> {
+        use std::collections::HashMap;
+
+        let positions = self.positions();
+        self.residues
+            .iter()
+            .map(|r| {
+                let Some(aa) = AminoAcid::from_code(r.name) else {
+                    return Vec::new();
+                };
+                let mut name_to_idx: HashMap<AtomName, usize> = HashMap::new();
+                for idx in r.atom_range.clone() {
+                    let key = AtomName::from_bytes(trimmed_atom_name(
+                        &self.columns.name[idx],
+                    ));
+                    let _ = name_to_idx.insert(key, idx);
+                }
+                aa.chi_atoms()
+                    .iter()
+                    .map(|quad| {
+                        let p: Option<Vec<Vec3>> = quad
+                            .iter()
+                            .map(|n| name_to_idx.get(n).map(|&i| positions[i]))
+                            .collect();
+                        p.map(|p| dihedral_deg(p[0], p[1], p[2], p[3]))
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
     /// N/CA/C interleaved positions per segment (for spline renderer).
     ///
     /// Each inner `Vec<Vec3>` is one continuous segment with atoms
@@ -742,7 +783,7 @@ pub(crate) fn residue_has_backbone<E: Entity>(
 ///
 /// Uses the IUPAC-sign convention (`atan2` of the two bond-normal cross
 /// products), so φ/ψ match the standard structural-biology definitions.
-fn dihedral_deg(p0: Vec3, p1: Vec3, p2: Vec3, p3: Vec3) -> f32 {
+pub(crate) fn dihedral_deg(p0: Vec3, p1: Vec3, p2: Vec3, p3: Vec3) -> f32 {
     let b1 = p1 - p0;
     let b2 = p2 - p1;
     let b3 = p3 - p2;

@@ -146,6 +146,19 @@ impl Assembly {
         self.entities.iter().map(Arc::as_ref).find(|e| e.id() == id)
     }
 
+    /// One-letter sequences, one per polymer entity in declaration order.
+    ///
+    /// Non-polymer entities (ligands, ions, bulk solvent) contribute no
+    /// entry. See [`MoleculeEntity::sequence`] for the per-residue mapping.
+    #[must_use]
+    pub fn sequence(&self) -> Vec<String> {
+        self.entities
+            .iter()
+            .filter(|e| e.residues().is_some())
+            .map(|e| e.sequence())
+            .collect()
+    }
+
     /// Monotonic counter incremented on every mutation.
     #[must_use]
     pub fn generation(&self) -> u64 {

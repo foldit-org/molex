@@ -104,6 +104,36 @@ pub(crate) struct AtomRow {
     pub formal_charge: i8,
 }
 
+/// One atom's scalar cells, borrowing its chain/entity ids rather than
+/// owning them.
+///
+/// This is the row-struct-agnostic argument the accumulator highway
+/// (`ensure_chain` / `locate_or_create_residue` / `apply_altloc_dedup`)
+/// actually consumes. [`push_atom`](EntityBuilder::push_atom) adapts an
+/// owned [`AtomRow`] into it; the columnar BinaryCIF path builds it
+/// straight from decoded columns, skipping the row struct and the
+/// chain-id `CompactString` allocations. Atom-name fields must already be
+/// `normalize_legacy_atom_name`-rewritten by the caller.
+pub(crate) struct AtomCells<'a> {
+    pub label_asym_id: &'a str,
+    pub label_seq_id: i32,
+    pub label_comp_id: [u8; 3],
+    pub label_atom_id: [u8; 4],
+    pub label_entity_id: Option<&'a str>,
+    pub auth_seq_id: Option<i32>,
+    pub auth_comp_id: Option<[u8; 3]>,
+    pub auth_atom_id: Option<[u8; 4]>,
+    pub alt_loc: Option<u8>,
+    pub ins_code: Option<u8>,
+    pub element: Element,
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    pub occupancy: f32,
+    pub b_factor: f32,
+    pub formal_charge: i8,
+}
+
 /// Builder-side errors. Adapters wrap these into `AdapterError`.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum BuildError {
@@ -188,26 +218,55 @@ impl EntityBuilder {
     /// unrecognized residue names are accepted.
     #[allow(
         clippy::needless_pass_by_value,
-        reason = "AtomRow is moved into builder state in mmCIF / BCIF callers"
+        reason = "by-value AtomRow matches the parser-emits-a-row surface; \
+                  its fields are unpacked into AtomCells here"
     )]
-    pub(crate) fn push_atom(
+    pub(crate) fn push_atom(&mut self, row: AtomRow) -> Result<(), BuildError> {
+        self.push_cells(AtomCells {
+            label_asym_id: row.label_asym_id.as_str(),
+            label_seq_id: row.label_seq_id,
+            label_comp_id: row.label_comp_id,
+            label_atom_id: row.label_atom_id,
+            label_entity_id: row.label_entity_id.as_deref(),
+            auth_seq_id: row.auth_seq_id,
+            auth_comp_id: row.auth_comp_id,
+            auth_atom_id: row.auth_atom_id,
+            alt_loc: row.alt_loc,
+            ins_code: row.ins_code,
+            element: row.element,
+            x: row.x,
+            y: row.y,
+            z: row.z,
+            occupancy: row.occupancy,
+            b_factor: row.b_factor,
+            formal_charge: row.formal_charge,
+        })
+    }
+
+    /// Route a single atom's scalar cells through the accumulator. The
+    /// columnar BinaryCIF path builds [`AtomCells`] straight from decoded
+    /// columns and calls this directly — sharing the chain/residue/altLoc
+    /// machinery with [`push_atom`](Self::push_atom) without materializing
+    /// an [`AtomRow`] or the chain-id `CompactString`s.
+    ///
+    /// The atom-name choke point lives here: both name fields are rewritten
+    /// to v3 form, feeding the residue HashMap key, the classification
+    /// atom-set probe, and the flattened `Atom.name`. Coordinates are
+    /// validated against the un-normalized name (so the error carries the
+    /// raw atom name).
+    pub(crate) fn push_cells(
         &mut self,
-        mut row: AtomRow,
+        mut cells: AtomCells<'_>,
     ) -> Result<(), BuildError> {
-        validate_coords(&row)?;
-        // Single choke point: rewriting both atom-name fields here feeds
-        // the v3 name into the residue HashMap key (`row.label_atom_id`),
-        // the classification atom-set probe, and the flattened
-        // `Atom.name` (`AtomChoice` carries both label and auth).
-        row.label_atom_id = normalize_legacy_atom_name(row.label_atom_id);
-        row.auth_atom_id = row.auth_atom_id.map(normalize_legacy_atom_name);
-        self.ensure_chain(&row);
-        let Some(chain) = self.chains.get_mut(row.label_asym_id.as_str())
-        else {
+        validate_coords(cells.x, cells.y, cells.z, cells.label_atom_id)?;
+        cells.label_atom_id = normalize_legacy_atom_name(cells.label_atom_id);
+        cells.auth_atom_id = cells.auth_atom_id.map(normalize_legacy_atom_name);
+        self.ensure_chain(cells.label_asym_id, cells.label_entity_id);
+        let Some(chain) = self.chains.get_mut(cells.label_asym_id) else {
             unreachable!("chain inserted by ensure_chain");
         };
-        let res_idx = chain.locate_or_create_residue(&row);
-        chain.residues[res_idx].apply_altloc_dedup(&row);
+        let res_idx = chain.locate_or_create_residue(&cells);
+        chain.residues[res_idx].apply_altloc_dedup(&cells);
         Ok(())
     }
 
@@ -275,22 +334,23 @@ impl EntityBuilder {
         Ok(out)
     }
 
-    fn ensure_chain(&mut self, row: &AtomRow) {
-        if self.chains.contains_key(row.label_asym_id.as_str()) {
+    fn ensure_chain(
+        &mut self,
+        label_asym_id: &str,
+        label_entity_id: Option<&str>,
+    ) {
+        if self.chains.contains_key(label_asym_id) {
             return;
         }
         let state = ChainState {
-            pdb_chain_id: row.label_asym_id.as_str().to_owned(),
-            entity_hint_key: row
-                .label_entity_id
-                .as_ref()
-                .map(|id| id.as_str().to_owned()),
+            pdb_chain_id: label_asym_id.to_owned(),
+            entity_hint_key: label_entity_id.map(str::to_owned),
             residues: Vec::new(),
             residue_index: FxHashMap::default(),
         };
         // The owned chain key lives both as the HashMap key and as the
         // chain_order entry that drives finish() ordering.
-        let key = row.label_asym_id.as_str().to_owned();
+        let key = label_asym_id.to_owned();
         self.chain_order.push(key.clone());
         let _ = self.chains.insert(key, state);
     }
@@ -308,18 +368,18 @@ pub(super) struct ChainState {
 }
 
 impl ChainState {
-    fn locate_or_create_residue(&mut self, row: &AtomRow) -> usize {
-        let key = (row.label_seq_id, row.ins_code);
+    fn locate_or_create_residue(&mut self, cells: &AtomCells<'_>) -> usize {
+        let key = (cells.label_seq_id, cells.ins_code);
         if let Some(&idx) = self.residue_index.get(&key) {
             return idx;
         }
         let idx = self.residues.len();
         self.residues.push(ResidueAccum {
-            label_seq_id: row.label_seq_id,
-            auth_seq_id: row.auth_seq_id,
-            label_comp_id: row.label_comp_id,
-            auth_comp_id: row.auth_comp_id,
-            ins_code: row.ins_code,
+            label_seq_id: cells.label_seq_id,
+            auth_seq_id: cells.auth_seq_id,
+            label_comp_id: cells.label_comp_id,
+            auth_comp_id: cells.auth_comp_id,
+            ins_code: cells.ins_code,
             atoms: Vec::new(),
         });
         let _ = self.residue_index.insert(key, idx);
@@ -337,14 +397,14 @@ pub(super) struct ResidueAccum {
 }
 
 impl ResidueAccum {
-    fn apply_altloc_dedup(&mut self, row: &AtomRow) {
-        let candidate = AtomChoice::from_row(row);
+    fn apply_altloc_dedup(&mut self, cells: &AtomCells<'_>) {
+        let candidate = AtomChoice::from_cells(cells);
         match self
             .atoms
             .iter_mut()
-            .find(|(name, _)| *name == row.label_atom_id)
+            .find(|(name, _)| *name == cells.label_atom_id)
         {
-            None => self.atoms.push((row.label_atom_id, candidate)),
+            None => self.atoms.push((cells.label_atom_id, candidate)),
             Some(existing) => {
                 if candidate_should_replace(&existing.1, &candidate) {
                     existing.1 = candidate;
@@ -366,16 +426,16 @@ pub(super) struct AtomChoice {
 }
 
 impl AtomChoice {
-    fn from_row(row: &AtomRow) -> Self {
+    fn from_cells(cells: &AtomCells<'_>) -> Self {
         Self {
-            alt_loc: row.alt_loc,
-            occupancy: row.occupancy,
-            label_atom_id: row.label_atom_id,
-            auth_atom_id: row.auth_atom_id,
-            element: row.element,
-            position: Vec3::new(row.x, row.y, row.z),
-            b_factor: row.b_factor,
-            formal_charge: row.formal_charge,
+            alt_loc: cells.alt_loc,
+            occupancy: cells.occupancy,
+            label_atom_id: cells.label_atom_id,
+            auth_atom_id: cells.auth_atom_id,
+            element: cells.element,
+            position: Vec3::new(cells.x, cells.y, cells.z),
+            b_factor: cells.b_factor,
+            formal_charge: cells.formal_charge,
         }
     }
 
@@ -467,13 +527,18 @@ impl GlobalBulk {
 
 // Helpers
 
-fn validate_coords(row: &AtomRow) -> Result<(), BuildError> {
-    for (axis, value) in [('x', row.x), ('y', row.y), ('z', row.z)] {
+fn validate_coords(
+    x: f32,
+    y: f32,
+    z: f32,
+    label_atom_id: [u8; 4],
+) -> Result<(), BuildError> {
+    for (axis, value) in [('x', x), ('y', y), ('z', z)] {
         if !value.is_finite() {
             return Err(BuildError::InvalidCoordinate {
                 axis,
                 value,
-                label_atom_id: trim_atom_name(row.label_atom_id),
+                label_atom_id: trim_atom_name(label_atom_id),
             });
         }
     }

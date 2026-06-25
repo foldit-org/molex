@@ -6,8 +6,6 @@
 use std::collections::HashMap;
 use std::io::Read;
 
-use compact_str::CompactString;
-
 use super::codec::{
     decode_column, decode_msgpack, ColData, MsgVal, StringColumn,
 };
@@ -15,7 +13,7 @@ use super::hint::resolve_hint;
 use super::refuse::multi_block_error;
 use crate::element::Element;
 use crate::entity::molecule::{
-    AtomRow, BuildError, Completion, EntityBuilder, MoleculeEntity,
+    AtomCells, BuildError, Completion, EntityBuilder, MoleculeEntity,
 };
 use crate::ops::error::AdapterError;
 
@@ -43,7 +41,7 @@ pub(super) fn decode_to_entities(
                 continue;
             }
         }
-        cols.push_row(&mut builder, i)?;
+        cols.push_cells(&mut builder, i)?;
         any_atom = true;
     }
     if !any_atom {
@@ -93,7 +91,7 @@ pub(super) fn decode_to_all_models(
         register_hints(&block, &mut builder)?;
         let mut any_atom = false;
         for i in indices {
-            cols.push_row(&mut builder, i)?;
+            cols.push_cells(&mut builder, i)?;
             any_atom = true;
         }
         if any_atom {
@@ -329,6 +327,9 @@ struct AtomSiteColumns {
     pdb_ins_code: Option<Strings>,
     pdb_model_num: Option<Ints>,
     formal_charge: Option<Ints>,
+    /// Decoded but unread by ingest: the accumulator keys chains on
+    /// `label_asym_id` only. Retained in the column set for the egress path.
+    #[allow(dead_code, reason = "consumed by the mmCIF/BCIF write path")]
     auth_asym_id: Option<Strings>,
     auth_seq_id: Option<Ints>,
     auth_comp_id: Option<Strings>,
@@ -358,11 +359,17 @@ impl AtomSiteColumns {
             .min()
     }
 
+    /// Materialize row `i`'s cells straight from the decoded columns and
+    /// route them through the builder's accumulator, skipping the per-atom
+    /// `AtomRow` struct and the chain-id `CompactString`s the text-format
+    /// `push_atom` path pays. The builder owns coordinate validation and
+    /// atom-name normalization, so the cells carry raw (un-normalized)
+    /// atom-name bytes.
     #[allow(
         clippy::cast_possible_truncation,
         reason = "BCIF doubles narrow to f32 for storage"
     )]
-    fn push_row(
+    fn push_cells(
         &self,
         builder: &mut EntityBuilder,
         i: usize,
@@ -371,50 +378,47 @@ impl AtomSiteColumns {
         let type_symbol = opt_string_at(self.type_symbol.as_ref(), i);
         let element = resolve_element(type_symbol, label_atom_id);
         let auth_seq = opt_int_at(self.auth_seq_id.as_ref(), i);
-        let atom_row = AtomRow {
-            label_asym_id: CompactString::new(string_at(
-                &self.label_asym_id,
-                i,
-            )),
-            // Waters/non-polymer rows carry an absent `label_seq_id`; their
-            // per-instance discriminator lives in `auth_seq_id`. Mirror the
-            // PDB path (author number into the seq slot) so each gets a
-            // distinct residue key instead of all collapsing onto 0.
-            label_seq_id: opt_int_at(self.label_seq_id.as_ref(), i)
-                .or(auth_seq)
-                .unwrap_or(0),
-            label_comp_id: name_to_bytes::<3>(string_at(
-                &self.label_comp_id,
-                i,
-            )),
-            label_atom_id: name_to_bytes::<4>(label_atom_id),
-            label_entity_id: opt_string_at(self.label_entity_id.as_ref(), i)
-                .map(CompactString::new),
-            auth_asym_id: opt_string_at(self.auth_asym_id.as_ref(), i)
-                .map(CompactString::new),
-            auth_seq_id: auth_seq,
-            auth_comp_id: opt_string_at(self.auth_comp_id.as_ref(), i)
-                .map(name_to_bytes::<3>),
-            auth_atom_id: opt_string_at(self.auth_atom_id.as_ref(), i)
-                .map(name_to_bytes::<4>),
-            alt_loc: opt_string_at(self.label_alt_id.as_ref(), i)
-                .and_then(|s| s.bytes().next())
-                .filter(|&b| b != b' '),
-            ins_code: opt_string_at(self.pdb_ins_code.as_ref(), i)
-                .and_then(|s| s.bytes().next())
-                .filter(|&b| b != b' '),
-            element,
-            x: float_at_default(&self.x, i, 0.0) as f32,
-            y: float_at_default(&self.y, i, 0.0) as f32,
-            z: float_at_default(&self.z, i, 0.0) as f32,
-            occupancy: float_at_opt(self.occupancy.as_ref(), i, 1.0) as f32,
-            b_factor: float_at_opt(self.b_iso.as_ref(), i, 0.0) as f32,
-            formal_charge: opt_int_at(self.formal_charge.as_ref(), i)
-                .and_then(|n| i8::try_from(n).ok())
-                .unwrap_or(0),
-        };
         builder
-            .push_atom(atom_row)
+            .push_cells(AtomCells {
+                label_asym_id: string_at(&self.label_asym_id, i),
+                // Waters/non-polymer rows carry an absent `label_seq_id`;
+                // their per-instance discriminator lives in `auth_seq_id`.
+                // Mirror the PDB path (author number into the seq slot) so
+                // each gets a distinct residue key instead of all collapsing
+                // onto 0.
+                label_seq_id: opt_int_at(self.label_seq_id.as_ref(), i)
+                    .or(auth_seq)
+                    .unwrap_or(0),
+                label_comp_id: name_to_bytes::<3>(string_at(
+                    &self.label_comp_id,
+                    i,
+                )),
+                label_atom_id: name_to_bytes::<4>(label_atom_id),
+                label_entity_id: opt_string_at(
+                    self.label_entity_id.as_ref(),
+                    i,
+                ),
+                auth_seq_id: auth_seq,
+                auth_comp_id: opt_string_at(self.auth_comp_id.as_ref(), i)
+                    .map(name_to_bytes::<3>),
+                auth_atom_id: opt_string_at(self.auth_atom_id.as_ref(), i)
+                    .map(name_to_bytes::<4>),
+                alt_loc: opt_string_at(self.label_alt_id.as_ref(), i)
+                    .and_then(|s| s.bytes().next())
+                    .filter(|&b| b != b' '),
+                ins_code: opt_string_at(self.pdb_ins_code.as_ref(), i)
+                    .and_then(|s| s.bytes().next())
+                    .filter(|&b| b != b' '),
+                element,
+                x: float_at_default(&self.x, i, 0.0) as f32,
+                y: float_at_default(&self.y, i, 0.0) as f32,
+                z: float_at_default(&self.z, i, 0.0) as f32,
+                occupancy: float_at_opt(self.occupancy.as_ref(), i, 1.0) as f32,
+                b_factor: float_at_opt(self.b_iso.as_ref(), i, 0.0) as f32,
+                formal_charge: opt_int_at(self.formal_charge.as_ref(), i)
+                    .and_then(|n| i8::try_from(n).ok())
+                    .unwrap_or(0),
+            })
             .map_err(|e| map_build_error(&e))?;
         Ok(())
     }

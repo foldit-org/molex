@@ -61,6 +61,18 @@ impl Nucleotide {
         }
     }
 
+    /// 1-letter nucleotide code (uppercase ASCII).
+    #[must_use]
+    pub const fn one_letter(self) -> u8 {
+        match self {
+            Self::A => b'A',
+            Self::C => b'C',
+            Self::G => b'G',
+            Self::T => b'T',
+            Self::U => b'U',
+        }
+    }
+
     /// Heavy-atom intra-residue bonds for this nucleotide.
     ///
     /// Covers: the shared sugar ring (C1'-C2'-C3'-C4'-O4'-C1'), the
@@ -240,6 +252,19 @@ mod tests {
     #[test]
     fn from_code_handles_padding() {
         assert_eq!(Nucleotide::from_code(*b"A  "), Some(Nucleotide::A));
+    }
+
+    #[test]
+    fn one_letter_round_trips() {
+        for (nt, c) in [
+            (Nucleotide::A, b'A'),
+            (Nucleotide::C, b'C'),
+            (Nucleotide::G, b'G'),
+            (Nucleotide::T, b'T'),
+            (Nucleotide::U, b'U'),
+        ] {
+            assert_eq!(nt.one_letter(), c);
+        }
     }
 
     #[test]

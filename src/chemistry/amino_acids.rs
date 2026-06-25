@@ -175,6 +175,37 @@ impl AminoAcid {
         }
     }
 
+    /// Sidechain torsion (χ) atom quads, in order χ1, χ2, ...
+    ///
+    /// Each quad is the four atom names defining one χ dihedral under the
+    /// standard IUPAC convention (χ1 = N-CA-CB-*G, with the branched/heteroatom
+    /// exceptions: Ser OG, Thr OG1, Cys SG, Ile/Val CG1). Ala and Gly have no
+    /// rotatable sidechain torsions and return an empty slice.
+    #[must_use]
+    pub const fn chi_atoms(self) -> &'static [[AtomName; 4]] {
+        match self {
+            Self::Ala | Self::Gly => &[],
+            Self::Arg => ARG_CHI,
+            Self::Asn => ASN_CHI,
+            Self::Asp => ASP_CHI,
+            Self::Cys => CYS_CHI,
+            Self::Gln => GLN_CHI,
+            Self::Glu => GLU_CHI,
+            Self::His => HIS_CHI,
+            Self::Ile => ILE_CHI,
+            Self::Leu => LEU_CHI,
+            Self::Lys => LYS_CHI,
+            Self::Met => MET_CHI,
+            Self::Phe => PHE_CHI,
+            Self::Pro => PRO_CHI,
+            Self::Ser => SER_CHI,
+            Self::Thr => THR_CHI,
+            Self::Trp => TRP_CHI,
+            Self::Tyr => TYR_CHI,
+            Self::Val => VAL_CHI,
+        }
+    }
+
     /// Whether this amino acid carries Rosetta's POLAR residue-type property.
     ///
     /// Polar set (Rosetta `fa_standard` POLAR property): Arg, Asn, Asp, Gln,
@@ -203,6 +234,28 @@ impl AminoAcid {
     #[must_use]
     pub const fn is_hydrophobic(self) -> bool {
         !self.is_polar()
+    }
+}
+
+/// One-letter code for a modified amino-acid residue name that
+/// [`AminoAcid::from_code`] does not parse but [`crate::entity::molecule`]
+/// classifies as protein.
+///
+/// Maps the standard genetically/selenium-substituted residues to their parent:
+/// MSE (selenomethionine) -> M, SEC (selenocysteine) -> U, PYL (pyrrolysine)
+/// -> O. Returns `None` for any other code.
+#[must_use]
+pub fn modified_aa_one_letter(code: [u8; 3]) -> Option<u8> {
+    let upper = [
+        code[0].to_ascii_uppercase(),
+        code[1].to_ascii_uppercase(),
+        code[2].to_ascii_uppercase(),
+    ];
+    match &upper {
+        b"MSE" => Some(b'M'),
+        b"SEC" => Some(b'U'),
+        b"PYL" => Some(b'O'),
+        _ => None,
     }
 }
 
@@ -357,6 +410,85 @@ const VAL_BONDS: &[(AtomName, AtomName)] = &[
     (an(b"CB"), an(b"CG2")),
 ];
 
+// Sidechain χ tables (IUPAC convention)
+
+const fn chi(
+    a: &'static [u8],
+    b: &'static [u8],
+    c: &'static [u8],
+    d: &'static [u8],
+) -> [AtomName; 4] {
+    [an(a), an(b), an(c), an(d)]
+}
+
+const ARG_CHI: &[[AtomName; 4]] = &[
+    chi(b"N", b"CA", b"CB", b"CG"),
+    chi(b"CA", b"CB", b"CG", b"CD"),
+    chi(b"CB", b"CG", b"CD", b"NE"),
+    chi(b"CG", b"CD", b"NE", b"CZ"),
+];
+const ASN_CHI: &[[AtomName; 4]] = &[
+    chi(b"N", b"CA", b"CB", b"CG"),
+    chi(b"CA", b"CB", b"CG", b"OD1"),
+];
+const ASP_CHI: &[[AtomName; 4]] = &[
+    chi(b"N", b"CA", b"CB", b"CG"),
+    chi(b"CA", b"CB", b"CG", b"OD1"),
+];
+const CYS_CHI: &[[AtomName; 4]] = &[chi(b"N", b"CA", b"CB", b"SG")];
+const GLN_CHI: &[[AtomName; 4]] = &[
+    chi(b"N", b"CA", b"CB", b"CG"),
+    chi(b"CA", b"CB", b"CG", b"CD"),
+    chi(b"CB", b"CG", b"CD", b"OE1"),
+];
+const GLU_CHI: &[[AtomName; 4]] = &[
+    chi(b"N", b"CA", b"CB", b"CG"),
+    chi(b"CA", b"CB", b"CG", b"CD"),
+    chi(b"CB", b"CG", b"CD", b"OE1"),
+];
+const HIS_CHI: &[[AtomName; 4]] = &[
+    chi(b"N", b"CA", b"CB", b"CG"),
+    chi(b"CA", b"CB", b"CG", b"ND1"),
+];
+const ILE_CHI: &[[AtomName; 4]] = &[
+    chi(b"N", b"CA", b"CB", b"CG1"),
+    chi(b"CA", b"CB", b"CG1", b"CD1"),
+];
+const LEU_CHI: &[[AtomName; 4]] = &[
+    chi(b"N", b"CA", b"CB", b"CG"),
+    chi(b"CA", b"CB", b"CG", b"CD1"),
+];
+const LYS_CHI: &[[AtomName; 4]] = &[
+    chi(b"N", b"CA", b"CB", b"CG"),
+    chi(b"CA", b"CB", b"CG", b"CD"),
+    chi(b"CB", b"CG", b"CD", b"CE"),
+    chi(b"CG", b"CD", b"CE", b"NZ"),
+];
+const MET_CHI: &[[AtomName; 4]] = &[
+    chi(b"N", b"CA", b"CB", b"CG"),
+    chi(b"CA", b"CB", b"CG", b"SD"),
+    chi(b"CB", b"CG", b"SD", b"CE"),
+];
+const PHE_CHI: &[[AtomName; 4]] = &[
+    chi(b"N", b"CA", b"CB", b"CG"),
+    chi(b"CA", b"CB", b"CG", b"CD1"),
+];
+const PRO_CHI: &[[AtomName; 4]] = &[
+    chi(b"N", b"CA", b"CB", b"CG"),
+    chi(b"CA", b"CB", b"CG", b"CD"),
+];
+const SER_CHI: &[[AtomName; 4]] = &[chi(b"N", b"CA", b"CB", b"OG")];
+const THR_CHI: &[[AtomName; 4]] = &[chi(b"N", b"CA", b"CB", b"OG1")];
+const TRP_CHI: &[[AtomName; 4]] = &[
+    chi(b"N", b"CA", b"CB", b"CG"),
+    chi(b"CA", b"CB", b"CG", b"CD1"),
+];
+const TYR_CHI: &[[AtomName; 4]] = &[
+    chi(b"N", b"CA", b"CB", b"CG"),
+    chi(b"CA", b"CB", b"CG", b"CD1"),
+];
+const VAL_CHI: &[[AtomName; 4]] = &[chi(b"N", b"CA", b"CB", b"CG1")];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -402,6 +534,40 @@ mod tests {
     fn from_code_unknown_returns_none() {
         assert_eq!(AminoAcid::from_code(*b"XXX"), None);
         assert_eq!(AminoAcid::from_code(*b"MSE"), None);
+    }
+
+    #[test]
+    fn chi_atoms_counts_and_first_quad() {
+        // Expected χ count per residue; Ala/Gly have none.
+        let n = |aa: AminoAcid| aa.chi_atoms().len();
+        assert_eq!(n(AminoAcid::Ala), 0);
+        assert_eq!(n(AminoAcid::Gly), 0);
+        assert_eq!(n(AminoAcid::Ser), 1);
+        assert_eq!(n(AminoAcid::Val), 1);
+        assert_eq!(n(AminoAcid::Phe), 2);
+        assert_eq!(n(AminoAcid::Met), 3);
+        assert_eq!(n(AminoAcid::Arg), 4);
+        assert_eq!(n(AminoAcid::Lys), 4);
+
+        // χ1 of a standard residue is N-CA-CB-CG; Ser swaps in OG.
+        assert_eq!(
+            AminoAcid::Arg.chi_atoms()[0],
+            [an(b"N"), an(b"CA"), an(b"CB"), an(b"CG")]
+        );
+        assert_eq!(
+            AminoAcid::Ser.chi_atoms()[0],
+            [an(b"N"), an(b"CA"), an(b"CB"), an(b"OG")]
+        );
+    }
+
+    #[test]
+    fn modified_aa_one_letter_known_and_unknown() {
+        assert_eq!(modified_aa_one_letter(*b"MSE"), Some(b'M'));
+        assert_eq!(modified_aa_one_letter(*b"SEC"), Some(b'U'));
+        assert_eq!(modified_aa_one_letter(*b"PYL"), Some(b'O'));
+        assert_eq!(modified_aa_one_letter(*b"mse"), Some(b'M'));
+        assert_eq!(modified_aa_one_letter(*b"ALA"), None);
+        assert_eq!(modified_aa_one_letter(*b"XXX"), None);
     }
 
     #[test]

@@ -362,3 +362,130 @@ fn uc12_covalent_bonds() {
     assert_eq!((bonds[2].a.index, bonds[2].b.index), (2, 3));
     assert_eq!(bonds[2].order, BondOrder::Double);
 }
+
+// --- UC-14 · center of mass + radius of gyration ------------------------
+
+/// Mass-weighted center of mass and radius of gyration of 1UBQ.
+///
+/// Params: `Assembly::center_of_mass()` / `radius_of_gyration()` over the
+/// Heavy-completed 1UBQ assembly, standard atomic weights
+/// (`Element::mass`), every atom of every entity. Golden against molex's own
+/// numbers.
+#[test]
+fn uc14_center_of_mass_1ubq() {
+    let asm = ubq_assembly(Completion::Heavy);
+
+    let com = asm.center_of_mass();
+    let rg = asm.radius_of_gyration();
+
+    // Captured 2026-06-25. Tolerance 1e-2.
+    let com_exp = Vec3::new(30.303543, 28.722134, 15.058919);
+    let rg_exp = 12.151875_f32;
+    assert!(
+        (com - com_exp).length() < 1e-2,
+        "1UBQ com = {com}, expected {com_exp}"
+    );
+    assert!(
+        (rg - rg_exp).abs() < 1e-2,
+        "1UBQ R_g = {rg}, expected {rg_exp}"
+    );
+}
+
+// --- UC-15 · sidechain chi torsions -------------------------------------
+
+/// χ angles of an ARG sidechain in 1UBQ, plus a synthetic known-angle
+/// `dihedral` check.
+///
+/// Params: `ProteinEntity::chi_angles()` over the Heavy-completed 1UBQ
+/// protein entity; degrees, IUPAC sign. Golden against molex's own numbers.
+#[test]
+fn uc15_chi_1ubq() {
+    // Synthetic dihedral: four points in known geometry. p0/p1/p2 fix the
+    // first plane; p3 placed to give a +90 and a 180 dihedral about p1->p2.
+    let p0 = Vec3::new(0.0, 1.0, 0.0);
+    let p1 = Vec3::ZERO;
+    let p2 = Vec3::new(1.0, 0.0, 0.0);
+    // p3 = p2 + (+z) -> the p1->p2 axis is +x; rotating the p0 plane (xy) by
+    // +90 about +x lands the far bond on +z, a +90 dihedral.
+    let p3_90 = p2 + Vec3::new(0.0, 0.0, 1.0);
+    let d90 = molex::analysis::geometry::dihedral(p0, p1, p2, p3_90);
+    assert!((d90.abs() - 90.0).abs() < 1e-3, "expected +/-90, got {d90}");
+    // p3 in the same plane, anti to p0 -> 180.
+    let p3_180 = p2 + Vec3::new(0.0, -1.0, 0.0);
+    let d180 = molex::analysis::geometry::dihedral(p0, p1, p2, p3_180);
+    assert!(
+        (d180.abs() - 180.0).abs() < 1e-3,
+        "expected 180, got {d180}"
+    );
+
+    let asm = ubq_assembly(Completion::Heavy);
+    let p = asm
+        .entities()
+        .iter()
+        .find_map(|e| e.as_protein())
+        .expect("1UBQ has a protein entity");
+    let chi = p.chi_angles();
+
+    // 1UBQ residue 41 is ARG42 (Arg with four full χ torsions).
+    let arg_name = std::str::from_utf8(&p.residues[41].name).unwrap().trim();
+    assert_eq!(arg_name, "ARG", "residue 41 should be ARG");
+
+    // Captured 2026-06-25 (degrees). Tolerance 1e-2.
+    let expected = [161.69246, 173.62587, 174.22984, -106.69687];
+    let got = &chi[41];
+    assert_eq!(got.len(), 4, "ARG has four χ angles");
+    for (i, &exp) in expected.iter().enumerate() {
+        let v = got[i].expect("complete ARG sidechain has all χ");
+        assert!(
+            (v - exp).abs() < 1e-2,
+            "ARG χ{} = {v}, expected {exp}",
+            i + 1
+        );
+    }
+}
+
+// --- UC-16 · one-letter sequence ----------------------------------------
+
+/// One-letter sequence of 1UBQ (the canonical 76-residue ubiquitin string),
+/// plus a synthetic single-MSE-residue protein asserting MSE -> 'M'.
+///
+/// Params: `Assembly::sequence()` over the Heavy-completed 1UBQ assembly.
+/// Golden against molex's own output (which matches the canonical ubiquitin
+/// sequence).
+#[test]
+fn uc16_sequence_1ubq() {
+    let asm = ubq_assembly(Completion::Heavy);
+    let seqs = asm.sequence();
+    assert_eq!(seqs.len(), 1, "1UBQ has one polymer entity");
+
+    // Captured 2026-06-25: canonical ubiquitin sequence.
+    let expected = "MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVLRLRGG";
+    assert_eq!(seqs[0].len(), 76);
+    assert_eq!(seqs[0], expected);
+
+    // Synthetic: a one-residue MSE (selenomethionine) protein resolves to 'M'.
+    let atoms = vec![
+        mk_atom(*b"N   ", Element::N, Vec3::ZERO),
+        mk_atom(*b"CA  ", Element::C, Vec3::new(1.0, 0.0, 0.0)),
+        mk_atom(*b"C   ", Element::C, Vec3::new(2.0, 0.0, 0.0)),
+        mk_atom(*b"O   ", Element::O, Vec3::new(2.0, 1.0, 0.0)),
+    ];
+    let residue = Residue {
+        name: *b"MSE",
+        label_seq_id: 1,
+        auth_seq_id: None,
+        auth_comp_id: None,
+        ins_code: None,
+        atom_range: 0..atoms.len(),
+        variants: Vec::new(),
+    };
+    let mut alloc = EntityIdAllocator::new();
+    let ent = ProteinEntity::new(
+        alloc.allocate(),
+        atoms,
+        vec![residue],
+        "A".to_owned(),
+    );
+    let asm = Assembly::new(vec![MoleculeEntity::Protein(ent)]);
+    assert_eq!(asm.sequence(), vec!["M".to_owned()]);
+}

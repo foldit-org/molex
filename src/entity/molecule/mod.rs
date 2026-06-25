@@ -29,7 +29,7 @@ pub use atom::{Atom, AtomColumns, AtomRef};
     reason = "exported for adapter consumers; not all consumers wired yet"
 )]
 pub(crate) use builder::{
-    AtomRow, BuildError, EntityBuilder, ExpectedEntityType,
+    AtomCells, AtomRow, BuildError, EntityBuilder, ExpectedEntityType,
 };
 pub use classify::classify_residue;
 pub use complete::Completion;
@@ -46,6 +46,8 @@ use self::small_molecule::SmallMoleculeEntity;
 use self::traits::Entity;
 use crate::analysis::aabb::Aabb;
 use crate::bond::CovalentBond;
+use crate::chemistry::amino_acids::{modified_aa_one_letter, AminoAcid};
+use crate::chemistry::nucleotides::Nucleotide;
 /// Classification of molecule types found in structural biology files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MoleculeType {
@@ -224,6 +226,12 @@ impl MoleculeEntity {
         &self.columns().position
     }
 
+    /// All atom elements, in storage order.
+    #[must_use]
+    pub fn elements(&self) -> &[crate::element::Element] {
+        &self.columns().element
+    }
+
     /// One atom by index, gathered by value.
     #[must_use]
     pub fn atom(&self, i: usize) -> Atom {
@@ -263,6 +271,34 @@ impl MoleculeEntity {
             MoleculeEntity::NucleicAcid(e) => Some(&e.residues),
             MoleculeEntity::SmallMolecule(_) | MoleculeEntity::Bulk(_) => None,
         }
+    }
+
+    /// One-letter residue sequence for this entity, empty for non-polymers.
+    ///
+    /// Each residue resolves to a single uppercase character: standard amino
+    /// acids via [`AminoAcid::one_letter`], the selenium/pyrrolysine modified
+    /// residues via [`modified_aa_one_letter`] (MSE->M, SEC->U, PYL->O),
+    /// nucleotides via [`Nucleotide::one_letter`], and anything unrecognized as
+    /// `'X'`.
+    #[must_use]
+    pub fn sequence(&self) -> String {
+        let Some(residues) = self.residues() else {
+            return String::new();
+        };
+        residues
+            .iter()
+            .map(|r| {
+                let c = AminoAcid::from_code(r.name)
+                    .map(AminoAcid::one_letter)
+                    .or_else(|| modified_aa_one_letter(r.name))
+                    .or_else(|| {
+                        Nucleotide::from_code(r.name)
+                            .map(Nucleotide::one_letter)
+                    })
+                    .unwrap_or(b'X');
+                c as char
+            })
+            .collect()
     }
 
     /// Mutable access to this entity's `(columns, residues)` pair for

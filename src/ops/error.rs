@@ -2,12 +2,11 @@
 
 use thiserror::Error;
 
-/// Errors returned by molex parsers, serializers, and structural transforms.
+/// Errors returned by molex parsers and serializers.
 ///
 /// Used as the `Err` variant for the public adapter entry points
-/// (`pdb_str_to_entities`, `mmcif_str_to_entities`, `bcif_to_entities`),
-/// the assembly wire format (`serialize_assembly` / `deserialize_assembly`),
-/// and `align_to_reference`.
+/// (`pdb_str_to_entities`, `mmcif_str_to_entities`, `bcif_to_entities`) and
+/// the assembly wire format (`serialize_assembly` / `deserialize_assembly`).
 #[derive(Error, Debug)]
 pub enum AdapterError {
     /// The input bytes/text do not conform to the expected format.

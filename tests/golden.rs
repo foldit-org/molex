@@ -28,7 +28,8 @@ use molex::entity::molecule::id::EntityIdAllocator;
 use molex::entity::molecule::protein::ProteinEntity;
 use molex::ops::transform::rmsd;
 use molex::{
-    detect_disulfides, Assembly, Completion, Element, MoleculeEntity, Residue,
+    detect_disulfides, Assembly, BondOrder, Completion, Element,
+    MoleculeEntity, Residue,
 };
 
 fn data(name: &str) -> PathBuf {
@@ -316,4 +317,48 @@ fn uc13_completion_heavy_and_all_atom() {
     // Captured 2026-06-24: all-atom adds 569 hydrogens (660 -> 1229 atoms).
     assert_eq!(all_h, 569);
     assert_eq!(total_atoms(&all_atom), 1229);
+}
+
+// --- UC-12 · aggregated covalent bonds ----------------------------------
+
+/// `Assembly::covalent_bonds()` aggregates each entity's stored intra-entity
+/// bond topology. 1UBQ at `Completion::Heavy` is one protein chain plus a
+/// water bulk; the water carries no topology, so the total equals the
+/// protein's bond count and the first bonds are residue-0 backbone.
+///
+/// Params: 1UBQ parsed at `Completion::Heavy`, `asm.covalent_bonds()`. Golden
+/// against molex's own template + peptide bond graph (the count is invariant
+/// across completion levels — bonds derive from residue templates, not from
+/// fabricated atoms).
+#[test]
+fn uc12_covalent_bonds() {
+    let asm = ubq_assembly(Completion::Heavy);
+
+    let bonds = asm.covalent_bonds();
+
+    // Captured 2026-06-24: 604 bonds, entirely from the single protein
+    // entity (the 58-atom water bulk contributes none). Exact.
+    assert_eq!(bonds.len(), 604, "1UBQ Heavy covalent bond count");
+
+    // Aggregate equals the sum of per-entity bond slices, and the water
+    // bulk contributes exactly zero.
+    let per_entity: usize =
+        asm.entities().iter().map(|e| e.bonds().len()).sum();
+    assert_eq!(bonds.len(), per_entity);
+    let water_bonds: usize = asm
+        .entities()
+        .iter()
+        .filter(|e| e.molecule_type() == molex::MoleculeType::Water)
+        .map(|e| e.bonds().len())
+        .sum();
+    assert_eq!(water_bonds, 0, "bulk water carries no bond topology");
+
+    // Residue-0 backbone, emitted first (entity-declaration order):
+    // N(0)-CA(1), CA(1)-C(2) single; C(2)=O(3) double.
+    assert_eq!((bonds[0].a.index, bonds[0].b.index), (0, 1));
+    assert_eq!(bonds[0].order, BondOrder::Single);
+    assert_eq!((bonds[1].a.index, bonds[1].b.index), (1, 2));
+    assert_eq!(bonds[1].order, BondOrder::Single);
+    assert_eq!((bonds[2].a.index, bonds[2].b.index), (2, 3));
+    assert_eq!(bonds[2].order, BondOrder::Double);
 }

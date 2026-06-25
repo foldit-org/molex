@@ -8,7 +8,7 @@
 
 use std::io::Read;
 
-use crate::ops::codec::AdapterError;
+use crate::ops::error::AdapterError;
 
 // Lightweight MessagePack value tree
 

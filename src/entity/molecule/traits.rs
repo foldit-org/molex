@@ -5,6 +5,7 @@ use glam::Vec3;
 use super::atom::Atom;
 use super::id::EntityId;
 use super::{MoleculeType, Residue};
+use crate::bond::CovalentBond;
 
 /// Common behavior for all molecular entities.
 pub trait Entity {
@@ -25,6 +26,13 @@ pub trait Entity {
     /// Number of atoms in this entity.
     fn atom_count(&self) -> usize {
         self.atoms().len()
+    }
+
+    /// Intra-entity covalent bonds, with `AtomId` endpoints into this
+    /// entity's atoms. Entity types that carry no bond topology (bulk
+    /// solvent) keep the default empty slice.
+    fn bonds(&self) -> &[CovalentBond] {
+        &[]
     }
 }
 

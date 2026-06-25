@@ -29,7 +29,7 @@ pub fn assembly_to_mmcif(assembly: &Assembly) -> String {
 
 /// Emit an entity slice as an mmCIF string. See [`assembly_to_mmcif`].
 #[must_use]
-pub fn entities_to_mmcif<E: std::borrow::Borrow<MoleculeEntity>>(
+pub(crate) fn entities_to_mmcif<E: std::borrow::Borrow<MoleculeEntity>>(
     entities: &[E],
 ) -> String {
     let mut chains = ChainLabeller::new(entities);
@@ -310,6 +310,7 @@ mod tests {
 
     use super::*;
     use crate::adapters::cif::mmcif_str_to_entities;
+    use crate::assembly::Assembly;
     use crate::element::Element;
     use crate::entity::molecule::bulk::BulkEntity;
     use crate::entity::molecule::id::EntityIdAllocator;
@@ -399,8 +400,10 @@ mod tests {
         // stable, not raw-input atom count equality. Parse once to absorb
         // completion, then assert the second cycle preserves everything.
         let entities = vec![dipeptide("A"), waters(4)];
-        let p1 = mmcif_str_to_entities(&entities_to_mmcif(&entities)).unwrap();
-        let p2 = mmcif_str_to_entities(&entities_to_mmcif(&p1)).unwrap();
+        let p1 =
+            mmcif_str_to_entities(&Assembly::new(entities).to_mmcif()).unwrap();
+        let p2 = mmcif_str_to_entities(&Assembly::new(p1.clone()).to_mmcif())
+            .unwrap();
 
         assert_eq!(atom_count(&p2), atom_count(&p1));
 
@@ -423,7 +426,7 @@ mod tests {
     #[test]
     fn multi_char_chain_survives() {
         let entities = vec![dipeptide("AA")];
-        let cif = entities_to_mmcif(&entities);
+        let cif = Assembly::new(entities).to_mmcif();
         let parsed = mmcif_str_to_entities(&cif).unwrap();
 
         let chains: Vec<&str> =

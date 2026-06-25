@@ -16,11 +16,10 @@ pub use bonds::{
     detect_disulfides, infer_bonds, BondOrder, HBond, InferredBond,
     DEFAULT_TOLERANCE,
 };
-pub use sasa::{assembly_sasa, shrake_rupley};
+pub use sasa::assembly_sasa;
 pub use volumetric::{
     binary_to_sdf, compute_gaussian_field, compute_ses_sdf, detect_cavities,
-    detect_cavity_mask, edt_1d, edt_3d, voxelize_sas, DetectedCavity,
-    ScalarVoxelGrid, VoxelBbox,
+    DetectedCavity, ScalarVoxelGrid, VoxelBbox,
 };
 
 /// Q3 secondary structure classification for a single residue.

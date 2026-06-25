@@ -45,6 +45,7 @@ use self::protein::ProteinEntity;
 use self::small_molecule::SmallMoleculeEntity;
 use self::traits::Entity;
 use crate::analysis::aabb::Aabb;
+use crate::bond::CovalentBond;
 /// Classification of molecule types found in structural biology files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MoleculeType {
@@ -225,6 +226,18 @@ impl MoleculeEntity {
     #[must_use]
     pub fn atom_count(&self) -> usize {
         self.atom_set().len()
+    }
+
+    /// Intra-entity covalent bonds. Bulk entities carry none and return
+    /// an empty slice.
+    #[must_use]
+    pub fn bonds(&self) -> &[CovalentBond] {
+        match self {
+            MoleculeEntity::Protein(e) => e.bonds(),
+            MoleculeEntity::NucleicAcid(e) => e.bonds(),
+            MoleculeEntity::SmallMolecule(e) => e.bonds(),
+            MoleculeEntity::Bulk(e) => e.bonds(),
+        }
     }
 
     /// Read access to this entity's residue list, or `None` for

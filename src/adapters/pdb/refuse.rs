@@ -2,7 +2,7 @@
 //! write.
 
 use crate::entity::molecule::MoleculeEntity;
-use crate::ops::codec::AdapterError;
+use crate::ops::error::AdapterError;
 
 /// Legacy PDB format caps. Set by wwPDB v3.3 column widths.
 pub(super) const MAX_PDB_ATOMS: usize = 99_999;

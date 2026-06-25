@@ -262,62 +262,6 @@ impl ProteinEntity {
         )
     }
 
-    /// Iterate covalent bonds whose endpoints lie in any residue's
-    /// canonical backbone region (indices `atom_range.start..+4`).
-    ///
-    /// Intra-residue N-CA, CA-C, C=O and inter-residue peptide C-N all
-    /// qualify because their endpoints occupy positions 0..4 of each
-    /// residue after canonical ordering. OXT (C-terminal oxygen) is
-    /// stored in the sidechain region and is therefore not considered
-    /// a backbone atom by this filter.
-    pub fn backbone_bonds(&self) -> impl Iterator<Item = &CovalentBond> + '_ {
-        self.bonds.iter().filter(move |b| {
-            self.is_backbone_atom(b.a) && self.is_backbone_atom(b.b)
-        })
-    }
-
-    /// Iterate covalent bonds with at least one heavy-atom endpoint in
-    /// the sidechain region (`residue.atom_range.start + 4..`).
-    ///
-    /// Hydrogen endpoints are excluded (they must be non-hydrogen to
-    /// qualify). The CA-CB anchor bond qualifies because CB is a
-    /// sidechain heavy atom.
-    pub fn sidechain_bonds(&self) -> impl Iterator<Item = &CovalentBond> + '_ {
-        self.bonds.iter().filter(move |b| {
-            self.is_sidechain_heavy_atom(b.a)
-                || self.is_sidechain_heavy_atom(b.b)
-        })
-    }
-
-    fn residue_local_offset(&self, atom_id: AtomId) -> Option<usize> {
-        if atom_id.entity != self.id {
-            return None;
-        }
-        let idx = atom_id.index as usize;
-        for r in &self.residues {
-            if r.atom_range.contains(&idx) {
-                return Some(idx - r.atom_range.start);
-            }
-        }
-        None
-    }
-
-    fn is_backbone_atom(&self, atom_id: AtomId) -> bool {
-        self.residue_local_offset(atom_id)
-            .is_some_and(|off| off < 4)
-    }
-
-    fn is_sidechain_heavy_atom(&self, atom_id: AtomId) -> bool {
-        let Some(off) = self.residue_local_offset(atom_id) else {
-            return false;
-        };
-        if off < 4 {
-            return false;
-        }
-        let atom = &self.atoms[atom_id.index as usize];
-        atom.element != Element::H
-    }
-
     /// Derive backbone (N, CA, C, O) for all residues.
     ///
     /// Returns one `ResidueBackbone` per residue that has all four
@@ -436,6 +380,9 @@ impl Entity for ProteinEntity {
     }
     fn atoms(&self) -> &[Atom] {
         &self.atoms
+    }
+    fn bonds(&self) -> &[CovalentBond] {
+        &self.bonds
     }
 }
 

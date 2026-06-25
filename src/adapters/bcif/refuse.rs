@@ -1,6 +1,6 @@
 //! Refusal helpers for the BinaryCIF adapter.
 
-use crate::ops::codec::AdapterError;
+use crate::ops::error::AdapterError;
 
 /// Refusal for files containing multiple `dataBlocks` entries.
 ///

@@ -42,8 +42,8 @@ use super::serialize::write_atom_row;
 use super::variants::{read_variant, write_variant};
 use crate::chemistry::variant::VariantTag;
 use crate::entity::molecule::id::EntityIdAllocator;
-use crate::ops::codec::AdapterError;
 use crate::ops::edit::AssemblyEdit;
+use crate::ops::error::AdapterError;
 
 /// Magic header for delta byte streams. The version byte that follows
 /// selects the payload layout.

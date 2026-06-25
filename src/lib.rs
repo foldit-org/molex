@@ -39,7 +39,7 @@ pub mod python;
 // The most commonly used types, re-exported at the crate root.
 
 pub use analysis::{detect_disulfides, Aabb, BondOrder, HBond, SSType};
-pub use assembly::{Assembly, CoordinateSnapshot};
+pub use assembly::Assembly;
 pub use atom_id::AtomId;
 pub use bond::CovalentBond;
 pub use connection::{AtomEnd, AtomLink, ConnectionType};
@@ -56,7 +56,7 @@ pub use entity::molecule::small_molecule::SmallMoleculeEntity;
 pub use entity::molecule::{
     Completion, EntityKind, MoleculeEntity, MoleculeType, NucleotideRing,
 };
-pub use ops::codec::AdapterError;
+pub use ops::error::AdapterError;
 #[cfg(feature = "python")]
 use pyo3::prelude::*;
 

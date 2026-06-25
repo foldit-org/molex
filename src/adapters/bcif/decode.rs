@@ -17,7 +17,7 @@ use crate::element::Element;
 use crate::entity::molecule::{
     AtomRow, BuildError, Completion, EntityBuilder, MoleculeEntity,
 };
-use crate::ops::codec::AdapterError;
+use crate::ops::error::AdapterError;
 
 // Public entry points (called by adapters::bcif::mod.rs)
 

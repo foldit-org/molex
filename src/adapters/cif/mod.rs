@@ -21,7 +21,7 @@ pub use write::assembly_to_mmcif;
 
 use crate::element::Element;
 use crate::entity::molecule::{BuildError, Completion, MoleculeEntity};
-use crate::ops::codec::AdapterError;
+use crate::ops::error::AdapterError;
 
 // Helpers shared by the scan (`scan_row`) and DOM (`dom_build`) decode paths.
 

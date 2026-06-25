@@ -1,6 +1,6 @@
 //! Refusal helpers shared by the scanner and DOM ingest paths.
 
-use crate::ops::codec::AdapterError;
+use crate::ops::error::AdapterError;
 
 /// Refusal for files containing multiple `data_*` blocks.
 ///

@@ -6,7 +6,7 @@ use crate::assembly::Assembly;
 use crate::entity::molecule::atom::Atom;
 use crate::entity::molecule::polymer::Residue;
 use crate::entity::molecule::MoleculeEntity;
-use crate::ops::codec::AdapterError;
+use crate::ops::error::AdapterError;
 
 /// Serialize an [`Assembly`] to the assembly binary format.
 ///

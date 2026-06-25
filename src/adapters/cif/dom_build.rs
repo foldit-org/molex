@@ -14,7 +14,7 @@ use super::{map_build_error, name_to_bytes, resolve_element};
 use crate::entity::molecule::{
     AtomRow, Completion, EntityBuilder, MoleculeEntity,
 };
-use crate::ops::codec::AdapterError;
+use crate::ops::error::AdapterError;
 
 /// Single-model DOM parse: returns the model whose `pdbx_PDB_model_num`
 /// matches the smallest value present (typically `1`).

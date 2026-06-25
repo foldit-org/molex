@@ -23,9 +23,7 @@ use pyo3::prelude::*;
 use self::arrays::{entities_to_arrays, flat_atoms};
 use crate::adapters::{bcif, cif, pdb};
 use crate::analysis::sasa::{DEFAULT_N_POINTS, DEFAULT_PROBE_RADIUS};
-use crate::analysis::{
-    detect_disulfides, infer_bonds, SSType, DEFAULT_TOLERANCE,
-};
+use crate::analysis::{detect_disulfides, SSType};
 use crate::assembly::Assembly;
 use crate::chemistry::variant::{ProtonationState, VariantTag};
 use crate::element::Element;
@@ -433,24 +431,28 @@ impl PyAssembly {
         entities_to_arrays(py, self.inner.entities())
     }
 
-    /// Distance-based covalent bonds over the whole assembly, as atom-index
-    /// pairs in `to_arrays()` flat order.
+    /// Intra-entity covalent bonds across the assembly, as atom-index pairs
+    /// in `to_arrays()` flat order.
     ///
-    /// Runs the same distance/covalent-radius perception molex uses for
-    /// ligands (`infer_bonds`) across every atom in the assembly, so it bonds
-    /// across residue and entity boundaries. Each pair `(i, j)` indexes the
-    /// flat atom order of `to_arrays()` with `i < j`; correlate directly with
-    /// the coordinate rows. Hydrogen-to-hydrogen contacts are not bonded.
+    /// Aggregates each entity's stored bond topology (protein/nucleic-acid
+    /// templates plus small-molecule inferred bonds) via the native
+    /// `Assembly::covalent_bonds`; inter-entity bonds (e.g. disulfides) are
+    /// not included. Endpoints come back as `(entity, per-entity atom index)`;
+    /// both are mapped to the flat atom order of `to_arrays()` so the returned
+    /// indices line up with the coordinate rows.
     #[must_use]
-    #[allow(
-        clippy::cast_possible_truncation,
-        reason = "flat atom indices fit in u32 for valid structures"
-    )]
     pub fn covalent_bonds(&self) -> Vec<(u32, u32)> {
         let flat = flat_atoms(self.inner.entities());
-        infer_bonds(&flat.atoms, DEFAULT_TOLERANCE)
+        self.inner
+            .covalent_bonds()
             .into_iter()
-            .map(|b| (b.atom_a as u32, b.atom_b as u32))
+            .filter_map(|bond| {
+                let a =
+                    *flat.flat_of.get(&(bond.a.entity.raw(), bond.a.index))?;
+                let b =
+                    *flat.flat_of.get(&(bond.b.entity.raw(), bond.b.index))?;
+                Some((a, b))
+            })
             .collect()
     }
 

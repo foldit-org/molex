@@ -64,7 +64,7 @@ pub(crate) struct BoltzColumns<'a> {
 /// Returns `AdapterError` if assembly serialization fails.
 pub(crate) fn boltz_columns_to_assembly_bytes(
     columns: &BoltzColumns<'_>,
-) -> Result<Vec<u8>, crate::ops::codec::AdapterError> {
+) -> Result<Vec<u8>, crate::ops::error::AdapterError> {
     let rows = boltz_columns_to_rows(columns);
     if rows.is_empty() {
         return serialize_assembly(&Assembly::new(vec![]));

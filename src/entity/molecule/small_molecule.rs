@@ -81,6 +81,9 @@ impl Entity for SmallMoleculeEntity {
     fn atoms(&self) -> &[Atom] {
         &self.atoms
     }
+    fn bonds(&self) -> &[CovalentBond] {
+        &self.bonds
+    }
 }
 
 #[cfg(test)]

@@ -71,7 +71,7 @@ fn fibonacci_sphere(n: usize) -> Vec<Vec3> {
     reason = "accessible/total point counts are bounded by n_points, well \
               within f32 mantissa precision"
 )]
-pub fn shrake_rupley(
+pub(crate) fn shrake_rupley(
     positions: &[Vec3],
     radii: &[f32],
     probe_radius: f32,

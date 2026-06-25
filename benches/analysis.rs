@@ -27,14 +27,12 @@ use glam::Vec3;
 use molex::adapters::cif::mmcif_str_to_entities;
 use molex::analysis::sasa::DEFAULT_N_POINTS;
 use molex::analysis::{assembly_sasa, infer_bonds};
-use molex::ops::transform::{extract_ca_positions, kabsch_alignment};
+use molex::ops::transform::kabsch_alignment;
 use molex::{Assembly, MoleculeEntity};
 
-/// A real structure parsed into an `Assembly`, plus its raw entities for the
-/// entity-level benches.
+/// A real structure parsed into an `Assembly`.
 struct Fixture {
     name: &'static str,
-    entities: Vec<MoleculeEntity>,
     assembly: Assembly,
     /// Total atom count, for per-atom `Throughput` normalization.
     atoms: u64,
@@ -69,10 +67,9 @@ fn load_fixtures() -> Vec<Fixture> {
             .iter()
             .map(MoleculeEntity::atom_count)
             .sum::<usize>() as u64;
-        let assembly = Assembly::new(entities.clone());
+        let assembly = Assembly::new(entities);
         out.push(Fixture {
             name,
-            entities,
             assembly,
             atoms,
         });
@@ -114,21 +111,6 @@ fn bench_kabsch_alignment(c: &mut Criterion) {
         );
     }
 
-    group.finish();
-}
-
-fn bench_ca_extraction(c: &mut Criterion, fixtures: &[Fixture]) {
-    let mut group = c.benchmark_group("ca_extraction");
-    for fx in fixtures {
-        group.throughput(Throughput::Elements(fx.atoms));
-        group.bench_with_input(
-            BenchmarkId::new("extract_ca", fx.name),
-            &fx.entities,
-            |b, entities| {
-                b.iter(|| extract_ca_positions(black_box(entities)));
-            },
-        );
-    }
     group.finish();
 }
 
@@ -215,7 +197,6 @@ fn bench_infer_bonds(c: &mut Criterion, fixtures: &[Fixture]) {
 fn bench_analysis(c: &mut Criterion) {
     bench_kabsch_alignment(c);
     let fixtures = load_fixtures();
-    bench_ca_extraction(c, &fixtures);
     bench_sasa(c, &fixtures);
     bench_recompute_ss(c, &fixtures);
     bench_phi_psi(c, &fixtures);

@@ -14,7 +14,7 @@ use super::scan_row::{
     finish, push_row, push_slots, AtomSiteCols, RowSlots, RowValues,
 };
 use crate::entity::molecule::{Completion, EntityBuilder, MoleculeEntity};
-use crate::ops::codec::AdapterError;
+use crate::ops::error::AdapterError;
 
 /// Result of a single-model scan parse.
 pub(super) type ScanResult = Option<Result<Vec<MoleculeEntity>, AdapterError>>;

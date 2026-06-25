@@ -13,8 +13,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use glam::Vec3;
-
 use crate::analysis::bonds::disulfide::detect_disulfides;
 use crate::analysis::bonds::hydrogen::{detect_hbonds, HBond};
 use crate::analysis::ss::dssp::classify;
@@ -42,59 +40,6 @@ pub struct Assembly {
     /// provider and sets this. Empty until populated.
     connections: HashMap<ConnectionType, Vec<AtomLink>>,
     generation: u64,
-}
-
-/// Snapshot of per-entity atom positions for whole-assembly replacement.
-///
-/// Entities present in the snapshot but missing from the target
-/// `Assembly` are ignored; entities in the target but missing from the
-/// snapshot retain their current positions.
-#[derive(Debug, Clone, Default)]
-pub struct CoordinateSnapshot {
-    per_entity: HashMap<EntityId, Vec<Vec3>>,
-}
-
-impl CoordinateSnapshot {
-    /// Create a snapshot from a pre-built per-entity map.
-    #[must_use]
-    pub fn new(per_entity: HashMap<EntityId, Vec<Vec3>>) -> Self {
-        Self { per_entity }
-    }
-
-    /// Capture the current positions of every entity in an `Assembly`.
-    ///
-    /// Intended for "reset to original" flows: take a snapshot after
-    /// load, run mutations, then replay each entity's coords back via
-    /// [`Assembly::apply_edits`] with one
-    /// [`AssemblyEdit::SetEntityCoords`](crate::ops::edit::AssemblyEdit::SetEntityCoords)
-    /// per entry to restore.
-    #[must_use]
-    pub fn from_assembly(assembly: &Assembly) -> Self {
-        let per_entity = assembly
-            .entities
-            .iter()
-            .map(|e| (e.id(), e.positions()))
-            .collect();
-        Self { per_entity }
-    }
-
-    /// Positions for a specific entity, if present.
-    #[must_use]
-    pub fn positions(&self, id: EntityId) -> Option<&[Vec3]> {
-        self.per_entity.get(&id).map(Vec::as_slice)
-    }
-
-    /// Number of entities covered by this snapshot.
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.per_entity.len()
-    }
-
-    /// Whether the snapshot covers no entities.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.per_entity.is_empty()
-    }
 }
 
 impl Assembly {

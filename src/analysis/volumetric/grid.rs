@@ -22,7 +22,7 @@ use super::GridSpec;
 
 /// Voxelize the SAS: voxel is `true` if within any atom's (vdW + probe).
 #[must_use]
-pub fn voxelize_sas(
+pub(crate) fn voxelize_sas(
     positions: &[Vec3],
     radii: &[f32],
     probe: f32,
@@ -101,7 +101,7 @@ fn splat_sas_atom(solid: &mut [bool], spec: &GridSpec, pos: Vec3, r: f32) {
               counters use f32 boundaries by construction; `q as f32` and `vk \
               as f32` are bounded by grid dim (fits f32 mantissa)"
 )]
-pub fn edt_1d(f: &mut [f32], spacing: f32) {
+pub(crate) fn edt_1d(f: &mut [f32], spacing: f32) {
     let n = f.len();
     if n <= 1 {
         return;
@@ -161,7 +161,7 @@ pub fn edt_1d(f: &mut [f32], spacing: f32) {
     clippy::cast_precision_loss,
     reason = "(nx + ny + nz) bounded by grid memory, fits f32 mantissa"
 )]
-pub fn edt_3d(
+pub(crate) fn edt_3d(
     solid: &[bool],
     dims: [usize; 3],
     spacing: &[f32; 3],
@@ -228,7 +228,10 @@ pub fn edt_3d(
 /// extracting the outer envelope; the cavity pipeline uses it as the
 /// input to connected-component labeling + per-cavity mesh extraction.
 #[must_use]
-pub fn detect_cavity_mask(solid: &[bool], dims: [usize; 3]) -> Vec<bool> {
+pub(crate) fn detect_cavity_mask(
+    solid: &[bool],
+    dims: [usize; 3],
+) -> Vec<bool> {
     let [nx, ny, nz] = dims;
     let total = nx * ny * nz;
 

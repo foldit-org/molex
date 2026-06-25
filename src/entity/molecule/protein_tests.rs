@@ -487,47 +487,6 @@ fn canonical_ordering_drops_residue_missing_backbone() {
 }
 
 #[test]
-fn gly_backbone_bonds_are_three_sidechain_empty() {
-    let atoms = vec![
-        atom_at("N", Element::N, 0.0, 0.0, 0.0),
-        atom_at("CA", Element::C, 1.5, 0.0, 0.0),
-        atom_at("C", Element::C, 2.5, 0.0, 0.0),
-        atom_at("O", Element::O, 2.5, 1.0, 0.0),
-    ];
-    let residues = vec![residue("GLY", 1, 0..4)];
-    let protein = build_protein(atoms, residues);
-    assert_eq!(protein.backbone_bonds().count(), 3);
-    assert_eq!(protein.sidechain_bonds().count(), 0);
-}
-
-#[test]
-fn ala_sidechain_bonds_is_ca_cb_only() {
-    let atoms = vec![
-        atom_at("N", Element::N, 0.0, 0.0, 0.0),
-        atom_at("CA", Element::C, 1.5, 0.0, 0.0),
-        atom_at("C", Element::C, 2.5, 0.0, 0.0),
-        atom_at("O", Element::O, 2.5, 1.0, 0.0),
-        atom_at("CB", Element::C, 1.5, -1.5, 0.0),
-    ];
-    let residues = vec![residue("ALA", 1, 0..5)];
-    let protein = build_protein(atoms, residues);
-    let sidechain: Vec<_> = protein.sidechain_bonds().collect();
-    assert_eq!(sidechain.len(), 1);
-    let b = sidechain[0];
-    let a_name = std::str::from_utf8(&protein.atoms[b.a.index as usize].name)
-        .unwrap()
-        .trim();
-    let c_name = std::str::from_utf8(&protein.atoms[b.b.index as usize].name)
-        .unwrap()
-        .trim();
-    let pair = (a_name, c_name);
-    assert!(
-        pair == ("CA", "CB") || pair == ("CB", "CA"),
-        "expected CA-CB sidechain anchor, got {pair:?}"
-    );
-}
-
-#[test]
 fn peptide_bond_connects_consecutive_residues() {
     let atoms = vec![
         atom_at("N", Element::N, 0.0, 0.0, 0.0),
@@ -541,12 +500,8 @@ fn peptide_bond_connects_consecutive_residues() {
     ];
     let residues = vec![residue("ALA", 1, 0..4), residue("ALA", 2, 4..8)];
     let protein = build_protein(atoms, residues);
-    // 3 backbone * 2 residues + 1 peptide = 7 backbone bonds total.
-    assert_eq!(
-        protein.backbone_bonds().count(),
-        7,
-        "3 per residue + 1 peptide"
-    );
+    // 3 backbone * 2 residues + 1 peptide = 7 bonds total.
+    assert_eq!(protein.bonds.len(), 7, "3 per residue + 1 peptide");
 }
 
 #[test]
@@ -594,5 +549,5 @@ fn peptide_bond_skipped_across_segment_break() {
     let residues = vec![residue("ALA", 1, 0..4), residue("ALA", 2, 4..8)];
     let protein = build_protein(atoms, residues);
     // No peptide bond; just 3 backbone per residue = 6.
-    assert_eq!(protein.backbone_bonds().count(), 6);
+    assert_eq!(protein.bonds.len(), 6);
 }

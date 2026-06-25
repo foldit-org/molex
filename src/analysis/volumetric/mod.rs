@@ -29,9 +29,7 @@ pub mod ses;
 pub use cavity::{detect_cavities, DetectedCavity, VoxelBbox};
 pub use gaussian::compute_gaussian_field;
 use glam::Vec3;
-pub use grid::{
-    binary_to_sdf, detect_cavity_mask, edt_1d, edt_3d, voxelize_sas,
-};
+pub use grid::binary_to_sdf;
 pub use ses::compute_ses_sdf;
 
 /// Geometry of a uniform orthogonal voxel grid: dimensions, world-space

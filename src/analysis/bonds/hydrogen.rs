@@ -34,8 +34,8 @@ pub struct HBond {
 /// Returns all donor-acceptor pairs with energy below the threshold,
 /// sorted by donor index then by energy (strongest first).
 ///
-/// Internal implementation detail of `Assembly`'s derived-data pipeline.
-/// External consumers read H-bonds via `Assembly::hbonds()`.
+/// Internal implementation detail of `Assembly`'s derived-data pipeline,
+/// reached through `detect_fallback_connections` and the SS computation.
 #[must_use]
 pub(crate) fn detect_hbonds(residues: &[ResidueBackbone]) -> Vec<HBond> {
     let n = residues.len();

@@ -8,11 +8,10 @@ use super::parse::{
 };
 use super::refuse::extract_pdb_id_from_bundle_filename;
 use super::{
-    entities_to_pdb, pdb_str_to_all_models, pdb_str_to_entities,
-    pdb_str_to_entities_with,
+    pdb_str_to_all_models, pdb_str_to_entities, pdb_str_to_entities_with,
 };
 use crate::entity::molecule::MoleculeType;
-use crate::{Completion, MoleculeEntity};
+use crate::{Assembly, Completion, MoleculeEntity};
 
 /// Minimal PDB with one backbone-only residue (N, CA, C, O). Named MSE
 /// so the missing-atom completion pass is a no-op and these parse-path
@@ -138,7 +137,7 @@ END
 #[test]
 fn entities_to_pdb_produces_valid_output() {
     let entities = pdb_str_to_entities(MINIMAL_PDB).unwrap();
-    let pdb_output = entities_to_pdb(&entities).unwrap();
+    let pdb_output = Assembly::new(entities).to_pdb().unwrap();
     assert!(pdb_output.contains("ATOM"));
     assert!(pdb_output.contains("MSE"));
     assert!(pdb_output.ends_with("END\n"));
@@ -150,7 +149,7 @@ fn entities_to_pdb_produces_valid_output() {
 #[test]
 fn entities_to_pdb_preserves_coordinates_in_output() {
     let entities = pdb_str_to_entities(MINIMAL_PDB).unwrap();
-    let pdb_output = entities_to_pdb(&entities).unwrap();
+    let pdb_output = Assembly::new(entities).to_pdb().unwrap();
     assert!(pdb_output.contains("1.000"));
     assert!(pdb_output.contains("2.000"));
     assert!(pdb_output.contains("3.000"));
@@ -314,7 +313,7 @@ ATOM      2  O   HOH A 101       4.000   5.000   6.000  1.00  0.00           O
 END
 ";
     let entities = pdb_str_to_entities(pdb).unwrap();
-    let out = entities_to_pdb(&entities).unwrap();
+    let out = Assembly::new(entities).to_pdb().unwrap();
     let hetatm_count = out.lines().filter(|l| l.starts_with("HETATM")).count();
     let atom_count = out.lines().filter(|l| l.starts_with("ATOM  ")).count();
     assert_eq!(hetatm_count, 2);
@@ -335,7 +334,7 @@ ATOM      8  O   GLY B   1      10.000  11.000  12.000  1.00  0.00           O
 END
 ";
     let entities = pdb_str_to_entities(pdb).unwrap();
-    let out = entities_to_pdb(&entities).unwrap();
+    let out = Assembly::new(entities).to_pdb().unwrap();
     let ter_count = out.lines().filter(|l| l.starts_with("TER")).count();
     assert_eq!(ter_count, 2);
     let ter_lines: Vec<&str> =
@@ -347,7 +346,7 @@ END
 #[test]
 fn writer_aligns_atom_name_by_element_symbol() {
     let entities = pdb_str_to_entities(MINIMAL_PDB).unwrap();
-    let out = entities_to_pdb(&entities).unwrap();
+    let out = Assembly::new(entities).to_pdb().unwrap();
     let ca_line = out
         .lines()
         .find(|l| l.starts_with("ATOM") && l.contains(" CA "))
@@ -454,6 +453,6 @@ fn writer_refuses_overflowing_atom_count() {
         100_001,
     );
     let entities = vec![MoleculeEntity::Bulk(bulk)];
-    let err = entities_to_pdb(&entities).unwrap_err();
+    let err = Assembly::new(entities).to_pdb().unwrap_err();
     assert!(err.to_string().contains("legacy PDB format"));
 }

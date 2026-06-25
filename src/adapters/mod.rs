@@ -25,7 +25,7 @@ pub use cif::{
 pub use dcd::{dcd_file_to_frames, DcdFrame, DcdHeader, DcdReader};
 pub use mrc::{mrc_file_to_density, mrc_to_density};
 pub use pdb::{
-    assembly_to_pdb, entities_to_pdb, pdb_file_to_all_models,
-    pdb_file_to_entities, pdb_str_to_all_models, pdb_str_to_entities,
-    pdb_str_to_entities_with, structure_file_to_entities,
+    assembly_to_pdb, pdb_file_to_all_models, pdb_file_to_entities,
+    pdb_str_to_all_models, pdb_str_to_entities, pdb_str_to_entities_with,
+    structure_file_to_entities,
 };

@@ -19,7 +19,7 @@ use crate::entity::molecule::polymer::Residue;
 use crate::entity::molecule::protein::ProteinEntity;
 use crate::entity::molecule::small_molecule::SmallMoleculeEntity;
 use crate::entity::molecule::{MoleculeEntity, MoleculeType};
-use crate::ops::codec::AdapterError;
+use crate::ops::error::AdapterError;
 
 /// Atom-row width: the chain id lives in the entity header, not the row.
 const ATOM_ROW_BYTES: usize = 25;

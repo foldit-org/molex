@@ -30,7 +30,7 @@
 use crate::chemistry::variant::{ProtonationState, VariantTag};
 use crate::entity::molecule::polymer::Residue;
 use crate::entity::molecule::MoleculeEntity;
-use crate::ops::codec::AdapterError;
+use crate::ops::error::AdapterError;
 
 /// Decoded variant block for a single residue, keyed by its
 /// `label_seq_id`. Callers match the id against their reconstructed

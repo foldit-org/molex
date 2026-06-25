@@ -6,7 +6,7 @@ use crate::element::Element;
 use crate::entity::molecule::{
     AtomRow, Completion, EntityBuilder, MoleculeEntity,
 };
-use crate::ops::codec::AdapterError;
+use crate::ops::error::AdapterError;
 
 /// Record-kind dispatch based on cols 1-6.
 #[derive(Clone, Copy)]

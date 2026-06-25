@@ -5,7 +5,7 @@ use compact_str::CompactString;
 
 use super::{map_build_error, name_to_bytes, resolve_element};
 use crate::entity::molecule::{AtomRow, EntityBuilder, MoleculeEntity};
-use crate::ops::codec::AdapterError;
+use crate::ops::error::AdapterError;
 
 pub(super) struct AtomSiteCols {
     pub(super) label_atom_id: usize,

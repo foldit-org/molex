@@ -14,7 +14,7 @@ pub(crate) mod serialize;
 pub(crate) mod variants;
 
 use crate::entity::molecule::{MoleculeEntity, MoleculeType};
-use crate::ops::codec::AdapterError;
+use crate::ops::error::AdapterError;
 
 /// Magic header bytes identifying the assembly binary format. The version
 /// byte that follows selects the payload layout.

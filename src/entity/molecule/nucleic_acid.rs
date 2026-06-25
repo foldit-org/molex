@@ -73,6 +73,9 @@ impl Entity for NAEntity {
     fn atoms(&self) -> &[Atom] {
         &self.atoms
     }
+    fn bonds(&self) -> &[CovalentBond] {
+        &self.bonds
+    }
 }
 
 const HEX_RING_ATOMS: &[&str] = &["N1", "C2", "N3", "C4", "C5", "C6"];

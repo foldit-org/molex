@@ -14,7 +14,6 @@ use pyo3::prelude::*;
 use crate::adapters::atomworks::{
     collect_atom_data, for_each_flat_atom, AtomData,
 };
-use crate::entity::molecule::atom::Atom;
 use crate::entity::molecule::MoleculeEntity;
 use crate::ops::wire::deserialize_assembly;
 
@@ -96,16 +95,14 @@ pub(crate) fn entities_to_arrays<E: std::borrow::Borrow<MoleculeEntity>>(
     atom_data_to_arrays(py, &data, total_atoms)
 }
 
-/// The flat atom list and lookup in `to_arrays()` index space.
+/// Lookup from per-entity atom identity to `to_arrays()` flat index space.
 ///
-/// `atoms` is every atom in canonical `to_arrays()` order (the order
-/// `for_each_flat_atom` visits them, the single source of that ordering).
 /// `flat_of` maps `(entity raw id, atom index within that entity)` to the
-/// atom's position in `atoms`; disulfide detection reports endpoints as
-/// `(entity, per-entity index)` pairs, and this is the lookup that lands them
-/// in flat space.
+/// atom's position in canonical `to_arrays()` order (the order
+/// `for_each_flat_atom` visits them, the single source of that ordering).
+/// Bond and disulfide detection report endpoints as `(entity, per-entity
+/// index)` pairs, and this is the lookup that lands them in flat space.
 pub(crate) struct FlatAtoms {
-    pub atoms: Vec<Atom>,
     pub flat_of: HashMap<(u32, u32), u32>,
 }
 
@@ -116,16 +113,15 @@ pub(crate) struct FlatAtoms {
 pub(crate) fn flat_atoms<E: std::borrow::Borrow<MoleculeEntity>>(
     entities: &[E],
 ) -> FlatAtoms {
-    let mut atoms = Vec::new();
     let mut flat_of = HashMap::new();
+    let mut next = 0u32;
 
     for_each_flat_atom(entities, |fa| {
-        let _ = flat_of
-            .insert((fa.entity_raw_id, fa.raw_idx as u32), atoms.len() as u32);
-        atoms.push(fa.atom.clone());
+        let _ = flat_of.insert((fa.entity_raw_id, fa.raw_idx as u32), next);
+        next += 1;
     });
 
-    FlatAtoms { atoms, flat_of }
+    FlatAtoms { flat_of }
 }
 
 /// Turn already-collected per-atom columns into numpy arrays.

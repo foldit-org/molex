@@ -10,9 +10,9 @@ mod write;
 
 use self::parse::{parse_pdb_to_all_models, parse_pdb_to_entities};
 use self::refuse::check_beem_bundle;
-pub use self::write::{assembly_to_pdb, entities_to_pdb};
+pub use self::write::assembly_to_pdb;
 use crate::entity::molecule::{Completion, MoleculeEntity};
-use crate::ops::codec::AdapterError;
+use crate::ops::error::AdapterError;
 
 // Entity-first API (primary)
 

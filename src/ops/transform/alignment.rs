@@ -2,9 +2,16 @@
 
 use glam::{Mat3, Vec3};
 
-use super::extract::{centroid, extract_ca_positions};
-use crate::entity::molecule::MoleculeEntity;
-use crate::ops::codec::AdapterError;
+/// Compute centroid of a point set.
+#[must_use]
+#[allow(clippy::cast_precision_loss, reason = "point count fits in f32")]
+pub(crate) fn centroid(points: &[Vec3]) -> Vec3 {
+    if points.is_empty() {
+        return Vec3::ZERO;
+    }
+    let sum: Vec3 = points.iter().copied().sum();
+    sum / points.len() as f32
+}
 
 /// Kabsch algorithm: find optimal rotation and translation to align target to
 /// reference.
@@ -87,134 +94,6 @@ pub fn rmsd(a: &[Vec3], b: &[Vec3]) -> Option<f32> {
         .map(|(p, q)| (rotation * *p + translation - *q).length_squared())
         .sum();
     Some((sum_sq / n).sqrt())
-}
-
-/// Kabsch-Umeyama algorithm: find optimal rotation, translation, AND scale.
-#[must_use]
-#[allow(clippy::many_single_char_names)]
-#[allow(clippy::cast_precision_loss, reason = "point count fits in f32")]
-pub fn kabsch_alignment_with_scale(
-    reference: &[Vec3],
-    target: &[Vec3],
-) -> Option<(Mat3, Vec3, f32)> {
-    if reference.len() != target.len() || reference.len() < 3 {
-        return None;
-    }
-
-    let ref_centroid = centroid(reference);
-    let tgt_centroid = centroid(target);
-
-    let ref_centered: Vec<Vec3> =
-        reference.iter().map(|p| *p - ref_centroid).collect();
-    let tgt_centered: Vec<Vec3> =
-        target.iter().map(|p| *p - tgt_centroid).collect();
-
-    let _ref_var: f32 =
-        ref_centered.iter().map(|p| p.length_squared()).sum::<f32>()
-            / reference.len() as f32;
-    let tgt_var: f32 =
-        tgt_centered.iter().map(|p| p.length_squared()).sum::<f32>()
-            / target.len() as f32;
-
-    if tgt_var < 1e-10 {
-        return None;
-    }
-
-    let mut h = [[0.0f32; 3]; 3];
-    for k in 0..reference.len() {
-        let t = tgt_centered[k];
-        let r = ref_centered[k];
-        for i in 0..3 {
-            for j in 0..3 {
-                h[i][j] = t[i].mul_add(r[j], h[i][j]);
-            }
-        }
-    }
-
-    let (u, s, v) = svd_3x3(h);
-
-    let u_mat = Mat3::from_cols(
-        Vec3::new(u[0][0], u[1][0], u[2][0]),
-        Vec3::new(u[0][1], u[1][1], u[2][1]),
-        Vec3::new(u[0][2], u[1][2], u[2][2]),
-    );
-    let v_mat = Mat3::from_cols(
-        Vec3::new(v[0][0], v[1][0], v[2][0]),
-        Vec3::new(v[0][1], v[1][1], v[2][1]),
-        Vec3::new(v[0][2], v[1][2], v[2][2]),
-    );
-
-    let (rotation, sign) = if (v_mat * u_mat.transpose()).determinant() < 0.0 {
-        let v_flipped =
-            Mat3::from_cols(v_mat.col(0), v_mat.col(1), -v_mat.col(2));
-        (v_flipped * u_mat.transpose(), -1.0f32)
-    } else {
-        (v_mat * u_mat.transpose(), 1.0f32)
-    };
-
-    let trace_sd = sign.mul_add(s[2], s[0] + s[1]);
-    let scale =
-        (trace_sd / (tgt_var * reference.len() as f32)).clamp(0.1, 10.0);
-
-    let translation = ref_centroid - scale * (rotation * tgt_centroid);
-
-    Some((rotation, translation, scale))
-}
-
-/// Apply rotation + translation to all atoms in a set of entities.
-pub fn transform_entities(
-    entities: &mut [MoleculeEntity],
-    rotation: Mat3,
-    translation: Vec3,
-) {
-    for entity in entities.iter_mut() {
-        for atom in entity.atom_set_mut() {
-            atom.position = rotation * atom.position + translation;
-        }
-    }
-}
-
-/// Apply rotation + translation + scale to all atoms in a set of entities.
-pub fn transform_entities_with_scale(
-    entities: &mut [MoleculeEntity],
-    rotation: Mat3,
-    translation: Vec3,
-    scale: f32,
-) {
-    for entity in entities.iter_mut() {
-        for atom in entity.atom_set_mut() {
-            atom.position = rotation * (atom.position * scale) + translation;
-        }
-    }
-}
-
-/// Align entities to match reference CA positions using Kabsch algorithm.
-///
-/// # Errors
-///
-/// Returns `AdapterError::InvalidFormat` if CA count differs between reference
-/// and entities, or if the Kabsch alignment fails.
-pub fn align_to_reference(
-    entities: &mut [MoleculeEntity],
-    reference_ca: &[Vec3],
-) -> Result<(), AdapterError> {
-    let predicted_ca = extract_ca_positions(entities);
-
-    if predicted_ca.len() != reference_ca.len() {
-        return Err(AdapterError::InvalidFormat(format!(
-            "CA count mismatch: reference={}, entities={}",
-            reference_ca.len(),
-            predicted_ca.len()
-        )));
-    }
-
-    let (rotation, translation) = kabsch_alignment(reference_ca, &predicted_ca)
-        .ok_or_else(|| {
-            AdapterError::InvalidFormat("Kabsch alignment failed".to_owned())
-        })?;
-
-    transform_entities(entities, rotation, translation);
-    Ok(())
 }
 
 // SVD Implementation (Jacobi iteration for 3x3 matrices)
@@ -600,42 +479,5 @@ mod tests {
         let a = asymmetric_cloud();
         assert!(rmsd(&a, &a[..a.len() - 1]).is_none());
         assert!(rmsd(&a[..2], &a[..2]).is_none());
-    }
-
-    /// SCALE: the Kabsch-Umeyama variant must recover a planted uniform
-    /// scale factor together with the rotation and translation.
-    #[test]
-    fn test_kabsch_with_scale_recovers_scale() {
-        let rotation = known_rotation();
-        let translation = Vec3::new(0.5, -3.0, 2.2);
-        let scale = 2.5f32;
-
-        let target = asymmetric_cloud();
-        // reference = scale * (R * target) + t.
-        let reference: Vec<Vec3> = target
-            .iter()
-            .map(|p| scale * (rotation * *p) + translation)
-            .collect();
-
-        let (r_rec, t_rec, s_rec) =
-            kabsch_alignment_with_scale(&reference, &target).unwrap();
-
-        assert!(
-            (s_rec - scale).abs() < 1e-4,
-            "recovered scale differs: {s_rec} vs {scale}"
-        );
-        assert!(
-            mat_close(r_rec, rotation, 1e-5),
-            "recovered rotation differs under scale: {r_rec:?} vs {rotation:?}"
-        );
-
-        // Full transform reproduces the reference cloud.
-        for (tgt, refp) in target.iter().zip(reference.iter()) {
-            let mapped = s_rec * (r_rec * *tgt) + t_rec;
-            assert!(
-                (mapped - *refp).length() < 1e-3,
-                "scaled point not aligned: {mapped:?} vs {refp:?}"
-            );
-        }
     }
 }

@@ -11,7 +11,7 @@ use crate::element::Element;
 use crate::entity::molecule::atom::Atom;
 use crate::entity::molecule::polymer::Residue;
 use crate::entity::molecule::MoleculeEntity;
-use crate::ops::codec::AdapterError;
+use crate::ops::error::AdapterError;
 
 /// Emit an `Assembly` as a PDB-format string. All entities are flattened
 /// into a single atom stream in declaration order.
@@ -37,7 +37,7 @@ pub fn assembly_to_pdb(assembly: &Assembly) -> Result<String, AdapterError> {
 ///
 /// Returns [`AdapterError`] if the slice exceeds any legacy PDB limit
 /// (see [`assembly_to_pdb`]).
-pub fn entities_to_pdb<E: std::borrow::Borrow<MoleculeEntity>>(
+pub(crate) fn entities_to_pdb<E: std::borrow::Borrow<MoleculeEntity>>(
     entities: &[E],
 ) -> Result<String, AdapterError> {
     validate_writable(entities)?;

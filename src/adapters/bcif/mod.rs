@@ -13,7 +13,7 @@ mod refuse;
 use std::path::Path;
 
 use crate::entity::molecule::{Completion, MoleculeEntity};
-use crate::ops::codec::AdapterError;
+use crate::ops::error::AdapterError;
 
 /// Decode BinaryCIF bytes to entity list, completing missing heavy atoms
 /// ([`Completion::Heavy`]).

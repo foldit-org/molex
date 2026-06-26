@@ -10,8 +10,7 @@
 
 use std::path::PathBuf;
 
-use molex::adapters::pdb::pdb_file_to_entities;
-use molex::{MoleculeEntity, MoleculeType};
+use molex::{Assembly, MoleculeEntity, MoleculeType};
 
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -20,7 +19,7 @@ fn fixture(name: &str) -> PathBuf {
 }
 
 fn load(name: &str) -> Vec<MoleculeEntity> {
-    pdb_file_to_entities(&fixture(name)).unwrap()
+    Assembly::from_file(&fixture(name)).unwrap().into_entities()
 }
 
 fn atom_names(entity: &MoleculeEntity) -> Vec<String> {
@@ -177,11 +176,11 @@ fn alphafold_style_pldbt_in_bfactor_column() {
 
 #[test]
 fn beem_bundle_refused_with_mmcif_redirect() {
-    // Exercises the filename-based BeEM detection — only reachable via
-    // pdb_file_to_entities (the string entry point can't see the
-    // filename pattern).
+    // Exercises the filename-based BeEM detection — only reachable via the
+    // file entry point (the string entry point can't see the filename
+    // pattern).
     let path = fixture("1xyz-pdb-bundle1.pdb");
-    let err = pdb_file_to_entities(&path).unwrap_err();
+    let err = Assembly::from_file(&path).unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("BeEM"), "msg: {msg}");
     assert!(msg.contains("1xyz") || msg.contains("1XYZ"), "msg: {msg}");
@@ -204,13 +203,16 @@ fn all_fixtures_parse_or_refuse_cleanly() {
             .and_then(|n| n.to_str())
             .unwrap_or_default();
         let is_bundle = name.contains("-pdb-bundle");
-        match pdb_file_to_entities(&path) {
-            Ok(es) => {
+        match Assembly::from_file(&path) {
+            Ok(asm) => {
                 assert!(
                     !is_bundle,
                     "{name}: bundle file should refuse but parsed"
                 );
-                assert!(!es.is_empty(), "{name}: empty entity list");
+                assert!(
+                    !asm.entities().is_empty(),
+                    "{name}: empty entity list"
+                );
             }
             Err(e) => {
                 assert!(is_bundle, "{name}: unexpected parse failure: {e}");

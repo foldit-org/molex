@@ -90,7 +90,8 @@ import molex
 assembly_bytes = molex.pdb_to_assembly_bytes(pdb_string)
 pdb_back = molex.assembly_bytes_to_pdb(assembly_bytes)
 
-# Entity-aware AtomArray conversion (for ML pipelines)
-atom_array = molex.entities_to_atom_array(assembly_bytes)
-assembly_bytes = molex.atom_array_to_entities(atom_array)
+# Biotite-agnostic columnar interchange (for ML pipelines)
+table = molex.PyAtomTable.from_assembly_bytes(assembly_bytes)
+coords = table.coords  # (N, 3) float32 numpy array
+assembly_bytes = table.to_assembly_bytes()
 ```

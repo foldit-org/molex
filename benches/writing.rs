@@ -23,8 +23,6 @@ use criterion::{
     black_box, criterion_group, criterion_main, BenchmarkId, Criterion,
     Throughput,
 };
-use molex::adapters::cif::{assembly_to_mmcif, mmcif_str_to_entities};
-use molex::adapters::pdb::assembly_to_pdb;
 use molex::Assembly;
 
 fn assembly_atoms(asm: &Assembly) -> u64 {
@@ -54,7 +52,7 @@ fn load_fixtures() -> Vec<Fixture> {
             std::fs::read_to_string(dir.join(format!("{name}.cif"))).unwrap();
         out.push(Fixture {
             name,
-            assembly: Assembly::new(mmcif_str_to_entities(&cif).unwrap()),
+            assembly: Assembly::from_mmcif(&cif).unwrap(),
             fits_pdb: true,
         });
     }
@@ -64,7 +62,7 @@ fn load_fixtures() -> Vec<Fixture> {
         if let Ok(cif) = std::fs::read_to_string(large.join("6vxx.cif")) {
             out.push(Fixture {
                 name: "6vxx",
-                assembly: Assembly::new(mmcif_str_to_entities(&cif).unwrap()),
+                assembly: Assembly::from_mmcif(&cif).unwrap(),
                 fits_pdb: true,
             });
         }
@@ -72,7 +70,7 @@ fn load_fixtures() -> Vec<Fixture> {
         if let Ok(cif) = std::fs::read_to_string(large.join("3j3q.cif")) {
             out.push(Fixture {
                 name: "3j3q",
-                assembly: Assembly::new(mmcif_str_to_entities(&cif).unwrap()),
+                assembly: Assembly::from_mmcif(&cif).unwrap(),
                 fits_pdb: false,
             });
         }
@@ -92,7 +90,7 @@ fn bench_write(c: &mut Criterion) {
                 BenchmarkId::new("pdb", fx.name),
                 &fx.assembly,
                 |b, asm| {
-                    b.iter(|| assembly_to_pdb(black_box(asm)).unwrap());
+                    b.iter(|| black_box(asm).to_pdb().unwrap());
                 },
             );
         }
@@ -100,7 +98,7 @@ fn bench_write(c: &mut Criterion) {
             BenchmarkId::new("mmcif", fx.name),
             &fx.assembly,
             |b, asm| {
-                b.iter(|| assembly_to_mmcif(black_box(asm)));
+                b.iter(|| black_box(asm).to_mmcif());
             },
         );
     }

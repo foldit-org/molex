@@ -2,9 +2,9 @@
 //! mmCIF / BinaryCIF) into assembly wire bytes and emit PDB from assembly wire
 //! bytes. These are kept for the plugin wire protocol, not the front door; a
 //! normal caller wants the object API (`Assembly.from_pdb` / `from_mmcif` /
-//! `from_bcif` -> `entities()` -> `to_arrays()`) in the `python` module's
-//! object API. A submodule of `python`, split out to keep each file under the
-//! 800-line source cap enforced by `just file-lengths`.
+//! `from_bcif` -> `entities()`) in the `python` module. A submodule of
+//! `python`, split out to keep each file under the 800-line source cap
+//! enforced by `just file-lengths`.
 
 use pyo3::prelude::*;
 

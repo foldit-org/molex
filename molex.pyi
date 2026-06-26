@@ -1,8 +1,9 @@
 # Type stubs for the `molex` extension module.
 #
 # HAND-MAINTAINED. There is no auto-generation step: when the pyo3 surface in
-# `src/python/` (mod.rs, entity.rs, io.rs, arrays.rs, views.rs) or the module
-# registration in `src/lib.rs` changes, update this file by hand to match. The
+# `src/python/` (mod.rs, entity.rs, io.rs, atom_table.rs, views.rs) or the
+# module registration in `src/lib.rs` changes, update this file by hand to
+# match. The
 # registered surface is the `#[pyclass]` / `#[pymethods]` / `#[pyfunction]`
 # items wired in the `molex` `#[pymodule]` (`src/lib.rs`).
 #
@@ -17,7 +18,6 @@
 #   Rust `u32/u64/usize/i32` -> Python `int`
 #   Rust `f32`            -> Python `float`
 #   numpy columns         -> `Any` (numpy is not a typing dependency here)
-#   Biotite AtomArray     -> `Any`
 
 import enum
 from typing import Any
@@ -27,8 +27,9 @@ from typing import Any
 #
 # The documented default for a normal caller: parse a structure with
 # `Assembly.from_pdb` / `from_mmcif` / `from_bcif`, walk `entities()` ->
-# `Entity` -> `residues()` -> `Residue`, and read atoms as numpy columns via
-# `to_arrays()`. Completion (missing heavy atoms filled) runs at parse time.
+# `Entity` -> `residues()` -> `Residue`. Per-atom numpy columns come from
+# `PyAtomTable`, built from a structure's assembly bytes. Completion (missing
+# heavy atoms filled) runs at parse time.
 # ---------------------------------------------------------------------------
 
 class Completion(enum.Enum):
@@ -47,7 +48,8 @@ class Assembly:
     """Object-graph handle over a parsed molecular assembly.
 
     Primary entry points are the `from_pdb` / `from_mmcif` / `from_bcif`
-    static methods; navigate via `entities()` and read atoms via `to_arrays()`.
+    static methods; navigate via `entities()`. Per-atom numpy columns come from
+    `PyAtomTable`.
     """
 
     @staticmethod
@@ -128,19 +130,16 @@ class Assembly:
     def entities(self) -> list[Entity]:
         """The assembly's entities, in order."""
         ...
-    def to_arrays(self) -> AtomArrays:
-        """Every atom as per-atom numpy columns (Biotite-free)."""
-        ...
     def covalent_bonds(self) -> list[tuple[int, int]]:
         """Distance-based covalent bonds over the whole assembly, as atom-index
-        pairs `(i, j)` (with `i < j`) in `to_arrays()` flat order. Same
+        pairs `(i, j)` (with `i < j`) in canonical flat atom order. Same
         distance/covalent-radius perception molex uses for ligands, run across
         every atom, so it bonds across residue and entity boundaries.
         Hydrogen-to-hydrogen contacts are not bonded."""
         ...
     def disulfides(self) -> list[tuple[int, int]]:
         """Cys SG-SG disulfide bonds within the disulfide distance band, intra-
-        and inter-chain alike, as atom-index pairs in `to_arrays()` flat
+        and inter-chain alike, as atom-index pairs in canonical flat atom
         order."""
         ...
     def __len__(self) -> int:
@@ -203,9 +202,6 @@ class Entity:
         residue, `psi` for the last. Angles are in `(-180, 180]`. Empty list
         for a non-protein entity."""
         ...
-    def to_arrays(self) -> AtomArrays:
-        """This entity's atoms as per-atom numpy columns (Biotite-free)."""
-        ...
     def __len__(self) -> int:
         """Residue count; mirrors `len(assembly)` so `len(entity)` works too."""
         ...
@@ -240,45 +236,93 @@ class Residue:
     def ins_code(self) -> str | None:
         """Insertion code as a one-char string, or `None` when blank."""
         ...
-    def to_arrays(self) -> AtomArrays:
-        """This residue's atoms as per-atom numpy columns (Biotite-free)."""
-        ...
     def __repr__(self) -> str:
         """`<Residue {name} {seq_id}{ins_code}>`."""
         ...
 
-class AtomArrays:
-    """Per-atom annotation columns as numpy arrays (the native, Biotite-free
-    read path). Each attribute is a `numpy.ndarray`; bonds are not exposed
-    here (a Biotite-only concern)."""
+class PyAtomTable:
+    """A flat per-atom table that round-trips through molex without Biotite.
 
+    Construct from assembly wire bytes or from per-atom numpy columns; read
+    back as per-atom numpy columns via the properties; emit as assembly wire
+    bytes or as inferred covalent bonds. Atom order is molex's canonical flat
+    order; for a table built from assembly bytes every property, `bonds()`, and
+    the `to_assembly_bytes()` round-trip share that order."""
+
+    @staticmethod
+    def from_assembly_bytes(bytes: bytes) -> PyAtomTable:
+        """Decode assembly wire bytes into a table."""
+        ...
+    @staticmethod
+    def from_columns(
+        coords: Any,
+        atom_names: Any,
+        elements: Any,
+        res_ids: Any,
+        res_names: Any,
+        chain_ids: Any,
+        occupancies: Any | None = None,
+        b_factors: Any | None = None,
+        mol_types: Any | None = None,
+        chain_types: Any | None = None,
+        entity_ids: Any | None = None,
+        observed: Any | None = None,
+    ) -> PyAtomTable:
+        """Build a table row-by-row from per-atom numpy columns.
+
+        `coords` is `(N, 3)` float32; `res_ids`/`entity_ids`/`chain_types` are
+        `(N,)` int32; `occupancies`/`b_factors` are `(N,)` float32; `observed`
+        is `(N,)` bool. `atom_names`/`res_names`/`elements`/`mol_types` are each
+        a length-`N` sequence of `str` or fixed-width `bytes` (a numpy `'S'`
+        array works); `chain_ids` is a length-`N` sequence of `str`.
+
+        Only `coords`, `atom_names`, `elements`, `res_ids`, `res_names`, and
+        `chain_ids` are required. Absent `occupancies`/`b_factors` default to
+        `1.0`/`0.0`; absent `observed` defaults to `True`.
+
+        Each atom's molecule type follows a three-tier precedence:
+        `chain_types` if given, else `mol_types`, else classification of the
+        residue name (so an annotation-free protein backbone classifies as
+        protein, not ligand). When `entity_ids` is omitted, entity ids are
+        synthesized from the `(chain_id, mol_type)` pair in first-appearance
+        order."""
+        ...
     coords: Any
     """`(n, 3)` float32 coordinates."""
     atom_names: Any
-    """Per-atom PDB atom names."""
+    """Per-atom atom names as a numpy `'S4'` byte-string array (trimmed)."""
     elements: Any
-    """Per-atom element symbols."""
+    """Per-atom element symbols (str)."""
     res_ids: Any
     """Per-atom residue ids (int32)."""
     res_names: Any
-    """Per-atom residue names."""
+    """Per-atom residue names as a numpy `'S3'` byte-string array (trimmed)."""
     chain_ids: Any
-    """Per-atom chain ids."""
+    """Per-atom chain ids (str)."""
     occupancies: Any
     """Per-atom occupancies (float32)."""
     b_factors: Any
     """Per-atom B-factors (float32)."""
     entity_ids: Any
-    """Per-atom AtomWorks entity ids (int32)."""
+    """Per-atom entity ids (int32)."""
     mol_types: Any
     """Per-atom AtomWorks `mol_type` strings."""
     chain_types: Any
     """Per-atom AtomWorks `chain_type` codes (int32)."""
+    observed_mask: Any
+    """Per-atom provenance mask (bool): `True` parsed, `False` fabricated."""
+    def to_assembly_bytes(self) -> bytes:
+        """Emit the table as assembly wire bytes."""
+        ...
+    def bonds(self) -> list[tuple[int, int, int]]:
+        """Inferred covalent bonds as flat-index triples `(i, j, order)`
+        (order: 1 single, 2 double, 3 triple, 4 aromatic)."""
+        ...
     def __len__(self) -> int:
-        """Number of atoms (read from the `(n, 3)` `coords` anchor)."""
+        """Number of atoms."""
         ...
     def __repr__(self) -> str:
-        """`<AtomArrays: {n} atoms>`."""
+        """`<PyAtomTable: {n} atoms>`."""
         ...
 
 # ---------------------------------------------------------------------------
@@ -484,49 +528,4 @@ def assembly_bytes_to_pdb(bytes: bytes) -> str:
 def deserialize_assembly_bytes(bytes: bytes) -> bytes:
     """Round-trip assembly wire bytes through `Assembly` and back (validation).
     Transport / serialization helper."""
-    ...
-
-def assembly_bytes_to_arrays(bytes: bytes) -> AtomArrays:
-    """Decode wire bytes to per-atom numpy columns (Biotite-free). Transport
-    helper; prefer `Assembly.to_arrays` / `Entity.to_arrays`."""
-    ...
-
-# ---------------------------------------------------------------------------
-# AtomWorks / Biotite interop free functions
-#
-# Convert between molex's wire bytes / entities and Biotite `AtomArray` /
-# `AtomArrayPlus` objects, and parse structure files through the AtomWorks
-# pipeline. `AtomArray` arguments and returns are typed `Any` (Biotite is not
-# a typing dependency).
-# ---------------------------------------------------------------------------
-
-def entities_to_atom_array(assembly_bytes: bytes) -> Any:
-    """Convert assembly wire bytes to a Biotite `AtomArray`."""
-    ...
-
-def entities_to_atom_array_plus(assembly_bytes: bytes) -> Any:
-    """Convert assembly wire bytes to an AtomWorks `AtomArrayPlus` (signals the
-    structure is already fully constructed; skips CCD rebuilding)."""
-    ...
-
-def atom_array_to_entities(atom_array: Any) -> bytes:
-    """Convert a Biotite `AtomArray` (or `AtomArrayPlus`) back to assembly wire
-    bytes."""
-    ...
-
-def entities_to_atom_array_parsed(
-    assembly_bytes: bytes, source_path: str | None = ...
-) -> Any:
-    """Convert entities to an `AtomArray`, then run AtomWorks' full cleaning
-    pipeline (highest fidelity; slower than `entities_to_atom_array`)."""
-    ...
-
-def parse_file_to_entities(file_path: str) -> bytes:
-    """Load a structure file through AtomWorks' full parsing pipeline and
-    return assembly wire bytes of the cleaned, annotated entities."""
-    ...
-
-def parse_file_full(file_path: str) -> Any:
-    """Load a structure file through AtomWorks and return a dict with
-    `"assembly_bytes"`, `"chain_info"`, and `"assemblies"`."""
     ...

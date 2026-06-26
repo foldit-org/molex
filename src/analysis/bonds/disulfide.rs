@@ -30,7 +30,7 @@ const MIN_SS_DISTANCE: f32 = 1.5;
     clippy::cast_possible_truncation,
     reason = "atom indices are bounded by entity size (< u32::MAX)"
 )]
-pub fn detect_disulfides<E: Borrow<MoleculeEntity>>(
+pub(crate) fn detect_disulfides<E: Borrow<MoleculeEntity>>(
     entities: &[E],
 ) -> Vec<CovalentBond> {
     #[derive(Clone, Copy)]
@@ -101,7 +101,7 @@ fn trimmed_atom_name_bytes(name: &[u8; 4]) -> &[u8] {
 
 impl crate::Assembly {
     /// Cys SG-SG disulfide bonds across this assembly. See
-    /// [`detect_disulfides`].
+    /// `detect_disulfides`.
     #[must_use]
     pub fn disulfides(&self) -> Vec<CovalentBond> {
         detect_disulfides(self.entities())

@@ -19,7 +19,6 @@ mod egress_bench {
 
     use criterion::{black_box, BenchmarkId, Criterion, Throughput};
     use molex::adapters::atomworks::columns;
-    use molex::adapters::cif::mmcif_str_to_entities;
     use molex::adapters::table::AtomTable;
     use molex::{Assembly, MoleculeEntity};
 
@@ -71,12 +70,12 @@ mod egress_bench {
             let Ok(cif) = std::fs::read_to_string(&path) else {
                 continue;
             };
-            let entities = mmcif_str_to_entities(&cif).unwrap();
-            let atoms = entities
+            let assembly = Assembly::from_mmcif(&cif).unwrap();
+            let atoms = assembly
+                .entities()
                 .iter()
-                .map(MoleculeEntity::atom_count)
+                .map(|e| e.atom_count())
                 .sum::<usize>() as u64;
-            let assembly = Assembly::new(entities);
             out.push(Fixture {
                 name,
                 assembly,

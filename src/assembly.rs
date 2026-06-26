@@ -140,6 +140,22 @@ impl Assembly {
         &self.entities
     }
 
+    /// Consume the assembly, returning its entities as an owned `Vec`.
+    ///
+    /// Moves each entity out of its `Arc` when uniquely held (the common
+    /// case right after parsing), cloning only entities still shared
+    /// elsewhere. Non-entity assembly state (`ss_types`, rendering
+    /// connections, the generation counter) is discarded.
+    #[must_use]
+    pub fn into_entities(self) -> Vec<MoleculeEntity> {
+        self.entities
+            .into_iter()
+            .map(|arc| {
+                Arc::try_unwrap(arc).unwrap_or_else(|arc| (*arc).clone())
+            })
+            .collect()
+    }
+
     /// Look up an entity by id.
     #[must_use]
     pub fn entity(&self, id: EntityId) -> Option<&MoleculeEntity> {

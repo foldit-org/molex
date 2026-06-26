@@ -24,10 +24,8 @@ use bcif_support::{
     entity_polymer_category, fixed_point_column, interval_quantized_column,
     AtomSite, AtomSiteOpts, Block, Category, Column, ColumnData, EncStep,
 };
-use molex::adapters::bcif::{
-    bcif_file_to_entities, bcif_to_all_models, bcif_to_entities,
-};
-use molex::{Element, MoleculeEntity, MoleculeType};
+use molex::adapters::bcif::bcif_to_all_models;
+use molex::{Assembly, Element, MoleculeEntity, MoleculeType};
 
 // ---------------------------------------------------------------------------
 // Fixture construction
@@ -173,7 +171,7 @@ fn modified_amino_acids_stay_in_protein_chain() {
         entity_poly_protein_category(),
         atom_site_category(&rows, &AtomSiteOpts::default()),
     ]);
-    let entities = bcif_to_entities(&bcif).unwrap();
+    let entities = Assembly::from_bcif(&bcif).unwrap().into_entities();
     let protein = first_protein(&entities).as_protein().unwrap();
     assert_eq!(protein.residues.len(), 4);
     let names: Vec<String> = protein
@@ -244,7 +242,7 @@ fn modified_nucleotides_classify_as_rna() {
         entity_poly_rna_category(),
         atom_site_category(&rows, &AtomSiteOpts::default()),
     ]);
-    let entities = bcif_to_entities(&bcif).unwrap();
+    let entities = Assembly::from_bcif(&bcif).unwrap().into_entities();
     let rna = entities
         .iter()
         .find(|e| e.molecule_type() == MoleculeType::RNA)
@@ -278,7 +276,7 @@ fn label_chain_ids_kept_distinct() {
             },
         ),
     ]);
-    let entities = bcif_to_entities(&bcif).unwrap();
+    let entities = Assembly::from_bcif(&bcif).unwrap().into_entities();
     let proteins: Vec<_> = entities
         .iter()
         .filter(|e| e.molecule_type() == MoleculeType::Protein)
@@ -307,7 +305,7 @@ fn single_model_api_returns_first_model() {
         entity_poly_protein_category(),
         atom_site_category(&rows, &AtomSiteOpts::default()),
     ]);
-    let entities = bcif_to_entities(&bcif).unwrap();
+    let entities = Assembly::from_bcif(&bcif).unwrap().into_entities();
     let n = find_atom_by_name(first_protein(&entities), "N").unwrap();
     assert!(n.position.x.abs() < 0.5, "got x={}", n.position.x);
 }
@@ -399,7 +397,7 @@ fn altloc_a_wins_over_b_by_occupancy() {
             },
         ),
     ]);
-    let entities = bcif_to_entities(&bcif).unwrap();
+    let entities = Assembly::from_bcif(&bcif).unwrap().into_entities();
     let atoms = first_protein(&entities).columns().to_atoms();
     let cb_atoms: Vec<_> = atoms
         .iter()
@@ -432,7 +430,7 @@ fn ins_code_disambiguates_inserts() {
             },
         ),
     ]);
-    let entities = bcif_to_entities(&bcif).unwrap();
+    let entities = Assembly::from_bcif(&bcif).unwrap().into_entities();
     let protein = first_protein(&entities).as_protein().unwrap();
     assert_eq!(protein.residues.len(), 3);
     let ins_codes: Vec<Option<u8>> =
@@ -458,7 +456,7 @@ fn formal_charge_field_populated() {
             },
         ),
     ]);
-    let entities = bcif_to_entities(&bcif).unwrap();
+    let entities = Assembly::from_bcif(&bcif).unwrap().into_entities();
     let charges: Vec<i8> = entities
         .iter()
         .flat_map(|e| {
@@ -518,7 +516,7 @@ fn branched_entities_collapse_without_crash() {
         entity_poly_protein_category(),
         atom_site_category(&rows, &AtomSiteOpts::default()),
     ]);
-    let entities = bcif_to_entities(&bcif).unwrap();
+    let entities = Assembly::from_bcif(&bcif).unwrap().into_entities();
     assert!(entities
         .iter()
         .any(|e| e.molecule_type() == MoleculeType::Protein));
@@ -539,7 +537,7 @@ fn multi_block_input_refuses_with_clear_message() {
         ]),
         block_for(vec![]),
     ]);
-    let err = bcif_to_entities(&bcif).unwrap_err();
+    let err = Assembly::from_bcif(&bcif).unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("data blocks"), "msg: {msg}");
 }
@@ -571,7 +569,7 @@ fn null_mask_present_drops_masked_coord_rows() {
             },
         ),
     ]);
-    let entities = bcif_to_entities(&bcif).unwrap();
+    let entities = Assembly::from_bcif(&bcif).unwrap().into_entities();
     let protein = first_protein(&entities).as_protein().unwrap();
     assert_eq!(
         protein.residues.len(),
@@ -596,7 +594,7 @@ fn null_mask_on_occupancy_defaults_to_one() {
             },
         ),
     ]);
-    let entities = bcif_to_entities(&bcif).unwrap();
+    let entities = Assembly::from_bcif(&bcif).unwrap().into_entities();
     for a in first_protein(&entities).columns().to_atoms() {
         assert!(
             (a.occupancy - 1.0).abs() < 1e-6,
@@ -642,7 +640,7 @@ fn integer_packing_byte4_decodes_correctly() {
         entity_poly_protein_category(),
         cat,
     ]);
-    let entities = bcif_to_entities(&bcif).unwrap();
+    let entities = Assembly::from_bcif(&bcif).unwrap().into_entities();
     let protein = first_protein(&entities).as_protein().unwrap();
     assert_eq!(protein.residues.len(), 1);
     assert_eq!(protein.residues[0].label_seq_id, big_seq);
@@ -680,7 +678,7 @@ fn run_length_bounded_refuses_amplified_input() {
         entity_poly_protein_category(),
         cat,
     ]);
-    let err = bcif_to_entities(&bcif).unwrap_err();
+    let err = Assembly::from_bcif(&bcif).unwrap_err();
     let msg = err.to_string();
     assert!(
         msg.contains("RunLength") || msg.contains("srcSize"),
@@ -698,7 +696,7 @@ fn element_falls_back_to_atom_name_when_type_symbol_missing() {
         entity_poly_protein_category(),
         cat,
     ]);
-    let entities = bcif_to_entities(&bcif).unwrap();
+    let entities = Assembly::from_bcif(&bcif).unwrap().into_entities();
     let atoms = first_protein(&entities).columns().to_atoms();
     assert_eq!(atoms[0].element, Element::N);
     assert_eq!(atoms[1].element, Element::C);
@@ -752,7 +750,7 @@ fn delta_integer_packing_reconstructs_seq_ids_exactly() {
         cat,
     ]);
 
-    let entities = bcif_to_entities(&bcif).unwrap();
+    let entities = Assembly::from_bcif(&bcif).unwrap().into_entities();
     let protein = first_protein(&entities).as_protein().unwrap();
     let mut got: Vec<i32> =
         protein.residues.iter().map(|r| r.label_seq_id).collect();
@@ -777,7 +775,7 @@ fn delta_integer_packing_reconstructs_coords_exactly() {
         cat,
     ]);
 
-    let entities = bcif_to_entities(&bcif).unwrap();
+    let entities = Assembly::from_bcif(&bcif).unwrap().into_entities();
     let atoms = first_protein(&entities).columns().to_atoms();
     // Missing-atom completion appends sidechain/hydrogen atoms after the
     // parsed ones; the codec round-trip only governs the four parsed
@@ -808,7 +806,7 @@ fn fixed_point_reconstructs_coords_within_quantization() {
         cat,
     ]);
 
-    let entities = bcif_to_entities(&bcif).unwrap();
+    let entities = Assembly::from_bcif(&bcif).unwrap().into_entities();
     let atoms = first_protein(&entities).columns().to_atoms();
     // Tolerance: half a quantization step from rounding, plus f32 epsilon at
     // the largest magnitude in the fixture.
@@ -843,7 +841,7 @@ fn interval_quantization_lands_in_expected_buckets() {
         cat,
     ]);
 
-    let entities = bcif_to_entities(&bcif).unwrap();
+    let entities = Assembly::from_bcif(&bcif).unwrap().into_entities();
     let atoms = first_protein(&entities).columns().to_atoms();
     for (a, &v) in atoms.iter().zip(raw.iter()) {
         let expected_idx = ((v - min) / step).round();
@@ -866,7 +864,9 @@ fn file_entry_point_roundtrips_through_disk() {
     ]);
     let path = std::env::temp_dir().join("molex_bcif_roundtrip.bcif");
     std::fs::write(&path, &bcif).unwrap();
-    let entities = bcif_file_to_entities(&path).unwrap();
+    let entities = Assembly::from_bcif(&std::fs::read(&path).unwrap())
+        .unwrap()
+        .into_entities();
     let _ = std::fs::remove_file(&path);
     let protein = first_protein(&entities).as_protein().unwrap();
     assert_eq!(protein.residues.len(), 1);

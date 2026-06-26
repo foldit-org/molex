@@ -3,15 +3,14 @@
 //! handle surface.
 //!
 //! The documented default for a normal caller is the object API: parse a
-//! structure file with `Assembly.from_pdb` / `from_mmcif` / `from_bcif`, walk
-//! `entities()` -> `Entity` -> `residues()` -> `Residue`, and read atoms as
-//! numpy columns via `to_arrays()`. AtomArray (Biotite) interop lives in
-//! `adapters::atomworks`.
+//! structure file with `Assembly.from_pdb` / `from_mmcif` / `from_bcif`, then
+//! walk `entities()` -> `Entity` -> `residues()` -> `Residue`. Per-atom numpy
+//! columns come from `PyAtomTable` (`atom_table` submodule), built from a
+//! structure's assembly bytes.
 //!
 //! The byte-blob free functions (`pdb_to_assembly_bytes` et al. in the `io`
-//! submodule, `assembly_bytes_to_arrays` in the `arrays` submodule) are
-//! transport/serialization helpers kept for the plugin wire protocol, not the
-//! front door.
+//! submodule) are transport/serialization helpers kept for the plugin wire
+//! protocol, not the front door.
 //!
 //! Handle-based surface (`Assembly`, `EditList`, `Variant`, `AtomRow`,
 //! `ProtonationState`) parallels the C API in `c_api::edit` per
@@ -20,7 +19,7 @@
 use glam::Vec3;
 use pyo3::prelude::*;
 
-use self::arrays::{entities_to_arrays, flat_atoms};
+use self::arrays::flat_atoms;
 use crate::adapters::cif;
 use crate::analysis::detect_disulfides;
 use crate::analysis::sasa::{DEFAULT_N_POINTS, DEFAULT_PROBE_RADIUS};
@@ -37,12 +36,13 @@ use crate::ops::wire::delta::{
 use crate::ops::wire::{deserialize_assembly, serialize_assembly};
 
 mod arrays;
+mod atom_table;
 mod entity;
 mod io;
 mod views;
 mod walk;
 
-pub use self::arrays::{assembly_bytes_to_arrays, AtomArrays};
+pub use self::atom_table::PyAtomTable;
 pub use self::entity::{PyEntity, PyResidue};
 pub use self::io::{
     assembly_bytes_to_pdb, bcif_to_assembly_bytes, deserialize_assembly_bytes,
@@ -292,11 +292,9 @@ impl PyAssembly {
 
     // Object navigation. The documented default for a normal caller: parse
     // with `from_pdb` / `from_mmcif` / `from_bcif`, then walk `entities()`
-    // -> `Entity` -> `residues()` -> `Residue`, and read atoms as numpy
-    // columns via `to_arrays()`. Each `Entity` holds an `Arc<MoleculeEntity>`
-    // refcount clone of the assembly's own entity, so navigation is cheap and
-    // the flat per-atom arrays are built lazily through the shared
-    // entities -> arrays core.
+    // -> `Entity` -> `residues()` -> `Residue`. Each `Entity` holds an
+    // `Arc<MoleculeEntity>` refcount clone of the assembly's own entity, so
+    // navigation is cheap.
 
     /// Parse a PDB string into an `Assembly` at the given completion
     /// `completion` (default `Completion.Heavy`: missing heavy atoms filled,
@@ -399,25 +397,15 @@ impl PyAssembly {
         )
     }
 
-    /// Every atom in the assembly as per-atom numpy columns (an
-    /// `AtomArrays`), via the shared entities -> arrays core.
-    ///
-    /// # Errors
-    ///
-    /// `PyErr` if numpy is unavailable or a numpy operation fails.
-    pub fn to_arrays(&self, py: Python) -> PyResult<AtomArrays> {
-        entities_to_arrays(py, self.inner.entities())
-    }
-
     /// Intra-entity covalent bonds across the assembly, as atom-index pairs
-    /// in `to_arrays()` flat order.
+    /// in canonical flat atom order.
     ///
     /// Aggregates each entity's stored bond topology (protein/nucleic-acid
     /// templates plus small-molecule inferred bonds) via the native
     /// `Assembly::covalent_bonds`; inter-entity bonds (e.g. disulfides) are
     /// not included. Endpoints come back as `(entity, per-entity atom index)`;
-    /// both are mapped to the flat atom order of `to_arrays()` so the returned
-    /// indices line up with the coordinate rows.
+    /// both are mapped to the canonical flat atom order so the returned indices
+    /// line up with the coordinate rows.
     #[must_use]
     pub fn covalent_bonds(&self) -> Vec<(u32, u32)> {
         let flat = flat_atoms(self.inner.entities());
@@ -434,14 +422,14 @@ impl PyAssembly {
             .collect()
     }
 
-    /// Cys SG-SG disulfide bonds, as atom-index pairs in `to_arrays()` flat
+    /// Cys SG-SG disulfide bonds, as atom-index pairs in canonical flat atom
     /// order.
     ///
     /// Detects SG-SG pairs in CYS residues within the disulfide distance band
     /// (`detect_disulfides`), intra- and inter-chain alike. Endpoints come back
-    /// as `(entity, per-entity atom index)`; both are mapped to the flat atom
-    /// order of `to_arrays()` so the returned indices line up with the
-    /// coordinate rows.
+    /// as `(entity, per-entity atom index)`; both are mapped to the canonical
+    /// flat atom order so the returned indices line up with the coordinate
+    /// rows.
     #[must_use]
     pub fn disulfides(&self) -> Vec<(u32, u32)> {
         let flat = flat_atoms(self.inner.entities());

@@ -174,6 +174,26 @@ fn from_arcs_matches_new_over_same_entities() {
     assert_eq!(from_arcs.ss_types(b_id).len(), fresh.ss_types(b_id).len());
 }
 
+#[test]
+fn into_entities_round_trips_at_entity_level() {
+    // `into_entities` consumes the assembly and hands back the entities as
+    // an owned Vec, preserving order, ids, and atom counts.
+    let mut alloc = EntityIdAllocator::new();
+    let a = make_dipeptide(&mut alloc, b'A', Vec3::ZERO);
+    let b = make_dipeptide(&mut alloc, b'B', Vec3::new(20.0, 0.0, 0.0));
+    let want: Vec<(EntityId, usize)> =
+        [&a, &b].iter().map(|e| (e.id(), e.atom_count())).collect();
+
+    let assembly = Assembly::new(vec![a, b]);
+    let got: Vec<(EntityId, usize)> = assembly
+        .into_entities()
+        .iter()
+        .map(|e| (e.id(), e.atom_count()))
+        .collect();
+
+    assert_eq!(got, want);
+}
+
 // -- Mutation generation + recompute --
 
 #[test]

@@ -242,7 +242,7 @@ fn read_header_chain(
 /// [`Assembly`]: crate::Assembly
 /// [`Assembly::new`]: crate::Assembly::new
 /// [`Assembly::recompute_ss`]: crate::Assembly::recompute_ss
-pub fn deserialize_assembly(
+pub(crate) fn deserialize_assembly(
     bytes: &[u8],
 ) -> Result<crate::Assembly, AdapterError> {
     let entities = deserialize_assembly_entities(bytes)?;

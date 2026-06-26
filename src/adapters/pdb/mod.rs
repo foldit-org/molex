@@ -10,7 +10,7 @@ mod write;
 
 use self::parse::{parse_pdb_to_all_models, parse_pdb_to_entities};
 use self::refuse::check_beem_bundle;
-pub use self::write::assembly_to_pdb;
+pub(crate) use self::write::assembly_to_pdb;
 use crate::entity::molecule::{Completion, MoleculeEntity};
 use crate::ops::error::AdapterError;
 
@@ -23,7 +23,7 @@ use crate::ops::error::AdapterError;
 ///
 /// Returns [`AdapterError`] if parsing fails or the input is recognized
 /// as a BeEM split bundle (which the mmCIF adapter must handle instead).
-pub fn pdb_str_to_entities(
+pub(crate) fn pdb_str_to_entities(
     pdb_str: &str,
 ) -> Result<Vec<MoleculeEntity>, AdapterError> {
     pdb_str_to_entities_with(pdb_str, Completion::Heavy)
@@ -40,7 +40,7 @@ pub fn pdb_str_to_entities(
 ///
 /// Returns [`AdapterError`] if parsing fails or the input is recognized
 /// as a BeEM split bundle (which the mmCIF adapter must handle instead).
-pub fn pdb_str_to_entities_with(
+pub(crate) fn pdb_str_to_entities_with(
     pdb_str: &str,
     level: Completion,
 ) -> Result<Vec<MoleculeEntity>, AdapterError> {
@@ -56,7 +56,7 @@ pub fn pdb_str_to_entities_with(
 ///
 /// Returns [`AdapterError`] if the file cannot be read, the input is
 /// recognized as a BeEM split bundle, or parsing fails.
-pub fn pdb_file_to_entities(
+pub(crate) fn pdb_file_to_entities(
     path: &std::path::Path,
 ) -> Result<Vec<MoleculeEntity>, AdapterError> {
     let content = std::fs::read_to_string(path).map_err(|e| {
@@ -109,7 +109,7 @@ pub fn pdb_file_to_all_models(
 /// # Errors
 ///
 /// Returns [`AdapterError`] if the file cannot be read or parsing fails.
-pub fn structure_file_to_entities(
+pub(crate) fn structure_file_to_entities(
     path: &std::path::Path,
 ) -> Result<Vec<MoleculeEntity>, AdapterError> {
     let ext = path

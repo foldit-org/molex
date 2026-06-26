@@ -4,11 +4,12 @@
 //! # Quick start
 //!
 //! ```rust,ignore
-//! use molex::{MoleculeEntity, MoleculeType, SSType};
-//! use molex::adapters::pdb::structure_file_to_entities;
+//! use std::path::Path;
 //!
-//! let entities = structure_file_to_entities("1ubq.pdb")?;
-//! for e in &entities {
+//! use molex::Assembly;
+//!
+//! let assembly = Assembly::from_file(Path::new("1ubq.pdb"))?;
+//! for e in assembly.entities() {
 //!     println!("{:?}: {} atoms", e.molecule_type(), e.atom_count());
 //! }
 //! ```
@@ -38,7 +39,7 @@ pub mod python;
 // Entity-first public API
 // The most commonly used types, re-exported at the crate root.
 
-pub use analysis::{detect_disulfides, BondOrder, HBond, SSType};
+pub use analysis::{BondOrder, HBond, SSType};
 pub use assembly::Assembly;
 pub use atom_id::AtomId;
 pub use bond::CovalentBond;
@@ -67,43 +68,13 @@ fn molex(_py: Python, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(python::bcif_to_assembly_bytes, m)?)?;
     m.add_function(wrap_pyfunction!(python::assembly_bytes_to_pdb, m)?)?;
     m.add_function(wrap_pyfunction!(python::deserialize_assembly_bytes, m)?)?;
-    // AtomArray / AtomArrayPlus converters (entity-aware, preserves molecule
-    // types and bonds)
-    m.add_function(wrap_pyfunction!(
-        adapters::atomworks::entities_to_atom_array,
-        m
-    )?)?;
-    m.add_function(wrap_pyfunction!(
-        adapters::atomworks::entities_to_atom_array_plus,
-        m
-    )?)?;
-    m.add_function(wrap_pyfunction!(
-        adapters::atomworks::atom_array_to_entities,
-        m
-    )?)?;
-    // Native, Biotite-free read: per-atom columns as numpy arrays.
-    m.add_function(wrap_pyfunction!(python::assembly_bytes_to_arrays, m)?)?;
-    m.add_class::<python::AtomArrays>()?;
+    // Biotite-agnostic columnar atom interchange.
+    m.add_class::<python::PyAtomTable>()?;
     // Scalar analysis free functions.
     m.add_function(wrap_pyfunction!(python::rmsd, m)?)?;
-    m.add_function(wrap_pyfunction!(
-        adapters::atomworks::entities_to_atom_array_parsed,
-        m
-    )?)?;
-    m.add_function(wrap_pyfunction!(
-        adapters::atomworks::parse_file_to_entities,
-        m
-    )?)?;
-    m.add_function(wrap_pyfunction!(adapters::atomworks::parse_file_full, m)?)?;
-    // ML model output -> entities: build directly from host numpy columns of a
-    // Boltz Structure (folding-model plugins), no Biotite AtomArray in between.
-    m.add_function(wrap_pyfunction!(
-        adapters::ml::boltz_structure_to_entities,
-        m
-    )?)?;
 
     // Object graph: Assembly -> Entity -> Residue (the default Python
-    // navigation surface; atoms via `to_arrays`).
+    // navigation surface).
     m.add_class::<python::PyCompletion>()?;
     m.add_class::<python::PyAssembly>()?;
     m.add_class::<python::PyEntity>()?;

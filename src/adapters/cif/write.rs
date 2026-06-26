@@ -24,7 +24,7 @@ use crate::entity::molecule::MoleculeEntity;
 /// non-polymer entity is assigned a fresh unique `label_asym_id` so waters
 /// and ligands re-parse as distinct chains rather than merging.
 #[must_use]
-pub fn assembly_to_mmcif(assembly: &Assembly) -> String {
+pub(crate) fn assembly_to_mmcif(assembly: &Assembly) -> String {
     entities_to_mmcif(assembly.entities())
 }
 

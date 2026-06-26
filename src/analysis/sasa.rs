@@ -12,7 +12,7 @@
 //! (no RNG). Per-atom area is `(accessible / total) * 4*pi*R^2`; the total is
 //! the sum.
 //!
-//! [`assembly_sasa`] scopes the calculation to protein atoms (water, ions, and
+//! `assembly_sasa` scopes the calculation to protein atoms (water, ions, and
 //! other non-polymer entities excluded), matching the convention freesasa and
 //! biotite use for their reference protein SASA values. Hydrogens present in
 //! the input are included; PDB-derived protein structures are typically heavy-
@@ -163,7 +163,7 @@ fn build_neighbor_lists(
 /// `n_points` controls the angular resolution (use [`DEFAULT_N_POINTS`] for the
 /// standard estimate).
 #[must_use]
-pub fn assembly_sasa(
+pub(crate) fn assembly_sasa(
     assembly: &Assembly,
     probe_radius: f32,
     n_points: usize,
@@ -186,7 +186,7 @@ pub fn assembly_sasa(
 
 impl Assembly {
     /// Total solvent-accessible surface area (Angstrom^2) of this assembly's
-    /// protein atoms. See [`assembly_sasa`] for scope and method.
+    /// protein atoms. See `assembly_sasa` for scope and method.
     #[must_use]
     pub fn sasa(&self, probe_radius: f32, n_points: usize) -> f32 {
         assembly_sasa(self, probe_radius, n_points)

@@ -20,16 +20,14 @@
 use std::path::PathBuf;
 
 use glam::{Mat3, Vec3};
-use molex::adapters::cif::{mmcif_str_to_entities, mmcif_str_to_entities_with};
 use molex::analysis::sasa::DEFAULT_N_POINTS;
-use molex::analysis::{assembly_sasa, ContactLevel};
+use molex::analysis::ContactLevel;
 use molex::entity::molecule::atom::Atom;
 use molex::entity::molecule::id::EntityIdAllocator;
 use molex::entity::molecule::protein::ProteinEntity;
 use molex::ops::transform::rmsd;
 use molex::{
-    detect_disulfides, Assembly, BondOrder, Completion, Element,
-    MoleculeEntity, Residue,
+    Assembly, BondOrder, Completion, Element, MoleculeEntity, Residue,
 };
 
 fn data(name: &str) -> PathBuf {
@@ -40,7 +38,7 @@ fn data(name: &str) -> PathBuf {
 
 fn ubq_assembly(level: Completion) -> Assembly {
     let cif = std::fs::read_to_string(data("1ubq.cif")).unwrap();
-    Assembly::new(mmcif_str_to_entities_with(&cif, level).unwrap())
+    Assembly::from_mmcif_with(&cif, level).unwrap()
 }
 
 /// Total protein SASA of 1UBQ.
@@ -52,9 +50,9 @@ fn ubq_assembly(level: Completion) -> Assembly {
 #[test]
 fn uc7_sasa_1ubq_total() {
     let cif = std::fs::read_to_string(data("1ubq.cif")).unwrap();
-    let asm = Assembly::new(mmcif_str_to_entities(&cif).unwrap());
+    let asm = Assembly::from_mmcif(&cif).unwrap();
 
-    let total = assembly_sasa(&asm, 1.4, DEFAULT_N_POINTS);
+    let total = asm.sasa(1.4, DEFAULT_N_POINTS);
 
     // Captured 2026-06-24: 4872.2393 A^2. Tolerance ~0.5%.
     let expected = 4872.24_f32;
@@ -228,7 +226,7 @@ fn uc11_detect_disulfides_one_pair() {
         MoleculeEntity::Protein(ent_b),
     ];
 
-    let bonds = detect_disulfides(&entities);
+    let bonds = Assembly::new(entities).disulfides();
     assert_eq!(bonds.len(), 1, "expected exactly one disulfide");
     assert_ne!(
         bonds[0].a.entity, bonds[0].b.entity,

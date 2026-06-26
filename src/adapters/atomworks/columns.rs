@@ -1,15 +1,16 @@
 //! The de-vocab marshaling boundary: native [`AtomTable`] columns -> the
-//! vocab-bearing per-atom columns the numpy and Biotite egress emit.
+//! vocab-bearing per-atom columns [`PyAtomTable`] exposes to Python.
 //!
 //! Every builder takes the canonical [`AtomTable`] (the one flatten, via
 //! [`AtomTable::from_entities`]) plus a half-open flat-atom `range`, and
-//! returns one owned column over that range with the AtomWorks/Biotite edge
-//! de-vocab applied: the empty chain -> `"A"` fallback, the res-name /
-//! atom-name utf8-trim, the element symbol, and the `mol_type` -> str /
-//! `chain_type` -> i32 maps. Numeric columns hand back owned `Vec`s the numpy
-//! path moves in via `into_pyarray`; string columns hand back `Vec<String>`
-//! the consumer wraps with `numpy.array`. The full egress passes
-//! `0..table.len()`; the per-residue read passes that residue's contiguous run.
+//! returns one owned column over that range with the egress de-vocab applied:
+//! the empty chain -> `"A"` fallback, the res-name / atom-name utf8-trim, the
+//! element symbol, and the `mol_type` -> str / `chain_type` -> i32 maps.
+//! Numeric columns hand back owned `Vec`s the
+//! numpy path moves in via `into_pyarray`; string columns hand back
+//! `Vec<String>` the consumer wraps with `numpy.array`.
+//!
+//! [`PyAtomTable`]: crate::python::PyAtomTable
 
 use super::{molecule_type_to_chain_type_id, molecule_type_to_mol_type_str};
 use crate::adapters::table::AtomTable;
@@ -31,8 +32,8 @@ pub fn coords_flat(
 }
 
 /// Chain ids over `range`. Polymer atoms carry the real `label_asym_id`;
-/// non-polymer atoms arrive with an empty chain and fall back to `"A"` so
-/// biotite always sees a non-empty chain string.
+/// non-polymer atoms arrive with an empty chain and fall back to `"A"` so the
+/// egress consumer always sees a non-empty chain string.
 #[must_use]
 pub fn chain_ids(
     table: &AtomTable,

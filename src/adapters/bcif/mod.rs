@@ -26,7 +26,7 @@ use crate::ops::error::AdapterError;
 /// Returns [`AdapterError`] if the bytes cannot be parsed as valid
 /// BinaryCIF, contain multiple data blocks, or describe more chains than
 /// the printable-byte mapper can hold.
-pub fn bcif_to_entities(
+pub(crate) fn bcif_to_entities(
     bytes: &[u8],
 ) -> Result<Vec<MoleculeEntity>, AdapterError> {
     bcif_to_entities_with(bytes, Completion::Heavy)
@@ -44,25 +44,11 @@ pub fn bcif_to_entities(
 /// Returns [`AdapterError`] if the bytes cannot be parsed as valid
 /// BinaryCIF, contain multiple data blocks, or describe more chains than
 /// the printable-byte mapper can hold.
-pub fn bcif_to_entities_with(
+pub(crate) fn bcif_to_entities_with(
     bytes: &[u8],
     level: Completion,
 ) -> Result<Vec<MoleculeEntity>, AdapterError> {
     decode::decode_to_entities(bytes, level)
-}
-
-/// Load a BinaryCIF file and convert to entity list.
-///
-/// # Errors
-///
-/// Returns [`AdapterError`] if the file cannot be read or parsing fails.
-pub fn bcif_file_to_entities(
-    path: &Path,
-) -> Result<Vec<MoleculeEntity>, AdapterError> {
-    let bytes = std::fs::read(path).map_err(|e| {
-        AdapterError::InvalidFormat(format!("Failed to read file: {e}"))
-    })?;
-    bcif_to_entities(&bytes)
 }
 
 /// Decode BinaryCIF bytes into one entity list per `pdbx_PDB_model_num`.

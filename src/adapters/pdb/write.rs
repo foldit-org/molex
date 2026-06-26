@@ -22,7 +22,9 @@ use crate::ops::error::AdapterError;
 /// Returns [`AdapterError`] if the assembly exceeds any legacy PDB
 /// limit (>99,999 atoms, >62 polymer chains, >9,999 residues per chain),
 /// directing the caller to [`crate::adapters::cif::assembly_to_mmcif`].
-pub fn assembly_to_pdb(assembly: &Assembly) -> Result<String, AdapterError> {
+pub(crate) fn assembly_to_pdb(
+    assembly: &Assembly,
+) -> Result<String, AdapterError> {
     entities_to_pdb(assembly.entities())
 }
 

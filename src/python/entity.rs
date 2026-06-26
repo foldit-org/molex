@@ -7,17 +7,14 @@
 //! assembly's own entity), so it is `'static` and reads straight through the
 //! existing `MoleculeEntity` accessors. `PyResidue` holds the same
 //! `Arc<MoleculeEntity>` plus a residue index, so its scalar getters read
-//! through the entity's residue list and it can build its own atoms as numpy
-//! columns via the shared entities -> arrays core.
+//! through the entity's residue list.
 
 use std::sync::Arc;
 
 use pyo3::prelude::*;
 
-use super::arrays::{entities_to_arrays, table_to_arrays, AtomArrays};
 use super::resolve_index;
 use super::walk::{entity_kind_str, molecule_type_str};
-use crate::adapters::table::AtomTable;
 use crate::entity::molecule::polymer::Residue;
 use crate::entity::molecule::protein::ProteinEntity;
 use crate::entity::molecule::MoleculeEntity;
@@ -113,16 +110,6 @@ impl PyEntity {
             .unwrap_or_default()
     }
 
-    /// This entity's atoms as per-atom numpy columns (an `AtomArrays`),
-    /// via the shared entities -> arrays core.
-    ///
-    /// # Errors
-    ///
-    /// `PyErr` if numpy is unavailable or a numpy operation fails.
-    pub fn to_arrays(&self, py: Python) -> PyResult<AtomArrays> {
-        entities_to_arrays(py, std::slice::from_ref(&self.inner))
-    }
-
     /// Residue count; mirrors `len(assembly)` so `len(entity)` works too.
     #[must_use]
     pub fn __len__(&self) -> usize {
@@ -164,9 +151,8 @@ impl PyEntity {
 /// Python handle for one residue in a polymer entity.
 ///
 /// Holds an `Arc` refcount clone of the parent entity plus the residue's index,
-/// so its scalar getters read straight through the entity's residue list and
-/// `to_arrays()` can build the residue's own atoms as numpy columns. The index
-/// is always in range: every constructor (`Entity.residues` /
+/// so its scalar getters read straight through the entity's residue list. The
+/// index is always in range: every constructor (`Entity.residues` /
 /// `Entity.__getitem__`) bounds-checks against a polymer entity's residue list
 /// before building a `PyResidue`.
 #[pyclass(name = "Residue", module = "molex")]
@@ -239,23 +225,6 @@ impl PyResidue {
             .and_then(|r| r.ins_code)
             .filter(u8::is_ascii_graphic)
             .map(|b| (b as char).to_string())
-    }
-
-    /// This residue's atoms as per-atom numpy columns (an `AtomArrays`), via
-    /// the shared entities -> arrays core: the parent entity is flattened once
-    /// into an `AtomTable`, then this residue's contiguous flat run is
-    /// marshaled to numpy. The flat range comes from the native
-    /// [`MoleculeEntity::residue_flat_range`], which sums the prior residues'
-    /// atom counts in the same order [`AtomTable::from_entities`] flattens
-    /// them.
-    ///
-    /// # Errors
-    ///
-    /// `PyErr` if numpy is unavailable or a numpy operation fails.
-    pub fn to_arrays(&self, py: Python) -> PyResult<AtomArrays> {
-        let range = self.inner.residue_flat_range(self.residue_index);
-        let table = AtomTable::from_entities(std::slice::from_ref(&self.inner));
-        table_to_arrays(py, &table, range)
     }
 
     /// Concise repr: `<Residue {name} {seq_id}{ins_code}>`.

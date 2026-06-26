@@ -46,7 +46,7 @@ use crate::ops::error::AdapterError;
 /// # Errors
 ///
 /// Currently infallible but returns `Result` for API consistency.
-pub fn serialize_assembly(
+pub(crate) fn serialize_assembly(
     assembly: &Assembly,
 ) -> Result<Vec<u8>, AdapterError> {
     serialize_entities(assembly.entities())

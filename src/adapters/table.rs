@@ -9,8 +9,8 @@
 //! (flat rows -> entity hierarchy); `from_entities` is its inverse (entity
 //! hierarchy -> flat rows).
 //!
-//! Trusted, already-structured columnar input (the wire decoder, the Biotite
-//! bridge, the ML adapters) builds an `AtomTable` and calls `into_entities`.
+//! Trusted, already-structured columnar input (the wire decoder, the Python
+//! columnar interchange) builds an `AtomTable` and calls `into_entities`.
 //! Raw parser input does not go through here — it stays on `EntityBuilder`,
 //! which owns altloc dedup, modified-residue merge, and completion.
 
@@ -369,8 +369,8 @@ impl AtomTable {
     /// `raw_idx` is the atom's index within its entity's storage columns.
     ///
     /// Consumers that need to land per-entity-addressed data (e.g. bond
-    /// endpoints reported as `(entity, storage index)`) into flat
-    /// `to_arrays()` index space use this; the flat position is the vec index.
+    /// endpoints reported as `(entity, storage index)`) into flat atom index
+    /// space use this; the flat position is the vec index.
     /// Driven by the same `walk_flat_atoms` walk as `from_entities`, so the
     /// two never disagree on ordering.
     #[must_use]
@@ -393,8 +393,8 @@ impl AtomTable {
 /// atoms and residues.
 ///
 /// `into_entities` yields nothing for a zero-row run, so the trusted columnar
-/// decoders (wire headers, Biotite entity groups) that synthesize entities
-/// one at a time fall back to this when a group decodes to no atoms — an
+/// decoders (wire headers) that synthesize entities one at a time fall back to
+/// this when a group decodes to no atoms — an
 /// unreachable-in-practice path (groups always carry at least one atom) that
 /// keeps the entity count aligned with the input group count. Polymers carry
 /// `chain_id`; non-polymers take a blank residue name and (for `Bulk`) a
@@ -446,7 +446,7 @@ struct FlatRow<'a> {
     res_name: [u8; 3],
 }
 
-/// Visit every atom of `entities` in the canonical `to_arrays()` / wire order:
+/// Visit every atom of `entities` in the canonical flat / wire order:
 /// entities in slice order; within a polymer, atoms in residue order via each
 /// residue's `atom_range` (an atom referenced by no range is skipped); within
 /// a non-polymer, raw storage order. The one place this ordering and the

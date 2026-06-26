@@ -22,10 +22,7 @@ use criterion::{
     black_box, criterion_group, criterion_main, BenchmarkId, Criterion,
     Throughput,
 };
-use molex::adapters::bcif::bcif_to_entities;
-use molex::adapters::cif::mmcif_str_to_entities;
-use molex::adapters::pdb::pdb_str_to_entities;
-use molex::MoleculeEntity;
+use molex::Assembly;
 
 /// A structure's three serialized forms, as in-memory bytes/strings.
 struct Fixture {
@@ -43,10 +40,11 @@ struct Fixture {
 }
 
 fn atom_count(cif: &str) -> u64 {
-    mmcif_str_to_entities(cif)
+    Assembly::from_mmcif(cif)
         .unwrap()
+        .entities()
         .iter()
-        .map(MoleculeEntity::atom_count)
+        .map(|e| e.atom_count())
         .sum::<usize>() as u64
 }
 
@@ -121,7 +119,7 @@ fn bench_parse(c: &mut Criterion) {
                 BenchmarkId::new("pdb", fx.name),
                 &fx.pdb,
                 |b, pdb| {
-                    b.iter(|| pdb_str_to_entities(black_box(pdb)).unwrap());
+                    b.iter(|| Assembly::from_pdb(black_box(pdb)).unwrap());
                 },
             );
         }
@@ -129,7 +127,7 @@ fn bench_parse(c: &mut Criterion) {
             BenchmarkId::new("mmcif", fx.name),
             &fx.cif,
             |b, cif| {
-                b.iter(|| mmcif_str_to_entities(black_box(cif)).unwrap());
+                b.iter(|| Assembly::from_mmcif(black_box(cif)).unwrap());
             },
         );
         if fx.has_bcif {
@@ -137,7 +135,7 @@ fn bench_parse(c: &mut Criterion) {
                 BenchmarkId::new("bcif", fx.name),
                 &fx.bcif,
                 |b, bcif| {
-                    b.iter(|| bcif_to_entities(black_box(bcif)).unwrap());
+                    b.iter(|| Assembly::from_bcif(black_box(bcif)).unwrap());
                 },
             );
         }

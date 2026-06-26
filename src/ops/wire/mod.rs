@@ -6,7 +6,7 @@
 //! in the per-entity header (lifting any single-byte chain cap) and atom
 //! rows are 25 bytes.
 //!
-//! See [`crate::ops::wire::serialize_assembly`] for the byte layout.
+//! See `serialize_assembly` for the byte layout.
 
 pub mod delta;
 pub(crate) mod deserialize;
@@ -65,8 +65,8 @@ pub fn assembly_bytes(
     serialize::serialize_entities(entities)
 }
 
-pub use deserialize::deserialize_assembly;
-pub use serialize::serialize_assembly;
+pub(crate) use deserialize::deserialize_assembly;
+pub(crate) use serialize::serialize_assembly;
 
 impl crate::Assembly {
     /// Decode an `Assembly` from the binary wire format.
@@ -86,8 +86,7 @@ impl crate::Assembly {
     ///
     /// # Errors
     ///
-    /// Currently infallible but returns `Result` for API consistency with
-    /// [`serialize_assembly`].
+    /// Currently infallible but returns `Result` for API consistency.
     pub fn to_bytes(&self) -> Result<Vec<u8>, AdapterError> {
         serialize_assembly(self)
     }

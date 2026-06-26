@@ -24,11 +24,10 @@ use criterion::{
     Throughput,
 };
 use glam::Vec3;
-use molex::adapters::cif::mmcif_str_to_entities;
 use molex::analysis::sasa::DEFAULT_N_POINTS;
-use molex::analysis::{assembly_sasa, infer_bonds, ContactLevel};
+use molex::analysis::{infer_bonds, ContactLevel};
 use molex::ops::transform::kabsch_alignment;
-use molex::{Assembly, MoleculeEntity};
+use molex::Assembly;
 
 /// A real structure parsed into an `Assembly`.
 struct Fixture {
@@ -62,12 +61,12 @@ fn load_fixtures() -> Vec<Fixture> {
         let Ok(cif) = std::fs::read_to_string(&path) else {
             continue;
         };
-        let entities = mmcif_str_to_entities(&cif).unwrap();
-        let atoms = entities
+        let assembly = Assembly::from_mmcif(&cif).unwrap();
+        let atoms = assembly
+            .entities()
             .iter()
-            .map(MoleculeEntity::atom_count)
+            .map(|e| e.atom_count())
             .sum::<usize>() as u64;
-        let assembly = Assembly::new(entities);
         out.push(Fixture {
             name,
             assembly,
@@ -125,7 +124,7 @@ fn bench_sasa(c: &mut Criterion, fixtures: &[Fixture]) {
             BenchmarkId::new("assembly_sasa", fx.name),
             &fx.assembly,
             |b, asm| {
-                b.iter(|| assembly_sasa(black_box(asm), 1.4, DEFAULT_N_POINTS));
+                b.iter(|| black_box(asm).sasa(1.4, DEFAULT_N_POINTS));
             },
         );
     }

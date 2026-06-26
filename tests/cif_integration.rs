@@ -10,8 +10,8 @@
 
 use std::path::PathBuf;
 
-use molex::adapters::cif::{mmcif_file_to_all_models, mmcif_file_to_entities};
-use molex::{MoleculeEntity, MoleculeType};
+use molex::adapters::cif::mmcif_file_to_all_models;
+use molex::{Assembly, MoleculeEntity, MoleculeType};
 
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -20,7 +20,7 @@ fn fixture(name: &str) -> PathBuf {
 }
 
 fn load(name: &str) -> Vec<MoleculeEntity> {
-    mmcif_file_to_entities(&fixture(name)).unwrap()
+    Assembly::from_file(&fixture(name)).unwrap().into_entities()
 }
 
 fn protein_count(es: &[MoleculeEntity]) -> usize {
@@ -170,7 +170,7 @@ fn formal_charge_field_populated() {
 
 #[test]
 fn multi_block_input_refuses_with_clear_message() {
-    let err = mmcif_file_to_entities(&fixture("multi_block.cif")).unwrap_err();
+    let err = Assembly::from_file(&fixture("multi_block.cif")).unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("data blocks"), "msg: {msg}");
 }
@@ -252,10 +252,13 @@ fn all_cif_fixtures_parse_or_refuse_cleanly() {
         }
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         let expect_refuse = name == "multi_block.cif";
-        match mmcif_file_to_entities(&path) {
-            Ok(es) => {
+        match Assembly::from_file(&path) {
+            Ok(asm) => {
                 assert!(!expect_refuse, "{name}: expected refuse, got Ok");
-                assert!(!es.is_empty(), "{name}: empty entity list");
+                assert!(
+                    !asm.entities().is_empty(),
+                    "{name}: empty entity list"
+                );
             }
             Err(e) => {
                 assert!(expect_refuse, "{name}: unexpected parse failure: {e}");

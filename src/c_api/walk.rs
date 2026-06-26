@@ -8,8 +8,8 @@
 //!
 //! The per-atom walk (`molex_entity_atom` + the `molex_atom_*`
 //! accessors) is the C-side equivalent of the Python binding's
-//! columnar atom read (`Entity.to_arrays()` / `AtomArrays`): C consumers
-//! iterate atom handles, Python consumers receive numpy columns. The two
+//! columnar atom read (`PyAtomTable`): C consumers iterate atom
+//! handles, Python consumers receive numpy columns. The two
 //! atom-read shapes are intentionally different per ecosystem and are not
 //! a symmetry gap to close. The entity-scalar and residue accessors below
 //! mirror the Python `Entity` / `Residue` getters one-for-one, with one

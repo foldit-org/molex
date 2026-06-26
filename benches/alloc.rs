@@ -25,10 +25,6 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Relaxed;
 
-use molex::adapters::bcif::bcif_to_entities;
-use molex::adapters::cif::{assembly_to_mmcif, mmcif_str_to_entities};
-use molex::adapters::pdb::{assembly_to_pdb, pdb_str_to_entities};
-use molex::entity::molecule::MoleculeEntity;
 use molex::Assembly;
 
 /// `System` allocator that tallies live allocation count and total bytes.
@@ -142,8 +138,8 @@ fn load_fixtures() -> Vec<Fixture> {
     out
 }
 
-fn atom_count(entities: &[MoleculeEntity]) -> usize {
-    entities.iter().map(MoleculeEntity::atom_count).sum()
+fn atom_count(assembly: &Assembly) -> usize {
+    assembly.entities().iter().map(|e| e.atom_count()).sum()
 }
 
 /// One measured row of the parse table.
@@ -179,35 +175,35 @@ fn parse_rows(fixtures: &[Fixture]) -> Vec<Row> {
     let mut rows = Vec::new();
     for fx in fixtures {
         if fx.has_pdb {
-            let (entities, allocs, bytes) =
-                measure(|| pdb_str_to_entities(&fx.pdb).unwrap());
+            let (assembly, allocs, bytes) =
+                measure(|| Assembly::from_pdb(&fx.pdb).unwrap());
             rows.push(Row {
                 op: "parse",
                 format: "pdb",
                 structure: fx.name,
-                atoms: atom_count(&entities),
+                atoms: atom_count(&assembly),
                 allocs,
                 bytes,
             });
         }
-        let (entities, allocs, bytes) =
-            measure(|| mmcif_str_to_entities(&fx.cif).unwrap());
+        let (assembly, allocs, bytes) =
+            measure(|| Assembly::from_mmcif(&fx.cif).unwrap());
         rows.push(Row {
             op: "parse",
             format: "mmcif",
             structure: fx.name,
-            atoms: atom_count(&entities),
+            atoms: atom_count(&assembly),
             allocs,
             bytes,
         });
         if fx.has_bcif {
-            let (entities, allocs, bytes) =
-                measure(|| bcif_to_entities(&fx.bcif).unwrap());
+            let (assembly, allocs, bytes) =
+                measure(|| Assembly::from_bcif(&fx.bcif).unwrap());
             rows.push(Row {
                 op: "parse",
                 format: "bcif",
                 structure: fx.name,
-                atoms: atom_count(&entities),
+                atoms: atom_count(&assembly),
                 allocs,
                 bytes,
             });
@@ -220,13 +216,11 @@ fn write_rows(fixtures: &[Fixture]) -> Vec<Row> {
     let mut rows = Vec::new();
     for fx in fixtures {
         // Parse outside the measured region so only the write is counted.
-        let entities = mmcif_str_to_entities(&fx.cif).unwrap();
-        let atoms = atom_count(&entities);
-        let assembly = Assembly::new(entities);
+        let assembly = Assembly::from_mmcif(&fx.cif).unwrap();
+        let atoms = atom_count(&assembly);
 
         if fx.has_pdb {
-            let (_, allocs, bytes) =
-                measure(|| assembly_to_pdb(&assembly).unwrap());
+            let (_, allocs, bytes) = measure(|| assembly.to_pdb().unwrap());
             rows.push(Row {
                 op: "write",
                 format: "pdb",
@@ -236,7 +230,7 @@ fn write_rows(fixtures: &[Fixture]) -> Vec<Row> {
                 bytes,
             });
         }
-        let (_, allocs, bytes) = measure(|| assembly_to_mmcif(&assembly));
+        let (_, allocs, bytes) = measure(|| assembly.to_mmcif());
         rows.push(Row {
             op: "write",
             format: "mmcif",

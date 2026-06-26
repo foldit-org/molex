@@ -207,14 +207,21 @@ impl AtomColumns {
     }
 }
 
-/// Pack an atom-name string into the 4-byte, left-justified, space-padded
-/// buffer every parser uses for [`Atom::name`] (PDB-column convention).
-/// Inputs longer than 4 bytes are truncated to the first 4.
+/// Pack a token into an `N`-byte, left-justified, space-padded buffer
+/// (truncating inputs longer than `N`). The shared name convention for atom
+/// names (`N = 4`) and residue names (`N = 3`).
 #[must_use]
-pub(crate) fn pad_atom_name(name: &str) -> [u8; 4] {
-    let mut buf = [b' '; 4];
-    for (slot, byte) in buf.iter_mut().zip(name.bytes().take(4)) {
+pub(crate) fn pad_name<const N: usize>(token: &str) -> [u8; N] {
+    let mut buf = [b' '; N];
+    for (slot, byte) in buf.iter_mut().zip(token.bytes().take(N)) {
         *slot = byte;
     }
     buf
+}
+
+/// Pack an atom-name string into the 4-byte, left-justified, space-padded
+/// buffer every parser uses for [`Atom::name`] (PDB-column convention).
+#[must_use]
+pub(crate) fn pad_atom_name(name: &str) -> [u8; 4] {
+    pad_name::<4>(name)
 }

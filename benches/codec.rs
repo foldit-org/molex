@@ -17,8 +17,6 @@ use criterion::{
     black_box, criterion_group, criterion_main, BenchmarkId, Criterion,
     Throughput,
 };
-use molex::adapters::cif::mmcif_str_to_entities;
-use molex::ops::wire::{deserialize_assembly, serialize_assembly};
 use molex::Assembly;
 
 fn assembly_atoms(asm: &Assembly) -> u64 {
@@ -34,7 +32,7 @@ fn load_assembly(name: &str) -> Assembly {
     let cif =
         std::fs::read_to_string(committed_dir().join(format!("{name}.cif")))
             .unwrap();
-    Assembly::new(mmcif_str_to_entities(&cif).unwrap())
+    Assembly::from_mmcif(&cif).unwrap()
 }
 
 fn bench_assembly_roundtrip(c: &mut Criterion) {
@@ -42,7 +40,7 @@ fn bench_assembly_roundtrip(c: &mut Criterion) {
 
     for name in ["1ubq", "4hhb"] {
         let assembly = load_assembly(name);
-        let bytes = serialize_assembly(&assembly).unwrap();
+        let bytes = assembly.to_bytes().unwrap();
 
         // Per-atom normalization: both directions move the same atom set.
         group.throughput(Throughput::Elements(assembly_atoms(&assembly)));
@@ -51,7 +49,7 @@ fn bench_assembly_roundtrip(c: &mut Criterion) {
             BenchmarkId::new("serialize", name),
             &assembly,
             |b, assembly| {
-                b.iter(|| serialize_assembly(black_box(assembly)).unwrap());
+                b.iter(|| black_box(assembly).to_bytes().unwrap());
             },
         );
 
@@ -59,7 +57,7 @@ fn bench_assembly_roundtrip(c: &mut Criterion) {
             BenchmarkId::new("deserialize", name),
             &bytes,
             |b, bytes| {
-                b.iter(|| deserialize_assembly(black_box(bytes)).unwrap());
+                b.iter(|| Assembly::from_bytes(black_box(bytes)).unwrap());
             },
         );
     }

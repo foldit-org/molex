@@ -48,9 +48,14 @@ mmcif_file_to_all_models(path: &Path)
 
 Decodes BinaryCIF (MessagePack-encoded CIF) with column-level codecs.
 
+BinaryCIF is parsed from bytes, not a path: read the file and build an
+`Assembly` directly. `Assembly::from_file` covers only the text formats
+(`.pdb`/`.ent`/`.cif`/`.mmcif`), so `.bcif` callers read the bytes themselves.
+
 ```rust,ignore
-bcif_file_to_entities(path: &Path) -> Result<Vec<MoleculeEntity>, AdapterError>
-bcif_to_entities(data: &[u8]) -> Result<Vec<MoleculeEntity>, AdapterError>
+Assembly::from_bcif(bytes: &[u8]) -> Result<Assembly, AdapterError>
+Assembly::from_bcif_with(bytes: &[u8], level: Completion)
+    -> Result<Assembly, AdapterError>
 
 // One entity list per pdbx_PDB_model_num
 bcif_to_all_models(bytes: &[u8])
@@ -80,17 +85,8 @@ pub struct DcdFrame { pub x: Vec<f32>, pub y: Vec<f32>, pub z: Vec<f32> }
 pub struct DcdReader<R> { /* streaming reader */ }
 ```
 
-## AtomWorks (`adapters::atomworks`, feature = `python`)
+## AtomWorks vocab (`adapters::atomworks`, feature = `python`)
 
-Bidirectional conversion between molex entities and Biotite `AtomArray` objects with AtomWorks annotations. Requires the `python` feature.
+Molecule-type vocabulary maps (`MoleculeType` <-> AtomWorks `chain_type` / `mol_type`) and the `columns` de-vocab layer that marshals a native `AtomTable` into the vocab-bearing per-atom columns the Python interchange exposes. No runtime dependency on AtomWorks or Biotite. Requires the `python` feature.
 
-Entity-aware functions (preserve molecule type, entity ID, chain grouping):
-
-```rust,ignore
-entities_to_atom_array(assembly_bytes: Vec<u8>) -> PyResult<PyObject>
-entities_to_atom_array_plus(assembly_bytes: Vec<u8>) -> PyResult<PyObject>
-atom_array_to_entities(atom_array: PyObject) -> PyResult<Vec<u8>>
-entities_to_atom_array_parsed(assembly_bytes: Vec<u8>, filename: &str) -> PyResult<PyObject>
-parse_file_to_entities(path: &str) -> PyResult<Vec<u8>>
-parse_file_full(path: &str) -> PyResult<PyObject>
-```
+The Python-facing columnar interchange built on this layer is `PyAtomTable`; see the [Python bindings](python.md) page.

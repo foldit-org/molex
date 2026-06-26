@@ -17,7 +17,7 @@ use std::path::Path;
 
 pub use dom::{Block, ColumnIter, Columns, Document, Loop, RowIter, Value};
 pub use parse::{parse, CifParseError};
-pub use write::assembly_to_mmcif;
+pub(crate) use write::assembly_to_mmcif;
 
 use crate::element::Element;
 use crate::entity::molecule::{BuildError, Completion, MoleculeEntity};
@@ -72,7 +72,7 @@ fn map_build_error(err: &BuildError) -> AdapterError {
 /// # Errors
 ///
 /// Returns [`AdapterError`] if parsing fails.
-pub fn mmcif_str_to_entities(
+pub(crate) fn mmcif_str_to_entities(
     cif_str: &str,
 ) -> Result<Vec<MoleculeEntity>, AdapterError> {
     mmcif_str_to_entities_with(cif_str, Completion::Heavy)
@@ -89,7 +89,7 @@ pub fn mmcif_str_to_entities(
 /// # Errors
 ///
 /// Returns [`AdapterError`] if parsing fails.
-pub fn mmcif_str_to_entities_with(
+pub(crate) fn mmcif_str_to_entities_with(
     cif_str: &str,
     level: Completion,
 ) -> Result<Vec<MoleculeEntity>, AdapterError> {
@@ -104,7 +104,7 @@ pub fn mmcif_str_to_entities_with(
 /// # Errors
 ///
 /// Returns [`AdapterError`] if the file cannot be read or parsing fails.
-pub fn mmcif_file_to_entities(
+pub(crate) fn mmcif_file_to_entities(
     path: &Path,
 ) -> Result<Vec<MoleculeEntity>, AdapterError> {
     let content = std::fs::read_to_string(path).map_err(|e| {

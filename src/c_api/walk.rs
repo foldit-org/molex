@@ -113,11 +113,11 @@ pub extern "C" fn molex_entity_kind(
         .map_or(molex_EntityKind::Bulk, |e| e.entity_kind().into())
 }
 
-/// First PDB chain-identifier byte for polymer entities.
+/// First PDB chain-identifier byte for an entity (polymer or non-polymer).
 ///
-/// Returns -1 when the entity has no chain id (small molecule / bulk),
-/// when `entity` is null, or when the chain id is multi-character and so
-/// cannot be represented as a single byte.
+/// Returns -1 when the entity has no chain id, when `entity` is null, or
+/// when the chain id is multi-character and so cannot be represented as a
+/// single byte.
 ///
 /// Chain ids are arbitrary strings (mmCIF `label_asym_id`); ribosome and
 /// capsid assemblies use multi-character ids ("AA", "AB"). Use
@@ -140,8 +140,8 @@ pub extern "C" fn molex_entity_pdb_chain_id(
 /// Pointer to this entity's full PDB chain-identifier UTF-8 bytes.
 ///
 /// The chain id is the mmCIF `label_asym_id`. Writes the byte length to
-/// `out_len` on success. Returns null and writes 0 for a non-polymer
-/// entity (small molecule / bulk) or a null `entity`.
+/// `out_len` on success. Returns null and writes 0 for an entity with no
+/// chain id or a null `entity`.
 ///
 /// The pointer borrows the entity's owned chain string and is valid for
 /// the entity's lifetime; the buffer is not NUL-terminated, so callers
@@ -639,12 +639,15 @@ mod tests {
         let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
         assert_eq!(bytes, b"A");
 
-        // Non-polymer entity (ligand at index 1) has no chain id.
+        // Non-polymer entities carry their chain id too (the ligand at
+        // index 1 was built on chain "B").
         let ligand = molex_assembly_entity(asm, 1);
         let mut lig_len: usize = 7;
         let lig_ptr = molex_entity_chain_id(ligand, &raw mut lig_len);
-        assert!(lig_ptr.is_null());
-        assert_eq!(lig_len, 0);
+        assert!(!lig_ptr.is_null());
+        assert_eq!(lig_len, 1);
+        let lig_bytes = unsafe { std::slice::from_raw_parts(lig_ptr, lig_len) };
+        assert_eq!(lig_bytes, b"B");
 
         // Null entity writes 0 and returns null.
         let mut null_len: usize = 9;

@@ -904,11 +904,11 @@ molex_EntityKind molex_entity_kind(const molex_Entity *entity)
 ;
 
 /**
- * First PDB chain-identifier byte for polymer entities.
+ * First PDB chain-identifier byte for an entity (polymer or non-polymer).
  *
- * Returns -1 when the entity has no chain id (small molecule / bulk),
- * when `entity` is null, or when the chain id is multi-character and so
- * cannot be represented as a single byte.
+ * Returns -1 when the entity has no chain id, when `entity` is null, or
+ * when the chain id is multi-character and so cannot be represented as a
+ * single byte.
  *
  * Chain ids are arbitrary strings (mmCIF `label_asym_id`); ribosome and
  * capsid assemblies use multi-character ids ("AA", "AB"). Use
@@ -924,8 +924,8 @@ int32_t molex_entity_pdb_chain_id(const molex_Entity *entity)
  * Pointer to this entity's full PDB chain-identifier UTF-8 bytes.
  *
  * The chain id is the mmCIF `label_asym_id`. Writes the byte length to
- * `out_len` on success. Returns null and writes 0 for a non-polymer
- * entity (small molecule / bulk) or a null `entity`.
+ * `out_len` on success. Returns null and writes 0 for an entity with no
+ * chain id or a null `entity`.
  *
  * The pointer borrows the entity's owned chain string and is valid for
  * the entity's lifetime; the buffer is not NUL-terminated, so callers

@@ -90,9 +90,10 @@ fn parsed_entities_expose_object_accessors() {
     assert_eq!(prot.residues().map_or(0, <[_]>::len), 2);
     assert!(prot.atom_count() >= 9);
 
-    // Zinc ion: a non-polymer entity has no chain id and no residues.
+    // Zinc ion: a non-polymer entity carries its source chain but no
+    // residues.
     let ion = &entities[1];
-    assert_eq!(ion.pdb_chain_id(), None);
+    assert_eq!(ion.pdb_chain_id(), Some("B"));
     assert!(ion.residues().is_none());
 }
 

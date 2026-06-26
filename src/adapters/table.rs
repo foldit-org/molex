@@ -210,6 +210,7 @@ impl AtomTable {
             }
             MoleculeType::Water | MoleculeType::Solvent => {
                 let residue_name = self.res_name[range.start];
+                let chain_id = self.chain_id[range.start].to_string();
                 let molecule_count = self.distinct_chain_res(range.clone());
                 let atoms = range.map(|i| self.atom(i)).collect();
                 MoleculeEntity::Bulk(BulkEntity::new(
@@ -218,6 +219,7 @@ impl AtomTable {
                     atoms,
                     residue_name,
                     molecule_count,
+                    chain_id,
                 ))
             }
             MoleculeType::Ligand
@@ -225,12 +227,14 @@ impl AtomTable {
             | MoleculeType::Cofactor
             | MoleculeType::Lipid => {
                 let residue_name = self.res_name[range.start];
+                let chain_id = self.chain_id[range.start].to_string();
                 let atoms = range.map(|i| self.atom(i)).collect();
                 MoleculeEntity::SmallMolecule(SmallMoleculeEntity::new(
                     id,
                     mol_type,
                     atoms,
                     residue_name,
+                    chain_id,
                 ))
             }
         }
@@ -305,8 +309,8 @@ impl AtomTable {
     /// hierarchy keys to per-atom columns: polymers carry their real chain id
     /// and each residue's `(label_seq_id, name)`, walked in residue order over
     /// each `atom_range` (an atom referenced by no range is skipped); a
-    /// `SmallMolecule` carries an empty chain, `res_id` 1, and its residue
-    /// name; a `Bulk` carries an empty chain, a per-atom `res_id` of
+    /// `SmallMolecule` carries its chain id, `res_id` 1, and its residue
+    /// name; a `Bulk` carries its chain id, a per-atom `res_id` of
     /// `raw_idx + 1`, and its residue name.
     #[must_use]
     pub fn from_entities<E: std::borrow::Borrow<MoleculeEntity>>(
@@ -416,14 +420,20 @@ pub(crate) fn empty_entity(
             NAEntity::new(id, mol_type, Vec::new(), Vec::new(), chain_id),
         ),
         MoleculeType::Water | MoleculeType::Solvent => MoleculeEntity::Bulk(
-            BulkEntity::new(id, mol_type, Vec::new(), res_name, 0),
+            BulkEntity::new(id, mol_type, Vec::new(), res_name, 0, chain_id),
         ),
         MoleculeType::Ligand
         | MoleculeType::Ion
         | MoleculeType::Cofactor
-        | MoleculeType::Lipid => MoleculeEntity::SmallMolecule(
-            SmallMoleculeEntity::new(id, mol_type, Vec::new(), res_name),
-        ),
+        | MoleculeType::Lipid => {
+            MoleculeEntity::SmallMolecule(SmallMoleculeEntity::new(
+                id,
+                mol_type,
+                Vec::new(),
+                res_name,
+                chain_id,
+            ))
+        }
     }
 }
 
@@ -435,7 +445,7 @@ pub(crate) fn empty_entity(
 /// (the `raw_idx` is the storage-column index); the flat index is just the
 /// visit order. `chain_id`/`res_name`/`res_id`/`mol_type` are the
 /// hierarchy-projected keys (a non-polymer atom carries the entity's residue
-/// name, an empty chain, and a synthetic residue number).
+/// name, the entity's chain, and a synthetic residue number).
 struct FlatRow<'a> {
     entity_raw_id: u32,
     raw_idx: u32,
@@ -489,7 +499,7 @@ fn walk_flat_atoms<E: std::borrow::Borrow<MoleculeEntity>>(
                         entity_raw_id,
                         raw_idx: raw_idx as u32,
                         columns,
-                        chain_id: "",
+                        chain_id: &e.pdb_chain_id,
                         mol_type,
                         res_id: 1,
                         res_name: e.residue_name,
@@ -502,7 +512,7 @@ fn walk_flat_atoms<E: std::borrow::Borrow<MoleculeEntity>>(
                         entity_raw_id,
                         raw_idx: raw_idx as u32,
                         columns,
-                        chain_id: "",
+                        chain_id: &e.pdb_chain_id,
                         mol_type,
                         res_id: (raw_idx as i32) + 1,
                         res_name: e.residue_name,
@@ -799,10 +809,13 @@ mod tests {
                 mk_atom(*b"O1  ", Element::O, Vec3::new(11.0, 0.0, 0.0)),
             ],
             *b"LIG",
+            String::from("B"),
         ));
 
         // A bulk water with molecule_count == atom_count, the round-trippable
-        // case (from_entities synthesizes a distinct res_id per atom).
+        // case (from_entities synthesizes a distinct res_id per atom). Its
+        // chain differs from the protein's so the round-trip exercises
+        // non-polymer chain preservation.
         let water = MoleculeEntity::Bulk(BulkEntity::new(
             alloc.allocate(),
             MoleculeType::Water,
@@ -812,6 +825,7 @@ mod tests {
             ],
             *b"HOH",
             2,
+            String::from("W"),
         ));
 
         let entities = vec![protein, ligand, water];

@@ -175,6 +175,7 @@ fn incompatible_variety_errors() {
         MoleculeType::Ligand,
         vec![atom_at("C1", Element::C, 0.0)],
         res_bytes("LIG"),
+        String::from("B"),
     ));
     assert_eq!(
         a.diff(&lig).unwrap_err(),

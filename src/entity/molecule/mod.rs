@@ -368,13 +368,20 @@ impl MoleculeEntity {
         }
     }
 
-    /// PDB chain identifier for polymer entities, `None` for others.
+    /// PDB chain identifier the entity came in on, or `None` when the source
+    /// carried no chain (an empty `pdb_chain_id`).
     #[must_use]
     pub fn pdb_chain_id(&self) -> Option<&str> {
-        match self {
-            MoleculeEntity::Protein(e) => Some(&e.pdb_chain_id),
-            MoleculeEntity::NucleicAcid(e) => Some(&e.pdb_chain_id),
-            _ => None,
+        let chain = match self {
+            MoleculeEntity::Protein(e) => &e.pdb_chain_id,
+            MoleculeEntity::NucleicAcid(e) => &e.pdb_chain_id,
+            MoleculeEntity::SmallMolecule(e) => &e.pdb_chain_id,
+            MoleculeEntity::Bulk(e) => &e.pdb_chain_id,
+        };
+        if chain.is_empty() {
+            None
+        } else {
+            Some(chain)
         }
     }
 
@@ -579,6 +586,7 @@ mod tests {
             atoms,
             res_bytes("HOH"),
             positions.len(),
+            String::from("W"),
         ))
     }
 
@@ -590,6 +598,7 @@ mod tests {
             MoleculeType::Ion,
             atoms,
             res_bytes("ZN"),
+            String::from("B"),
         ))
     }
 

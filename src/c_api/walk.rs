@@ -568,6 +568,7 @@ mod tests {
             MoleculeType::Ligand,
             vec![mk_atom(*b"C1  ", Element::C, Vec3::new(10.0, 0.0, 0.0))],
             *b"LIG",
+            String::from("B"),
         ));
 
         let assembly = Assembly::new(vec![protein, ligand]);

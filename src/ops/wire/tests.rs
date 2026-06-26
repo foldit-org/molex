@@ -73,12 +73,14 @@ fn assembly_bytes_roundtrip_mixed() {
         MoleculeType::Ligand,
         vec![atom_at("C1", Element::C, 10.0)],
         res_bytes("ATP"),
+        String::from("B"),
     ));
     let zinc = MoleculeEntity::SmallMolecule(SmallMoleculeEntity::new(
         allocator.allocate(),
         MoleculeType::Ion,
         vec![atom_at("ZN", Element::Zn, 20.0)],
         res_bytes("ZN"),
+        String::from("C"),
     ));
 
     let entities = vec![protein, ligand, zinc];
@@ -152,6 +154,7 @@ fn assembly_bytes_single_atom_ion() {
         MoleculeType::Ion,
         vec![atom_at("ZN", Element::Zn, 5.5)],
         res_bytes("ZN"),
+        String::from("B"),
     ));
     let entities = vec![ion];
     let bytes = assembly_bytes(&entities).unwrap();
@@ -310,6 +313,7 @@ fn assembly_bytes_water_roundtrip() {
         atoms,
         res_bytes("HOH"),
         2,
+        String::from("W"),
     ));
     let entities = vec![water];
 
@@ -318,6 +322,48 @@ fn assembly_bytes_water_roundtrip() {
     assert_eq!(rt.entities()[0].molecule_type(), MoleculeType::Water);
     assert_eq!(rt.entities()[0].atom_count(), 2);
     assert_eq!(rt.entities()[0].as_bulk().unwrap().molecule_count, 2);
+}
+
+#[test]
+fn assembly_bytes_preserves_nonpolymer_chains() {
+    // Regression guard: a non-polymer's chain must survive the assembly-bytes
+    // round-trip. A water and a ligand on chains distinct from the chain-A
+    // protein must not collapse onto "A" on egress (the collision that made a
+    // downstream `(chain, res_id)` tokenizer see two residues at A/1).
+    let mut allocator = EntityIdAllocator::new();
+
+    let protein = MoleculeEntity::Protein(ProteinEntity::new(
+        allocator.allocate(),
+        ala_residue_atoms(1.0),
+        vec![residue("MET", 1, 0..4)],
+        "A".to_owned(),
+    ));
+    let water = MoleculeEntity::Bulk(BulkEntity::new(
+        allocator.allocate(),
+        MoleculeType::Water,
+        vec![
+            atom_at("O", Element::O, 30.0),
+            atom_at("O", Element::O, 31.0),
+        ],
+        res_bytes("HOH"),
+        2,
+        String::from("W"),
+    ));
+    let ligand = MoleculeEntity::SmallMolecule(SmallMoleculeEntity::new(
+        allocator.allocate(),
+        MoleculeType::Ligand,
+        vec![atom_at("C1", Element::C, 40.0)],
+        res_bytes("ATP"),
+        String::from("B"),
+    ));
+
+    let entities = vec![protein, water, ligand];
+    let bytes = assembly_bytes(&entities).unwrap();
+    let rt = deserialize_assembly(&bytes).unwrap();
+
+    let chains: Vec<Option<&str>> =
+        rt.entities().iter().map(|e| e.pdb_chain_id()).collect();
+    assert_eq!(chains, vec![Some("A"), Some("W"), Some("B")]);
 }
 
 #[test]

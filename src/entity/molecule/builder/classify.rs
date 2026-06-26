@@ -33,10 +33,11 @@ pub(super) fn classify_chain(
             residues,
             MoleculeType::Water,
             DEFAULT_WATER_RESNAME,
+            chain_id,
             ctx,
         ),
         ExpectedEntityType::NonPolymer => {
-            emit_non_polymer_chain(residues, ctx);
+            emit_non_polymer_chain(chain_id, residues, ctx);
         }
         ExpectedEntityType::Unknown => {
             emit_unknown_chain(chain_id, residues, ctx);
@@ -88,6 +89,7 @@ fn emit_chain_bulk(
     residues: &[ResidueAccum],
     mol_type: MoleculeType,
     default_resname: [u8; 3],
+    chain_id: &str,
     ctx: &mut ChainCtx,
 ) {
     if residues.is_empty() {
@@ -109,10 +111,12 @@ fn emit_chain_bulk(
         atoms,
         residue_name,
         residues.len(),
+        chain_id.to_owned(),
     )));
 }
 
 fn emit_single_residue_small_molecule(
+    chain_id: &str,
     r: &ResidueAccum,
     mol_type: MoleculeType,
     ctx: &mut ChainCtx,
@@ -125,19 +129,25 @@ fn emit_single_residue_small_molecule(
             mol_type,
             atoms,
             r.label_comp_id,
+            chain_id.to_owned(),
         )));
 }
 
-fn emit_non_polymer_chain(residues: &[ResidueAccum], ctx: &mut ChainCtx) {
+fn emit_non_polymer_chain(
+    chain_id: &str,
+    residues: &[ResidueAccum],
+    ctx: &mut ChainCtx,
+) {
     for r in residues {
         let mol_type = classify_residue(trim_res_name(&r.label_comp_id));
         match mol_type {
-            MoleculeType::Water => ctx.water.ingest(r),
-            MoleculeType::Solvent => ctx.solvent.ingest(r),
+            MoleculeType::Water => ctx.water.ingest(chain_id, r),
+            MoleculeType::Solvent => ctx.solvent.ingest(chain_id, r),
             MoleculeType::Protein | MoleculeType::DNA | MoleculeType::RNA => {
                 // Hint says non-polymer; backbone-bearing residues fall
                 // back to Ligand rather than building a polymer.
                 emit_single_residue_small_molecule(
+                    chain_id,
                     r,
                     MoleculeType::Ligand,
                     ctx,
@@ -147,7 +157,7 @@ fn emit_non_polymer_chain(residues: &[ResidueAccum], ctx: &mut ChainCtx) {
             | MoleculeType::Ion
             | MoleculeType::Cofactor
             | MoleculeType::Lipid => {
-                emit_single_residue_small_molecule(r, mol_type, ctx);
+                emit_single_residue_small_molecule(chain_id, r, mol_type, ctx);
             }
         }
     }
@@ -313,10 +323,10 @@ fn emit_unknown_chain(
 
     for (r, bucket) in residues.iter().zip(buckets.iter()) {
         match bucket {
-            UnknownBucket::Water => ctx.water.ingest(r),
-            UnknownBucket::Solvent => ctx.solvent.ingest(r),
+            UnknownBucket::Water => ctx.water.ingest(chain_id, r),
+            UnknownBucket::Solvent => ctx.solvent.ingest(chain_id, r),
             UnknownBucket::Small(mt) => {
-                emit_single_residue_small_molecule(r, *mt, ctx);
+                emit_single_residue_small_molecule(chain_id, r, *mt, ctx);
             }
             UnknownBucket::Protein | UnknownBucket::NucleicAcid => {}
         }

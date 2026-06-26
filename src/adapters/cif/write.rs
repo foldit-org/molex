@@ -77,9 +77,8 @@ fn write_atom_site_header(out: &mut String) {
 }
 
 /// Per-entity `label_asym_id` resolution. Polymer entities keep their real
-/// chain id; non-polymer entities (whose `pdb_chain_id()` is `None`) get a
-/// fresh single/double-letter label that does not collide with any polymer
-/// chain or another synthesized one.
+/// chain id; non-polymer entities get a fresh single/double-letter label that
+/// does not collide with any chain a polymer or non-polymer already claims.
 struct ChainLabeller {
     used: HashSet<String>,
     next: u32,
@@ -399,6 +398,7 @@ mod tests {
             atoms,
             *b"HOH",
             n,
+            String::from("W"),
         ))
     }
 

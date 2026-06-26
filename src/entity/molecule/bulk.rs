@@ -19,18 +19,27 @@ pub struct BulkEntity {
     pub residue_name: [u8; 3],
     /// Number of individual molecules in this group.
     pub molecule_count: usize,
+    /// PDB chain identifier the molecules came in on. Empty when the source
+    /// carried no chain.
+    pub pdb_chain_id: String,
 }
 
 impl BulkEntity {
     /// Construct from a list of atoms. `molecule_count` is supplied by
     /// the caller (typically the number of residues in the source).
     #[must_use]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "non-polymer construction carries the source chain alongside \
+                  the atom group keys"
+    )]
     pub fn new(
         id: EntityId,
         mol_type: MoleculeType,
         atoms: Vec<Atom>,
         residue_name: [u8; 3],
         molecule_count: usize,
+        chain_id: String,
     ) -> Self {
         Self {
             id,
@@ -38,6 +47,7 @@ impl BulkEntity {
             columns: AtomColumns::from_atoms(atoms),
             residue_name,
             molecule_count,
+            pdb_chain_id: chain_id,
         }
     }
 }

@@ -135,9 +135,9 @@ class IndexedView {
 
 class Atom {
  public:
-  explicit Atom(const ::molex_Atom* handle) : handle_(handle) {}
+  explicit Atom(::molex_Atom handle) : handle_(handle) {}
 
-  const ::molex_Atom* handle() const noexcept { return handle_; }
+  ::molex_Atom handle() const noexcept { return handle_; }
 
   /// Raw 4-byte PDB-style atom name (space-padded).
   std::string_view raw_name() const noexcept {
@@ -188,7 +188,7 @@ class Atom {
   }
 
  private:
-  const ::molex_Atom* handle_;
+  ::molex_Atom handle_;
 };
 
 // ---------------------------------------------------------------------------

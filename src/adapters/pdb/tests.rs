@@ -452,6 +452,7 @@ fn writer_refuses_overflowing_atom_count() {
         atoms,
         *b"HOH",
         100_001,
+        String::from("W"),
     );
     let entities = vec![MoleculeEntity::Bulk(bulk)];
     let err = Assembly::new(entities).to_pdb().unwrap_err();

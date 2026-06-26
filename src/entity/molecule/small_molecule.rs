@@ -26,6 +26,9 @@ pub struct SmallMoleculeEntity {
     /// at construction by distance-based [`infer_bonds`] over the
     /// entity's atoms.
     pub bonds: Vec<CovalentBond>,
+    /// PDB chain identifier the molecule came in on. Empty when the source
+    /// carried no chain.
+    pub pdb_chain_id: String,
 }
 
 impl SmallMoleculeEntity {
@@ -42,6 +45,7 @@ impl SmallMoleculeEntity {
         mol_type: MoleculeType,
         atoms: Vec<Atom>,
         residue_name: [u8; 3],
+        chain_id: String,
     ) -> Self {
         let rn_str = std::str::from_utf8(&residue_name).unwrap_or("???").trim();
         let display_name =
@@ -67,6 +71,7 @@ impl SmallMoleculeEntity {
             residue_name,
             display_name,
             bonds,
+            pdb_chain_id: chain_id,
         }
     }
 }
@@ -132,6 +137,7 @@ mod tests {
             MoleculeType::Ligand,
             atoms,
             res_bytes("HOL"),
+            String::from("A"),
         );
         assert_eq!(sm.bonds.len(), 2);
         for b in &sm.bonds {

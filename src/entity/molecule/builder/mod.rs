@@ -487,21 +487,44 @@ pub(super) struct ChainCtx<'a> {
     pub(super) completion: Completion,
 }
 
+/// Accumulates water (or solvent) residues encountered under NonPolymer /
+/// Unknown hints, keyed by source chain. Each chain flushes to its own
+/// [`BulkEntity`] so a structure's waters do not collapse across chains.
 #[derive(Default)]
 pub(super) struct GlobalBulk {
+    chains: Vec<ChainBulk>,
+    index: FxHashMap<String, usize>,
+}
+
+struct ChainBulk {
+    chain_id: String,
     atoms: Vec<Atom>,
     residue_count: usize,
     residue_name: Option<[u8; 3]>,
 }
 
 impl GlobalBulk {
-    pub(super) fn ingest(&mut self, r: &ResidueAccum) {
+    pub(super) fn ingest(&mut self, chain_id: &str, r: &ResidueAccum) {
+        let idx = if let Some(&idx) = self.index.get(chain_id) {
+            idx
+        } else {
+            let idx = self.chains.len();
+            self.chains.push(ChainBulk {
+                chain_id: chain_id.to_owned(),
+                atoms: Vec::new(),
+                residue_count: 0,
+                residue_name: None,
+            });
+            let _ = self.index.insert(chain_id.to_owned(), idx);
+            idx
+        };
+        let bulk = &mut self.chains[idx];
         for (_, choice) in &r.atoms {
-            self.atoms.push(choice.to_atom());
+            bulk.atoms.push(choice.to_atom());
         }
-        self.residue_count += 1;
-        if self.residue_name.is_none() {
-            self.residue_name = Some(r.label_comp_id);
+        bulk.residue_count += 1;
+        if bulk.residue_name.is_none() {
+            bulk.residue_name = Some(r.label_comp_id);
         }
     }
 
@@ -512,17 +535,20 @@ impl GlobalBulk {
         allocator: &mut EntityIdAllocator,
         out: &mut Vec<MoleculeEntity>,
     ) {
-        if self.atoms.is_empty() {
-            return;
+        for bulk in self.chains {
+            if bulk.atoms.is_empty() {
+                continue;
+            }
+            let id = allocator.allocate();
+            out.push(MoleculeEntity::Bulk(BulkEntity::new(
+                id,
+                mol_type,
+                bulk.atoms,
+                bulk.residue_name.unwrap_or(default_resname),
+                bulk.residue_count,
+                bulk.chain_id,
+            )));
         }
-        let id = allocator.allocate();
-        out.push(MoleculeEntity::Bulk(BulkEntity::new(
-            id,
-            mol_type,
-            self.atoms,
-            self.residue_name.unwrap_or(default_resname),
-            self.residue_count,
-        )));
     }
 }
 

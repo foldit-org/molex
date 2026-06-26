@@ -101,6 +101,7 @@ fn strip_hydrogens(entity: &MoleculeEntity) -> MoleculeEntity {
                 s.mol_type,
                 heavy_atoms(entity),
                 s.residue_name,
+                s.pdb_chain_id.clone(),
             ))
         }
         MoleculeEntity::Bulk(b) => MoleculeEntity::Bulk(BulkEntity::new(
@@ -109,6 +110,7 @@ fn strip_hydrogens(entity: &MoleculeEntity) -> MoleculeEntity {
             heavy_atoms(entity),
             b.residue_name,
             b.molecule_count,
+            b.pdb_chain_id.clone(),
         )),
     }
 }

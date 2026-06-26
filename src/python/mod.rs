@@ -21,7 +21,7 @@ use pyo3::prelude::*;
 
 use self::arrays::flat_atoms;
 use crate::adapters::cif;
-use crate::analysis::detect_disulfides;
+use crate::analysis::bonds::disulfide::detect_disulfides;
 use crate::analysis::sasa::{DEFAULT_N_POINTS, DEFAULT_PROBE_RADIUS};
 use crate::assembly::Assembly;
 use crate::chemistry::variant::{ProtonationState, VariantTag};
@@ -287,7 +287,11 @@ impl PyAssembly {
         n_points = DEFAULT_N_POINTS,
     ))]
     pub fn sasa(&self, probe_radius: f32, n_points: usize) -> f32 {
-        crate::analysis::assembly_sasa(&self.inner, probe_radius, n_points)
+        crate::analysis::sasa::assembly_sasa(
+            &self.inner,
+            probe_radius,
+            n_points,
+        )
     }
 
     // Object navigation. The documented default for a normal caller: parse

@@ -15,12 +15,10 @@ pub mod ss;
 /// Volumetric analysis: voxel grids, SDFs, cavity detection, surfaces.
 pub mod volumetric;
 
-pub(crate) use bonds::detect_disulfides;
 pub use bonds::{
     infer_bonds, BondOrder, HBond, InferredBond, DEFAULT_TOLERANCE,
 };
 pub use contacts::{Contact, ContactLevel};
-pub(crate) use sasa::assembly_sasa;
 pub use volumetric::{
     binary_to_sdf, compute_gaussian_field, compute_ses_sdf, detect_cavities,
     DetectedCavity, ScalarVoxelGrid, VoxelBbox,

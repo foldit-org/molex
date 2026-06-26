@@ -53,6 +53,8 @@ jobs:
         with:
           python-version: "3.12"
       - uses: Swatinem/rust-cache@v2
+      - name: Install numpy (runtime dep of the PyAtomTable rust-numpy bindings)
+        run: python -m pip install --upgrade pip numpy
       - name: Test (with embedded interpreter)
         # setup-python provides a shared libpython; pyo3 links it (no
         # extension-module), and auto-initialize boots an interpreter for the

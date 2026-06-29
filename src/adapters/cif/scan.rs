@@ -654,7 +654,7 @@ impl<'a> Scanner<'a> {
     /// CIF values are taken verbatim: unquoted tokens, the text between
     /// matching single/double quotes, and `;`-delimited multiline blocks all
     /// reproduce a contiguous span of the source (CIF has no in-string escape
-    /// sequence — an embedded quote not followed by whitespace is literal), so
+    /// sequence; an embedded quote not followed by whitespace is literal), so
     /// every value borrows without copying.
     fn scan_value_borrowed(&mut self) -> Option<&'a str> {
         if self.pos >= self.len() {

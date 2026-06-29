@@ -196,7 +196,7 @@ mod parity_tests {
     /// their per-instance discriminator in `auth_seq_id`; the PDB equivalent
     /// puts the same author number into the residue-sequence column. The CIF
     /// reader must fall back to `auth_seq_id` so each water keys to a distinct
-    /// residue, exactly as the PDB path already does — otherwise the four
+    /// residue, exactly as the PDB path already does; otherwise the four
     /// waters here collapse onto a single `O` atom. The two formats describe
     /// the identical structure, so their atom counts must agree.
     #[test]

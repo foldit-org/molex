@@ -5,20 +5,23 @@
 ```text
 molex/src/
 ├── adapters/         File format parsers (PDB, mmCIF, BinaryCIF, MRC, DCD, AtomWorks)
-├── analysis/         Structural analysis (bonds, secondary structure, AABB, volumetric)
-├── chemistry/        Static residue tables (amino acids, nucleotides, atom names)
+├── analysis/         Structural analysis (bonds, secondary structure, SASA, contacts, volumetric)
+├── chemistry/        Static residue tables + missing-atom completion
 ├── entity/           Entity system
 │   ├── molecule/     MoleculeEntity enum + subtypes (protein, nucleic acid, small molecule, bulk)
 │   └── surface/      Surface types (VoxelGrid, Density)
 ├── ops/              Operations
-│   ├── codec/        AdapterError, ca_positions helper
-│   ├── transform/    Kabsch alignment, CA extraction, backbone segments
-│   └── wire/         assembly binary wire format encoder/decoder
-├── assembly.rs       Top-level Assembly container with eagerly-computed derived data
+│   ├── edit/         Typed AssemblyEdit + apply path
+│   ├── error/        AdapterError
+│   ├── transform/    Kabsch alignment, superposition RMSD
+│   └── wire/         Assembly + delta binary wire format encoder/decoder
+├── assembly.rs       Top-level Assembly container (entities + opt-in SS + connections)
 ├── atom_id.rs        Cross-cutting AtomId (entity + index)
 ├── bond.rs           Cross-cutting CovalentBond (AtomId endpoints)
+├── connection.rs     Inter-entity rendering connections (ConnectionType, AtomEnd, AtomLink)
 ├── element.rs        Element enum (symbols, covalent radii, colors)
-├── python.rs         PyO3 bindings (feature = "python")
+├── c_api/            C ABI surface (feature = "c-api")
+├── python/           PyO3 bindings (feature = "python")
 └── lib.rs            Crate root, re-exports
 ```
 
@@ -34,13 +37,16 @@ Entities (`Vec<MoleculeEntity>`) are the primary data model.
 
 `Assembly` (in `src/assembly.rs`) is the host-owned structural source of truth. It bundles:
 
-- a `Vec<MoleculeEntity>`
-- cross-entity `CovalentBond`s (currently disulfides)
-- per-entity `SSType` arrays (DSSP)
-- backbone `HBond`s
+- a `Vec<Arc<MoleculeEntity>>`
+- per-entity `SSType` arrays (`ss_types`), empty until `recompute_ss()` is called
+- owner-set rendering connections keyed by `ConnectionType`
 - a generation counter that bumps on every mutation
 
-Any `&mut Assembly` mutation (add/remove entity, update positions, restore from `CoordinateSnapshot`) recomputes all derived data before returning, so any snapshot a reader holds is internally consistent.
+Construction is secondary-structure-free and mutations only bump the
+generation counter; secondary structure is opt-in via `recompute_ss()`, and
+disulfide / backbone-H-bond geometry is computed on demand by
+`detect_fallback_connections()` rather than stored. See the
+[Assembly](../modules/assembly.md) page for the full contract.
 
 ## Entity classification
 

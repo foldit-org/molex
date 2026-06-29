@@ -2,7 +2,12 @@
 
 Structural analysis lives in `molex::analysis` (source: `src/analysis/`). Most analysis functions operate on entity-level types (`&[Atom]`, `&[ResidueBackbone]`, `&[MoleculeEntity]`).
 
-The eagerly-computed pipeline (DSSP secondary structure + backbone H-bonds + disulfides) is exposed through [`Assembly`](../architecture/overview.md); see `Assembly::ss_types`, `Assembly::hbonds`, and `Assembly::disulfides`. The standalone functions documented below are the building blocks underneath.
+`Assembly` exposes a few of these analyses as methods: `ss_types` (after
+`recompute_ss`), `detect_fallback_connections` (disulfide + backbone-H-bond
+geometry), `covalent_bonds`, `contacts`, and `sasa`. The standalone functions
+documented below are the building blocks underneath. Note that secondary
+structure is opt-in (it is empty until `recompute_ss` runs) and H-bonds /
+disulfides are computed on demand rather than stored on the `Assembly`.
 
 ## Secondary structure (`analysis::ss`)
 
@@ -29,7 +34,7 @@ Each variant has a `.color()` method returning an RGB `[f32; 3]` for rendering.
 
 `analysis::merge_short_segments` converts isolated 1-residue helix/sheet runs to `Coil`.
 
-For most callers the recommended path is to construct an `Assembly` and read `assembly.ss_types(entity_id)`. The assembly internally runs H-bond detection and `classify` for every protein entity.
+For most callers the recommended path is to construct an `Assembly`, call `assembly.recompute_ss()`, then read `assembly.ss_types(entity_id)`. `recompute_ss` runs H-bond detection and `classify` for every protein entity; until it is called, `ss_types` is empty.
 
 ## Bond detection (`analysis::bonds`)
 
@@ -86,39 +91,54 @@ use molex::analysis::{
 
 These power Gaussian density approximations, solvent-excluded surface SDFs, and cavity detection.
 
-## Transforms (`ops::transform`)
+## Solvent-accessible surface area (`analysis::sasa`)
 
-Structural alignment and extraction utilities. Re-exported from
-`molex::ops`.
+Shrake-Rupley SASA over an assembly's protein atoms, using Bondi van der
+Waals radii and a deterministic golden-spiral sampling of each atom's probe
+sphere (no RNG). Water, ions, ligands, and nucleic acids are excluded,
+matching the protein-scope convention of freesasa and biotite.
 
 ```rust,ignore
-use molex::ops::{
-    align_to_reference, centroid, extract_backbone_segments,
-    extract_ca_from_chains, extract_ca_positions, kabsch_alignment,
-    kabsch_alignment_with_scale, transform_entities,
-    transform_entities_with_scale,
-};
+use molex::analysis::sasa::{DEFAULT_PROBE_RADIUS, DEFAULT_N_POINTS};
 
-// Kabsch alignment (minimize RMSD between point sets)
-let (rotation, translation) = kabsch_alignment(&source, &target)?;
-let (rotation, translation, scale) =
-    kabsch_alignment_with_scale(&source, &target)?;
+// Total protein SASA in Angstrom^2.
+let area = assembly.sasa(DEFAULT_PROBE_RADIUS, DEFAULT_N_POINTS);
+```
 
-// Apply transform to entities
-transform_entities(&mut entities, rotation, translation);
-transform_entities_with_scale(&mut entities, rotation, translation, scale);
+`DEFAULT_PROBE_RADIUS` is 1.4 (water); `DEFAULT_N_POINTS` is 960 test points
+per atom (higher is finer and slower).
 
-// Align entities to a reference structure
-align_to_reference(&mut mobile, &reference);
+## Contacts (`analysis::contacts`)
 
-// Extract alpha-carbon positions
-let ca_positions: Vec<Vec3> = extract_ca_positions(&entities);
-let ca_by_chain: Vec<Vec<Vec3>> = extract_ca_from_chains(&entities);
+`Assembly::contacts` enumerates atom pairs closer than a cutoff, reported at
+the requested granularity. A single spatial grid keeps neighbor lookups
+near-linear.
 
-// Get continuous backbone segments
-let segments: Vec<Vec<Vec3>> = extract_backbone_segments(&entities);
+```rust,ignore
+use molex::analysis::{Contact, ContactLevel};
 
-// Compute centroid
-let center: Vec3 = centroid(&positions);
+// All atom-atom contacts within 4.0 A, deduped to residue pairs,
+// keeping only inter-entity pairs.
+let contacts: Vec<Contact> = assembly.contacts(4.0, ContactLevel::Residue, true);
+```
+
+`ContactLevel` is `Atom`, `Residue`, or `Chain`; `Residue` and `Chain` dedup
+to unique residue/entity pairs, each keeping one representative atom pair.
+
+## Transforms (`ops::transform`)
+
+Kabsch alignment and superposition RMSD. `kabsch_alignment` is re-exported
+from `molex::ops`; `rmsd` lives at `molex::ops::transform`.
+
+```rust,ignore
+use molex::ops::kabsch_alignment;
+use molex::ops::transform::rmsd;
+
+// Kabsch alignment (the rigid motion that minimizes RMSD between two point
+// sets); None for mismatched lengths or fewer than 3 points.
+let aligned: Option<(Mat3, Vec3)> = kabsch_alignment(&source, &target);
+
+// Optimal-superposition RMSD; None for fewer than 3 points.
+let deviation: Option<f32> = rmsd(&a, &b);
 ```
 

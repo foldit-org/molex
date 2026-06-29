@@ -234,7 +234,7 @@ fn nonempty_dropped_tail_polymer_roundtrips() {
     // A polymer with a non-empty dropped-residue tail: one complete ALA
     // (N/CA/C/O) followed by a backbone-incomplete residue (CB+CG only).
     // canonicalize drops the incomplete residue from the residue list but
-    // leaves its two atoms in the storage columns, unreferenced — so
+    // leaves its two atoms in the storage columns, unreferenced, so
     // columns().len() (6) exceeds the sum of residue atom_range lengths (4).
     // The body walks residue-range atoms (4); the header must declare 4, not
     // 6, or deserialize reads past the atom data and fails "Data too short".

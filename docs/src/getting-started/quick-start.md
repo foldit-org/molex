@@ -51,17 +51,20 @@ for entity in &proteins {
 
 ## Run DSSP secondary structure assignment
 
-DSSP and backbone H-bond detection are run automatically when you build an `Assembly`:
+Secondary structure is opt-in: an `Assembly` starts with empty `ss_types`, so
+call `recompute_ss()` before reading it. Backbone H-bonds are never stored;
+they surface on demand through `detect_fallback_connections()`.
 
 ```rust,ignore
 use molex::{Assembly, ConnectionType, SSType};
 
-let assembly = Assembly::new(entities);
+let mut assembly = Assembly::new(entities);
+assembly.recompute_ss(); // populate ss_types (expensive; skipped at construction)
+
 let protein_id = assembly.entities()[0].id();
 for (i, ss) in assembly.ss_types(protein_id).iter().enumerate() {
     println!("Residue {}: {:?}", i, ss); // Helix, Sheet, or Coil
 }
-// Backbone H-bonds are computed on demand for rendering, not stored.
 if let Some(hbonds) = assembly.detect_fallback_connections().get(&ConnectionType::HBond) {
     for link in hbonds {
         println!("hbond {:?} -> {:?}", link.a, link.b);
@@ -78,8 +81,10 @@ let bytes = assembly_bytes(&entities)?;
 // Send `bytes` over FFI, IPC, or network
 ```
 
-Pass an `Assembly` directly via `serialize_assembly(&assembly)` when the
-derived-data pipeline has already been run.
+`assembly_bytes` is the only public wire entry point. To serialize an
+`Assembly` rather than a raw entity slice, call `assembly.to_bytes()`; decode
+with `Assembly::from_bytes(&bytes)`, which returns an assembly with empty
+`ss_types`.
 
 ## Python usage
 

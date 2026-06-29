@@ -219,7 +219,7 @@ fn read_category_selective(
     }
 
     // The first pass left the cursor at the end of the category map. Re-reading
-    // `columns` rewinds it, so restore this end before returning — `columns` is
+    // `columns` rewinds it, so restore this end before returning; `columns` is
     // not guaranteed to be the map's last entry.
     let map_end = rd.position();
     let mut pairs: Vec<(MsgVal, MsgVal)> =
@@ -376,7 +376,7 @@ fn require_atom_site(block: &BlockView) -> Result<&CategoryView, AdapterError> {
 ///
 /// Numeric columns are typed `Vec`s; categorical columns are a unique-value
 /// set plus a per-row index ([`StringColumn`]). Rows are materialized into the
-/// builder by indexing these buffers — no intermediate per-row value tree and
+/// builder by indexing these buffers; no intermediate per-row value tree and
 /// no per-cell `String`.
 struct AtomSiteColumns {
     n: usize,

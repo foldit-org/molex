@@ -16,8 +16,12 @@
 
 - [Entity System](modules/entity.md)
 - [Assembly](modules/assembly.md)
+- [Completion](modules/completion.md)
+- [Chemistry](modules/chemistry.md)
 - [Adapters](modules/adapters.md)
 - [Analysis](modules/analysis.md)
-- [Codec](modules/codec.md)
+- [Edits](modules/edit.md)
+- [Errors](modules/codec.md)
 - [Wire Format](modules/wire.md)
+- [C API](modules/c-api.md)
 - [Python Bindings](modules/python.md)

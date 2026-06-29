@@ -88,7 +88,8 @@ impl crate::Assembly {
     /// from each entity's stored bond topology
     /// ([`MoleculeEntity::bonds`](crate::entity::molecule::MoleculeEntity::bonds)),
     /// in entity-declaration order. Inter-entity bonds (e.g. disulfides)
-    /// are not included — see [`crate::Assembly::disulfides`].
+    /// are not included; surface those for rendering via
+    /// [`crate::Assembly::detect_fallback_connections`].
     #[must_use]
     pub fn covalent_bonds(&self) -> Vec<crate::bond::CovalentBond> {
         self.entities()

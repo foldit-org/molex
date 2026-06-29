@@ -1,4 +1,4 @@
-//! Typed Assembly edits — the in-memory representation of incremental
+//! Typed Assembly edits: the in-memory representation of incremental
 //! updates exchanged between the foldit host and its plugins.
 //!
 //! `AssemblyEdit` covers the steady-state mutation vocabulary:
@@ -6,7 +6,7 @@
 //! (sequence design / mutate-residue), variant changes (protonation,
 //! disulfide, terminus patches), and entity-level topology
 //! (add/remove). Per-residue topology (insert/delete a residue inside
-//! an existing entity) is intentionally not yet enumerated — bridge
+//! an existing entity) is intentionally not yet enumerated; bridge
 //! consumers fall back to full pose rebuild for that class of change.
 //!
 //! `Assembly::apply_edit` and `Assembly::apply_edits` dispatch each
@@ -137,7 +137,7 @@ pub enum EditError {
     },
     /// The supplied coord/atom count doesn't match the target's
     /// current count (only enforced for edits where mismatch is
-    /// invalid — `MutateResidue` explicitly allows count changes).
+    /// invalid; `MutateResidue` explicitly allows count changes).
     #[error(
         "count mismatch on entity {entity}: expected {expected}, got {got}"
     )]

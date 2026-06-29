@@ -11,7 +11,7 @@
 //!
 //! Trusted, already-structured columnar input (the wire decoder, the Python
 //! columnar interchange) builds an `AtomTable` and calls `into_entities`.
-//! Raw parser input does not go through here — it stays on `EntityBuilder`,
+//! Raw parser input does not go through here; it stays on `EntityBuilder`,
 //! which owns altloc dedup, modified-residue merge, and completion.
 
 use compact_str::CompactString;
@@ -291,7 +291,7 @@ impl AtomTable {
         (atoms, residues)
     }
 
-    /// Number of distinct `(chain_id, res_id)` pairs in `range` — a bulk
+    /// Number of distinct `(chain_id, res_id)` pairs in `range`; a bulk
     /// entity's molecule count (one molecule per residue per chain).
     fn distinct_chain_res(&self, range: std::ops::Range<usize>) -> usize {
         use std::collections::HashSet;
@@ -302,7 +302,7 @@ impl AtomTable {
         seen.len()
     }
 
-    /// Concatenate the entity hierarchy back into a flat table — the inverse
+    /// Concatenate the entity hierarchy back into a flat table; the inverse
     /// of [`Self::into_entities`].
     ///
     /// Walks entities in slice order via `walk_flat_atoms`, re-expanding the
@@ -336,7 +336,7 @@ impl AtomTable {
 
     /// Visit every atom of `entities` in the canonical flat order, handing the
     /// consumer the borrowed [`AtomRef`] plus the residue keys
-    /// (`res_name`, `res_id`) projected onto it — no column materialization.
+    /// (`res_name`, `res_id`) projected onto it; no column materialization.
     ///
     /// Driven by the same `walk_flat_atoms` walk as [`Self::from_entities`] and
     /// [`Self::flat_source_indices`], so a byte-writer over this and a rebuilt
@@ -355,7 +355,7 @@ impl AtomTable {
         });
     }
 
-    /// Number of atom rows the canonical flat walk emits for one entity — the
+    /// Number of atom rows the canonical flat walk emits for one entity; the
     /// exact body-row count [`Self::for_each_flat_row`] yields, driven by the
     /// same `walk_flat_atoms`. For a polymer this is Σ residue `atom_range`
     /// lengths (atoms of dropped, backbone-incomplete residues sit in the
@@ -391,14 +391,14 @@ impl AtomTable {
     }
 }
 
-/// Build an empty entity of `mol_type` — the zero-atom degenerate case of
+/// Build an empty entity of `mol_type`: the zero-atom degenerate case of
 /// [`AtomTable::into_entities`]'s partition, sharing the exact four-arm
 /// `mol_type` -> variant dispatch [`AtomTable::build_entity`] uses, with empty
 /// atoms and residues.
 ///
 /// `into_entities` yields nothing for a zero-row run, so the trusted columnar
 /// decoders (wire headers) that synthesize entities one at a time fall back to
-/// this when a group decodes to no atoms — an
+/// this when a group decodes to no atoms; an
 /// unreachable-in-practice path (groups always carry at least one atom) that
 /// keeps the entity count aligned with the input group count. Polymers carry
 /// `chain_id`; non-polymers take a blank residue name and (for `Bulk`) a

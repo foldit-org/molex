@@ -58,7 +58,7 @@ fn ala_atoms(start_x: f32) -> Vec<Atom> {
     ]
 }
 
-/// Five-atom residue (N, CA, C, O, CB) — a real sidechain stub, distinct
+/// Five-atom residue (N, CA, C, O, CB): a real sidechain stub, distinct
 /// atom count from glycine-style 4-atom residues.
 fn ser_atoms(start_x: f32) -> Vec<Atom> {
     let mut v = ala_atoms(start_x);

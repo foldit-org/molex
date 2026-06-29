@@ -17,15 +17,15 @@
 //! ```
 //!
 //! Tag bytes:
-//! - `0x01` NTerminus — 0 payload bytes
-//! - `0x02` CTerminus — 0 payload bytes
-//! - `0x03` Disulfide — 0 payload bytes
-//! - `0x04` Protonation — 1 sub-tag byte, plus optional Custom payload:
+//! - `0x01` NTerminus: 0 payload bytes
+//! - `0x02` CTerminus: 0 payload bytes
+//! - `0x03` Disulfide: 0 payload bytes
+//! - `0x04` Protonation: 1 sub-tag byte, plus optional Custom payload:
 //!   - `0x01` HisDelta
 //!   - `0x02` HisEpsilon
 //!   - `0x03` HisDoubly
-//!   - `0xFF` Custom — u16 BE length + UTF-8 bytes
-//! - `0xFE` Other — u16 BE length + UTF-8 bytes
+//!   - `0xFF` Custom: u16 BE length + UTF-8 bytes
+//! - `0xFE` Other: u16 BE length + UTF-8 bytes
 
 use crate::chemistry::variant::{ProtonationState, VariantTag};
 use crate::entity::molecule::polymer::Residue;
@@ -43,7 +43,7 @@ pub(crate) struct ResidueVariants {
     pub variants: Vec<VariantTag>,
 }
 
-/// All decoded variant blocks for a single entity (sparse — only
+/// All decoded variant blocks for a single entity (sparse; only
 /// residues that carry at least one variant are listed).
 pub(crate) type EntityVariants = Vec<ResidueVariants>;
 

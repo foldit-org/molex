@@ -245,7 +245,7 @@ impl EntityBuilder {
 
     /// Route a single atom's scalar cells through the accumulator. The
     /// columnar BinaryCIF path builds [`AtomCells`] straight from decoded
-    /// columns and calls this directly — sharing the chain/residue/altLoc
+    /// columns and calls this directly, sharing the chain/residue/altLoc
     /// machinery with [`push_atom`](Self::push_atom) without materializing
     /// an [`AtomRow`] or the chain-id `CompactString`s.
     ///

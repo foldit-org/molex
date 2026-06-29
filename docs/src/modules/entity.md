@@ -49,8 +49,13 @@ pub struct Atom {
     pub element: Element,    // chemical element
     pub name: [u8; 4],       // PDB atom name (e.g. b"CA  ")
     pub formal_charge: i8,   // signed formal charge; 0 = neutral
+    pub observed: bool,      // true if parsed, false if fabricated by completion
 }
 ```
+
+`observed` is provenance metadata only (never part of atom identity); it backs
+the Python `observed_mask` column. Atoms fabricated by completion carry
+`observed: false`.
 
 Residue name, residue number, and chain ID are stored on the entity/residue that owns the atom.
 

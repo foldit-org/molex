@@ -58,7 +58,7 @@ fn ala_atoms(start_x: f32) -> Vec<Atom> {
 }
 
 fn trp_atoms(start_x: f32) -> Vec<Atom> {
-    // 14 atoms — different count from ALA's 4.
+    // 14 atoms, different count from ALA's 4.
     (0u16..14)
         .map(|i| atom_at("CA", Element::C, start_x + f32::from(i)))
         .collect()

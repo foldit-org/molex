@@ -1,16 +1,16 @@
 # molex
 
-**Mol**ecular **ex**change — a Rust library for parsing, analyzing,
+**Mol**ecular **ex**change: a Rust library for parsing, analyzing,
 and serializing molecular structure data.
 
 ## Features
 
 - **Parse** PDB, mmCIF, BinaryCIF, MRC/CCP4 density maps, and DCD trajectories
-- **Entity model** — proteins, nucleic acids, ligands, ions, waters, and cofactors as typed entities
-- **Analyze** — DSSP secondary structure, hydrogen bonds, covalent bonds, disulfide bridges
-- **Transform** — Kabsch alignment, CA extraction, backbone segments
-- **Serialize** — compact binary assembly format for FFI and IPC
-- **Python bindings** — PyO3 module with AtomWorks/Biotite interop
+- **Entity model**: proteins, nucleic acids, ligands, ions, waters, and other small molecules as typed entities
+- **Analyze**: DSSP secondary structure, hydrogen bonds, covalent bonds, disulfide bridges, SASA, contacts
+- **Transform**: Kabsch alignment and superposition RMSD
+- **Serialize**: compact binary wire format for FFI and IPC
+- **Python bindings**: PyO3 module with AtomWorks/Biotite interop
 
 ## Quick start
 
@@ -39,15 +39,18 @@ asm = molex.Assembly.from_pdb(open("1ubq.pdb").read())
 for e in asm.entities():
     print(e.kind, e.chain_id, e.residue_count)
 
-arr = asm.to_arrays()    # per-atom numpy columns, no Biotite required
 asm.recompute_ss()       # opt-in DSSP secondary structure
+
+# Per-atom numpy columns (no Biotite required) come from PyAtomTable:
+table = molex.PyAtomTable.from_assembly_bytes(asm.to_assembly_bytes())
+coords = table.coords    # (N, 3) float32
 ```
 
 Atom completion (filling missing heavy atoms) happens at parse time, during
-file ingest. `from_mmcif` and `from_bcif` parse the other formats. The
-`*_to_assembly_bytes` / `assembly_bytes_to_*` free functions are transport
-helpers for the wire protocol, not the default path. Type stubs (`molex.pyi`)
-ship with the wheel.
+file ingest; the default is `Completion.Heavy`. `from_mmcif` and `from_bcif`
+parse the other formats. The `*_to_assembly_bytes` / `assembly_bytes_to_*`
+free functions are transport helpers for the wire protocol, not the default
+path. Type stubs (`molex.pyi`) ship with the wheel.
 
 ## Optional features
 
@@ -57,8 +60,8 @@ ship with the wheel.
 
 ## Documentation
 
-- [**Guide**](https://petridecus.github.io/molex/) — architecture, modules, and examples
-- [**API reference**](https://petridecus.github.io/molex/api/molex/) — generated rustdoc
+- [**Guide**](https://petridecus.github.io/molex/): architecture, modules, and examples
+- [**API reference**](https://petridecus.github.io/molex/api/molex/): generated rustdoc
 
 ## License
 

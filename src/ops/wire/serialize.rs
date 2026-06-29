@@ -22,7 +22,7 @@ use crate::ops::error::AdapterError;
 /// - Per entity header (variable):
 ///   - 1 byte: `molecule_type` wire byte
 ///   - 4 bytes: `atom_count` (`u32` BE)
-///   - 4 bytes: `entity_id` (`u32` BE) — the originator's `EntityId.raw()`.
+///   - 4 bytes: `entity_id` (`u32` BE), the originator's `EntityId.raw()`.
 ///     Receivers reconstruct entities with the same id so cross-boundary edit
 ///     references resolve.
 ///   - 2 bytes: `chain_len` (`u16` BE)
@@ -103,7 +103,7 @@ pub(crate) fn serialize_entities<E: std::borrow::Borrow<MoleculeEntity>>(
     }
 
     // Per-entity variants section. Empty when no residue carries
-    // variants — costs 4 bytes per entity in that case.
+    // variants; costs 4 bytes per entity in that case.
     serialize_variants_section(entities, &mut buffer);
 
     Ok(buffer)
@@ -122,7 +122,7 @@ fn write_chain_id(chain_id: &str, buffer: &mut Vec<u8>) {
 
 /// Write one entity's atom rows via the single canonical flatten
 /// ([`AtomTable::for_each_flat_row`]): residue-ordered atoms for polymers, raw
-/// order with synthesized residue numbers for non-polymers — the exact body the
+/// order with synthesized residue numbers for non-polymers; the exact body the
 /// per-entity header's row count ([`AtomTable::flat_atom_count`]) describes.
 /// `formal_charge` and `observed` are not written (the wire carries neither).
 fn write_entity_atoms(entity: &MoleculeEntity, buffer: &mut Vec<u8>) {

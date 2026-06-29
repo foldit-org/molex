@@ -277,8 +277,8 @@ impl ProteinEntity {
     /// An angle is `None` when an input atom is unavailable: φ at the first
     /// residue (no preceding C), ψ at the last (no following N), either side of
     /// a segment break (no peptide bond across it), and for any residue (or its
-    /// neighbour) lacking a complete N/CA/C backbone — the same completeness
-    /// notion `extract_backbone_from_residue` enforces. Results are in
+    /// neighbour) lacking a complete N/CA/C backbone (the same completeness
+    /// notion `extract_backbone_from_residue` enforces). Results are in
     /// (−180, 180].
     #[must_use]
     pub fn phi_psi(&self) -> Vec<(Option<f32>, Option<f32>)> {

@@ -320,8 +320,8 @@ fn read_map(rd: &mut Reader, len: usize) -> Result<MsgVal, AdapterError> {
 }
 
 /// Advance the cursor past one msgpack value without allocating any
-/// [`MsgVal`]. Parses the same structure [`read_value`] does — enough to know
-/// the value's extent — but builds nothing: Str/Bin advance over the payload,
+/// [`MsgVal`]. Parses the same structure [`read_value`] does (enough to know
+/// the value's extent) but builds nothing: Str/Bin advance over the payload,
 /// Array/Map recurse over their elements, scalars consume their fixed width.
 #[allow(
     clippy::too_many_lines,

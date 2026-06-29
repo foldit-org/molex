@@ -50,23 +50,23 @@ pub enum molex_EditKind {
     /// Sentinel returned when the list pointer is null or the index is
     /// out of bounds.
     Invalid = 0,
-    /// `SetEntityCoords` — bulk per-entity coordinate update. Read via
+    /// `SetEntityCoords`: bulk per-entity coordinate update. Read via
     /// [`molex_edits_set_entity_coords_at`].
     SetEntityCoords = 1,
-    /// `SetResidueCoords` — per-residue coordinate update inside a
+    /// `SetResidueCoords`: per-residue coordinate update inside a
     /// polymer entity. Read via
     /// [`molex_edits_set_residue_coords_at`].
     SetResidueCoords = 2,
-    /// `MutateResidue` — residue identity + atoms + variants
+    /// `MutateResidue`: residue identity + atoms + variants
     /// replacement. Read via [`molex_edits_mutate_residue_at`].
     MutateResidue = 3,
-    /// `SetVariants` — replace a residue's variant tag list. Read
+    /// `SetVariants`: replace a residue's variant tag list. Read
     /// via [`molex_edits_set_variants_at`].
     SetVariants = 4,
-    /// `AddEntity` — topology edit; appears only in Rust-side edit
+    /// `AddEntity`: topology edit; appears only in Rust-side edit
     /// lists, never in lists decoded from delta.
     AddEntity = 5,
-    /// `RemoveEntity` — topology edit; appears only in Rust-side edit
+    /// `RemoveEntity`: topology edit; appears only in Rust-side edit
     /// lists, never in lists decoded from delta.
     RemoveEntity = 6,
 }

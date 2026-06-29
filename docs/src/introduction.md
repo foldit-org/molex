@@ -6,7 +6,7 @@
 
 - **`MoleculeEntity`** represents a single molecule: a protein chain, a DNA/RNA strand, a ligand, an ion, or a group of waters. Parsing a structure file produces a `Vec<MoleculeEntity>`.
 
-- **`Assembly`** is the top-level host container: it owns the entities, cross-entity bonds (disulfides), per-entity DSSP secondary structure, and backbone H-bonds, with a generation counter that increments on every mutation.
+- **`Assembly`** is the top-level host container: it owns the entities, opt-in per-entity DSSP secondary structure (empty until `recompute_ss()`), and owner-set rendering connections, with a generation counter that increments on every mutation. Disulfide and backbone-H-bond geometry is computed on demand, not stored.
 
 - **`Atom`** holds a position, element, atom name, occupancy, and B-factor. Residue and chain context live on the entity that contains the atom.
 

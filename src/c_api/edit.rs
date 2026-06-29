@@ -114,11 +114,11 @@ pub enum molex_VariantKind {
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum molex_ProtonationKind {
-    /// `HID` — delta-protonated histidine.
+    /// `HID`: delta-protonated histidine.
     HisDelta = 1,
-    /// `HIE` — epsilon-protonated histidine.
+    /// `HIE`: epsilon-protonated histidine.
     HisEpsilon = 2,
-    /// `HIP` — doubly-protonated histidine.
+    /// `HIP`: doubly-protonated histidine.
     HisDoubly = 3,
     /// Anything else; payload string carries the variant name.
     Custom = 0xFF,

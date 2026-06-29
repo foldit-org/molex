@@ -511,7 +511,7 @@ fn classify_mol_types(
 }
 
 /// Per-atom entity ids synthesized from the `(chain_id, mol_type)` pair in
-/// first-appearance order — the column-input form of the AtomWorks
+/// first-appearance order; the column-input form of the AtomWorks
 /// `determine_entity_ids` grouping.
 fn synthesize_entity_ids(
     chain_ids: &[String],

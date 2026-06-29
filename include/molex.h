@@ -123,15 +123,15 @@ enum molex_ProtonationKind
 #endif // __cplusplus
  {
   /**
-   * `HID` — delta-protonated histidine.
+   * `HID`: delta-protonated histidine.
    */
   MOLEX_PROTONATION_KIND_HIS_DELTA = 1,
   /**
-   * `HIE` — epsilon-protonated histidine.
+   * `HIE`: epsilon-protonated histidine.
    */
   MOLEX_PROTONATION_KIND_HIS_EPSILON = 2,
   /**
-   * `HIP` — doubly-protonated histidine.
+   * `HIP`: doubly-protonated histidine.
    */
   MOLEX_PROTONATION_KIND_HIS_DOUBLY = 3,
   /**
@@ -169,33 +169,33 @@ enum molex_EditKind
    */
   MOLEX_EDIT_KIND_INVALID = 0,
   /**
-   * `SetEntityCoords` — bulk per-entity coordinate update. Read via
+   * `SetEntityCoords`: bulk per-entity coordinate update. Read via
    * [`molex_edits_set_entity_coords_at`].
    */
   MOLEX_EDIT_KIND_SET_ENTITY_COORDS = 1,
   /**
-   * `SetResidueCoords` — per-residue coordinate update inside a
+   * `SetResidueCoords`: per-residue coordinate update inside a
    * polymer entity. Read via
    * [`molex_edits_set_residue_coords_at`].
    */
   MOLEX_EDIT_KIND_SET_RESIDUE_COORDS = 2,
   /**
-   * `MutateResidue` — residue identity + atoms + variants
+   * `MutateResidue`: residue identity + atoms + variants
    * replacement. Read via [`molex_edits_mutate_residue_at`].
    */
   MOLEX_EDIT_KIND_MUTATE_RESIDUE = 3,
   /**
-   * `SetVariants` — replace a residue's variant tag list. Read
+   * `SetVariants`: replace a residue's variant tag list. Read
    * via [`molex_edits_set_variants_at`].
    */
   MOLEX_EDIT_KIND_SET_VARIANTS = 4,
   /**
-   * `AddEntity` — topology edit; appears only in Rust-side edit
+   * `AddEntity`: topology edit; appears only in Rust-side edit
    * lists, never in lists decoded from delta.
    */
   MOLEX_EDIT_KIND_ADD_ENTITY = 5,
   /**
-   * `RemoveEntity` — topology edit; appears only in Rust-side edit
+   * `RemoveEntity`: topology edit; appears only in Rust-side edit
    * lists, never in lists decoded from delta.
    */
   MOLEX_EDIT_KIND_REMOVE_ENTITY = 6,

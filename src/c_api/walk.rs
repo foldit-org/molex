@@ -400,7 +400,7 @@ pub extern "C" fn molex_residue_ins_code(residue: *const molex_Residue) -> u8 {
 
 /// Resolve a by-value atom handle to `(columns, index)`. Returns `None`
 /// when the handle carries the null-`entity` sentinel or its `index` is
-/// out of bounds — the same invalid path the old null atom pointer took.
+/// out of bounds; the same invalid path the old null atom pointer took.
 fn atom_inner<'a>(atom: molex_Atom) -> Option<(&'a AtomColumns, usize)> {
     let e = entity_inner(atom.entity)?;
     let columns = e.columns();

@@ -71,7 +71,7 @@ impl<'a> AtomRef<'a> {
 /// across all seven.
 ///
 /// Built from a `Vec<Atom>` via [`AtomColumns::from_atoms`]; that transpose
-/// is the bit-identical contract — the column at index `i` carries exactly
+/// is the bit-identical contract: the column at index `i` carries exactly
 /// the bytes the `i`-th `Atom` held. Single atoms are read back with
 /// [`AtomColumns::gather`] (by value) or [`AtomColumns::atom_ref`]
 /// (borrowed cells).

@@ -1,26 +1,18 @@
-# Codec
+# Errors
 
-`molex::ops::codec` holds the crate's shared adapter error type plus a
-small entity-utility helper. The assembly binary wire format lives in
-[`molex::ops::wire`](wire.md); the structural-transform routines live in
-[`molex::ops::transform`](analysis.md#transforms).
+There is no `ops::codec` module. The crate's shared parser/serializer error
+type is `AdapterError`, which lives in `molex::ops::error` and is re-exported
+at the crate root as `molex::AdapterError` (source: `src/ops/error.rs`).
 
-## Public surface
-
-```rust,ignore
-use molex::ops::codec::{ca_positions, AdapterError};
-
-// CA positions across every protein entity, residue-ordered per chain.
-let ca: Vec<Vec3> = ca_positions(&entities);
-```
+The assembly binary wire format lives in
+[`molex::ops::wire`](wire.md); the structural-transform routines (Kabsch
+alignment, RMSD) live in [`molex::ops::transform`](analysis.md#transforms-opstransform).
 
 ## Error type
 
-`AdapterError` is the `Err` variant for every adapter entry point
-(`pdb_str_to_entities`, `mmcif_str_to_entities`, `bcif_to_entities`,
-their `_file_*` and `_to_all_models` siblings), the PDB writers
-(`assembly_to_pdb`, `entities_to_pdb`), and the assembly wire codec
-(`ops::wire::serialize_assembly` / `deserialize_assembly`).
+`AdapterError` is the `Err` variant for the adapter entry points
+(`pdb_str_to_entities`, `mmcif_str_to_entities`, and their `_file_*` /
+`_to_all_models` siblings), the PDB writers, and the assembly wire codec.
 
 ```rust,ignore
 pub enum AdapterError {
@@ -32,3 +24,7 @@ pub enum AdapterError {
     SerializationError(String),
 }
 ```
+
+Density and trajectory adapters use their own error types (`DensityError`
+from the MRC adapter, for instance); only the structure-and-wire paths funnel
+through `AdapterError`.

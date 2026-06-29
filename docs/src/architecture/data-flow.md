@@ -12,18 +12,18 @@
                               v
                   ┌───────────────────────┐
                   │       Assembly        │
-                  │  (entities + derived: │
-                  │   ss, hbonds, S-S)    │
+                  │  (entities + opt-in   │
+                  │   ss + connections)   │
                   └──┬────────┬────────┬──┘
                      │        │        │
                      v        v        v
               ┌──────────┐ ┌──────────┐ ┌───────────┐
               │ Analysis │ │Transform │ │   Wire    │
               │          │ │          │ │           │
-              │ dssp     │ │ kabsch   │ │ Assembly  │
-              │ bonds    │ │ align    │ │ serialize │
-              │ disulfide│ │ extract  │ │    /      │
-              │ sasa     │ │   ca     │ │deserialize│
+              │ dssp     │ │ kabsch   │ │ assembly  │
+              │ bonds    │ │ align    │ │  bytes    │
+              │ disulfide│ │ rmsd     │ │    +      │
+              │ sasa     │ │          │ │  delta    │
               └──────────┘ └──────────┘ └─────┬─────┘
                                               │
                                               v
@@ -72,10 +72,10 @@ For NMR ensembles or multi-model trajectories, the adapter-level
 use molex::{detect_disulfides, Assembly};
 use molex::analysis::{infer_bonds, DEFAULT_TOLERANCE};
 
-// Top-level pipeline: build an Assembly to get DSSP secondary
-// structure eagerly computed and kept in sync.
-let assembly = Assembly::new(entities);
-let ss     = assembly.ss_types(entity_id);
+// Secondary structure is opt-in: build, then recompute.
+let mut assembly = Assembly::new(entities);
+assembly.recompute_ss();
+let ss = assembly.ss_types(entity_id);
 
 // Disulfide + backbone-H-bond geometry is computed on demand for
 // rendering, not stored on the Assembly:
@@ -88,23 +88,28 @@ let disulfides = detect_disulfides(&entities);             // CYS SG-SG
 
 ## 4. Transforms
 
+`molex::ops` exposes Kabsch alignment and superposition RMSD; nothing else
+lives in the transform surface.
+
 ```rust,ignore
-let (rotation, translation) = kabsch_alignment(&reference_ca, &target_ca)?;
-transform_entities(&mut entities, rotation, translation);
-let ca_positions = extract_ca_positions(&entities);
+use molex::ops::kabsch_alignment;
+use molex::ops::transform::rmsd;
+
+let aligned = kabsch_alignment(&reference, &target); // Option<(Mat3, Vec3)>
+let deviation = rmsd(&a, &b);                         // Option<f32>
 ```
 
 ## 5. Serialization
 
-For sending to C/C++/Python consumers:
+For sending to C/C++/Python consumers, `assembly_bytes` is the only public
+wire entry point (it serializes a raw entity slice). Decode with
+`Assembly::from_bytes`, which returns a secondary-structure-free assembly;
+call `recompute_ss()` if you need SS.
 
 ```rust,ignore
-use molex::ops::wire::{assembly_bytes, serialize_assembly};
+use molex::ops::wire::assembly_bytes;
 
-// Serialize a raw entity slice
 let bytes = assembly_bytes(&entities)?;
-
-// Or serialize a fully-built Assembly (derived data is recomputed on
-// the deserialize side via Assembly::new)
-let bytes = serialize_assembly(&assembly)?;
+let mut assembly = molex::Assembly::from_bytes(&bytes)?; // ss_types empty
+assembly.recompute_ss();
 ```

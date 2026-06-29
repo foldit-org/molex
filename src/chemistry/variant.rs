@@ -13,7 +13,7 @@
 //! so consumers don't have to re-derive on every snapshot.
 //! `Protonation` is the load-bearing case: HID vs HIE differ only in
 //! which nitrogen carries the hydrogen, and protonation isn't
-//! determined by heavy-atom positions alone — without a wire-level
+//! determined by heavy-atom positions alone; without a wire-level
 //! tag, a snapshot round-trip would silently revert to default
 //! protonation.
 

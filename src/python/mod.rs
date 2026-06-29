@@ -798,7 +798,7 @@ impl PyVariant {
         }
     }
 
-    /// `HID` — delta-protonated histidine.
+    /// `HID`: delta-protonated histidine.
     #[must_use]
     #[staticmethod]
     pub fn protonation_his_delta() -> Self {
@@ -807,7 +807,7 @@ impl PyVariant {
         }
     }
 
-    /// `HIE` — epsilon-protonated histidine.
+    /// `HIE`: epsilon-protonated histidine.
     #[must_use]
     #[staticmethod]
     pub fn protonation_his_epsilon() -> Self {
@@ -816,7 +816,7 @@ impl PyVariant {
         }
     }
 
-    /// `HIP` — doubly-protonated histidine.
+    /// `HIP`: doubly-protonated histidine.
     #[must_use]
     #[staticmethod]
     pub fn protonation_his_doubly() -> Self {

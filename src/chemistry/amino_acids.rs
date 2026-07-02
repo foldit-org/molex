@@ -49,6 +49,31 @@ pub enum AminoAcid {
 }
 
 impl AminoAcid {
+    /// The 20 canonical amino acids in enum-declaration order. Lets
+    /// consumers enumerate the full set without re-listing the variants.
+    pub const ALL: &'static [AminoAcid] = &[
+        Self::Ala,
+        Self::Arg,
+        Self::Asn,
+        Self::Asp,
+        Self::Cys,
+        Self::Gln,
+        Self::Glu,
+        Self::Gly,
+        Self::His,
+        Self::Ile,
+        Self::Leu,
+        Self::Lys,
+        Self::Met,
+        Self::Phe,
+        Self::Pro,
+        Self::Ser,
+        Self::Thr,
+        Self::Trp,
+        Self::Tyr,
+        Self::Val,
+    ];
+
     /// Parse a 3-letter PDB residue code (case-insensitive ASCII).
     /// Returns `None` for unknown codes.
     #[must_use]
@@ -493,32 +518,9 @@ const VAL_CHI: &[[AtomName; 4]] = &[chi(b"N", b"CA", b"CB", b"CG1")];
 mod tests {
     use super::*;
 
-    const ALL: &[AminoAcid] = &[
-        AminoAcid::Ala,
-        AminoAcid::Arg,
-        AminoAcid::Asn,
-        AminoAcid::Asp,
-        AminoAcid::Cys,
-        AminoAcid::Gln,
-        AminoAcid::Glu,
-        AminoAcid::Gly,
-        AminoAcid::His,
-        AminoAcid::Ile,
-        AminoAcid::Leu,
-        AminoAcid::Lys,
-        AminoAcid::Met,
-        AminoAcid::Phe,
-        AminoAcid::Pro,
-        AminoAcid::Ser,
-        AminoAcid::Thr,
-        AminoAcid::Trp,
-        AminoAcid::Tyr,
-        AminoAcid::Val,
-    ];
-
     #[test]
     fn from_code_round_trips_every_variant() {
-        for &aa in ALL {
+        for &aa in AminoAcid::ALL {
             assert_eq!(AminoAcid::from_code(aa.code()), Some(aa));
         }
     }
@@ -572,7 +574,7 @@ mod tests {
 
     #[test]
     fn bonds_non_empty_for_every_variant_except_gly() {
-        for &aa in ALL {
+        for &aa in AminoAcid::ALL {
             let bonds = aa.bonds();
             if matches!(aa, AminoAcid::Gly) {
                 assert!(bonds.is_empty(), "Gly bonds should be empty");
@@ -603,7 +605,7 @@ mod tests {
             AminoAcid::Tyr,
             AminoAcid::Val,
         ];
-        for &aa in ALL {
+        for &aa in AminoAcid::ALL {
             let expected = hydrophobic.contains(&aa);
             assert_eq!(aa.is_hydrophobic(), expected, "{aa:?} hydrophobicity");
         }

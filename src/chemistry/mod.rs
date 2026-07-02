@@ -9,6 +9,7 @@ pub mod atom_name;
 pub mod completion;
 mod completion_data;
 pub mod nucleotides;
+pub(crate) mod rotamer;
 pub mod variant;
 
 pub use amino_acids::AminoAcid;

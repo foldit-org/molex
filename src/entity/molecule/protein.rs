@@ -5,19 +5,24 @@
 //! Per-residue types (`ResidueBackbone`) and the `ProteinEntity` chain
 //! instance with segment break metadata.
 
-use glam::Vec3;
+use glam::{Mat3, Quat, Vec3};
+use thiserror::Error;
 
-use super::atom::{Atom, AtomColumns};
+use super::atom::{pad_atom_name, Atom, AtomColumns};
 use super::complete::{complete_protein_residues, keep_hydrogens, Completion};
 use super::id::EntityId;
 use super::polymer::residue_name_to_idx;
 use super::traits::{Entity, Polymer};
 use super::{MoleculeType, Residue};
+use crate::analysis::grid::SpatialGrid;
 use crate::analysis::{BondOrder, SSType};
 use crate::atom_id::AtomId;
 use crate::bond::CovalentBond;
 use crate::chemistry::amino_acids::AminoAcid;
+use crate::chemistry::atom_name::AtomName;
+use crate::chemistry::rotamer::{distal_atoms, modal_rotamers};
 use crate::element::Element;
+use crate::ops::kabsch_alignment;
 
 // Per-residue types
 
@@ -79,6 +84,30 @@ pub struct ProteinEntity {
 /// Maximum C->N distance (A) for a peptide bond. Pairs exceeding this
 /// are treated as segment breaks.
 const MAX_PEPTIDE_BOND_DIST: f32 = 2.0;
+
+/// Failure modes of [`ProteinEntity::mutate_residue`].
+///
+/// A clash is never a failure; the only error is an out-of-range residue
+/// index. (The target identity is a closed [`AminoAcid`], and every
+/// residue surviving construction carries a complete backbone, so there
+/// is no separate "invalid amino acid" failure to report.)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum MutateResidueError {
+    /// `residue_index` is past the end of the entity's residue list.
+    #[error("residue index {0} is out of range")]
+    ResidueIndexOutOfRange(usize),
+}
+
+/// Fraction of the summed van der Waals radii below which two atoms count
+/// as clashing. Picked permissively (a hard-overlap threshold) so that
+/// near-contacts of a placed sidechain do not veto otherwise sound
+/// rotamers; the placer only needs a non-clashing refinable seat.
+const CLASH_FACTOR: f32 = 0.75;
+
+/// Spatial-grid cell size (A) for the clash query. Sized above the largest
+/// pairwise clash threshold (`CLASH_FACTOR` times two large vdW radii) so
+/// every potential partner falls inside the 27-cell stencil.
+const CLASH_CELL: f32 = 4.0;
 
 impl ProteinEntity {
     /// Construct a protein entity.
@@ -371,6 +400,255 @@ impl ProteinEntity {
             })
             .collect()
     }
+
+    /// Replace residue `residue_index`'s identity with `aa`, seating a
+    /// fresh non-clashing heavy-atom sidechain on the existing backbone.
+    ///
+    /// The backbone (N, CA, C, O, and any terminal OXT) is preserved
+    /// verbatim. The new heavy sidechain is placed by rigid-fitting the
+    /// amino-acid template onto that backbone (the same Kabsch anchor as
+    /// missing-atom completion), then driving each sidechain torsion to
+    /// the least-clashing modal rotamer. Clash is measured only against
+    /// the rest of this entity's atoms (intra-entity). The result is a
+    /// refinable starting state, not a scored optimum: a clash never
+    /// fails the call, and when no rotamer is clash-free the
+    /// least-clashing one is kept. Ala/Gly (no rotatable torsion) and Pro
+    /// (fixed ring) take the template seat directly.
+    ///
+    /// The returned entity is freshly built, so its `AtomId`s are not
+    /// stable against this one (the atom set is re-canonicalized). Any
+    /// sidechain hydrogens on the mutated residue are dropped; the new
+    /// sidechain is heavy-atom only.
+    ///
+    /// # Errors
+    /// Returns [`MutateResidueError::ResidueIndexOutOfRange`] when
+    /// `residue_index` is past the end of the residue list.
+    pub fn mutate_residue(
+        &self,
+        residue_index: usize,
+        aa: AminoAcid,
+    ) -> Result<Self, MutateResidueError> {
+        let residue = self
+            .residues
+            .get(residue_index)
+            .ok_or(MutateResidueError::ResidueIndexOutOfRange(residue_index))?;
+        let sidechain = self.place_sidechain(aa, residue.atom_range.clone());
+        Ok(self.rebuild_with_mutation(residue_index, aa, &sidechain))
+    }
+
+    /// Place `aa`'s heavy sidechain on the backbone of the residue spanning
+    /// `range`, returning each new atom's `(name, element, position)`.
+    ///
+    /// Seats the template on the N/CA/C frame, then walks `aa`'s modal
+    /// rotamers most-populated first and keeps the first clash-free one (or
+    /// the least-clashing if none clears). Residues with no rotamer search
+    /// (Ala/Gly/Pro) return the template seat directly.
+    fn place_sidechain(
+        &self,
+        aa: AminoAcid,
+        range: std::ops::Range<usize>,
+    ) -> Vec<(AtomName, Element, Vec3)> {
+        let name_to_idx =
+            residue_name_to_idx(range.clone(), |i| self.columns.name[i]);
+        let real = |nm: &[u8]| {
+            name_to_idx
+                .get(&AtomName::from_bytes(nm))
+                .map(|&i| self.columns.position[i])
+        };
+        let template = aa.template();
+        let ideal = |nm: &[u8]| {
+            template.atom(AtomName::from_bytes(nm)).map(|a| a.ideal)
+        };
+
+        let (rot, trans) = backbone_fit(
+            [real(b"N"), real(b"CA"), real(b"C")],
+            [ideal(b"N"), ideal(b"CA"), ideal(b"C")],
+        );
+
+        // Scratch buffer: the two fixed backbone references χ quads need
+        // (N, CA) followed by the heavy sidechain atoms at their template
+        // seat. set_chi rotates only the sidechain entries.
+        let mut names =
+            vec![AtomName::from_bytes(b"N"), AtomName::from_bytes(b"CA")];
+        let mut positions = vec![
+            real(b"N").unwrap_or(Vec3::ZERO),
+            real(b"CA").unwrap_or(Vec3::ZERO),
+        ];
+        let mut sidechain: Vec<(AtomName, Element)> = Vec::new();
+        for t in template.atoms {
+            if t.element == Element::H
+                || t.is_leaving
+                || t.name.is_protein_backbone()
+            {
+                continue;
+            }
+            names.push(t.name);
+            positions.push(rot * t.ideal + trans);
+            sidechain.push((t.name, t.element));
+        }
+
+        let scratch = SidechainScratch {
+            names: &names,
+            positions: &positions,
+            atoms: &sidechain,
+        };
+        let chosen = self.best_rotamer(aa, &range, &scratch);
+        sidechain
+            .iter()
+            .enumerate()
+            .map(|(k, &(name, element))| (name, element, chosen[k]))
+            .collect()
+    }
+
+    /// Sidechain positions of the least-clashing modal rotamer. Returns the
+    /// chosen sidechain positions (parallel to `scratch.atoms`); with no
+    /// rotamer search the template seat is returned unchanged.
+    fn best_rotamer(
+        &self,
+        aa: AminoAcid,
+        range: &std::ops::Range<usize>,
+        scratch: &SidechainScratch,
+    ) -> Vec<Vec3> {
+        let seat = scratch.positions[2..].to_vec();
+        let rotamers = modal_rotamers(aa);
+        if rotamers.is_empty() {
+            return seat;
+        }
+        let grid = SpatialGrid::build(&self.columns.position, CLASH_CELL);
+        let mut best: Option<(f32, Vec<Vec3>)> = None;
+        for rotamer in rotamers {
+            let mut buf = scratch.positions.to_vec();
+            for (chi_index, &target) in rotamer.iter().enumerate() {
+                set_chi(aa, chi_index, target, scratch.names, &mut buf);
+            }
+            let placed = &buf[2..];
+            let score = self.clash_score(&grid, range, scratch.atoms, placed);
+            // Only finite scores compete; a non-finite candidate (infinite
+            // clash from a non-finite seat) is never selectable, so an
+            // all-degenerate search falls back to the template seat below.
+            let keep = score.is_finite()
+                && match &best {
+                    Some((b, _)) => score < *b,
+                    None => true,
+                };
+            if keep {
+                best = Some((score, placed.to_vec()));
+            }
+            if score <= 0.0 {
+                break;
+            }
+        }
+        best.map_or(seat, |(_, placed)| placed)
+    }
+
+    /// Summed overlap depth of `placed` sidechain atoms against the rest of
+    /// the entity (atoms inside `range`, the mutated residue, are skipped).
+    /// Zero means clash-free; a larger value means deeper/more overlaps.
+    fn clash_score(
+        &self,
+        grid: &SpatialGrid,
+        range: &std::ops::Range<usize>,
+        sidechain: &[(AtomName, Element)],
+        placed: &[Vec3],
+    ) -> f32 {
+        let mut score = 0.0f32;
+        for (k, &pos) in placed.iter().enumerate() {
+            // A non-finite seat has no geometric meaning; treat it as maximally
+            // clashing so a garbage rotamer can never read back as clash-free.
+            if !pos.is_finite() {
+                return f32::INFINITY;
+            }
+            let element = sidechain[k].1;
+            grid.for_each_candidate(pos, |idx| {
+                if range.contains(&idx) {
+                    return;
+                }
+                let threshold = CLASH_FACTOR
+                    * (element.vdw_radius()
+                        + self.columns.element[idx].vdw_radius());
+                let dist = pos.distance(self.columns.position[idx]);
+                if dist < threshold {
+                    score += threshold - dist;
+                }
+            });
+        }
+        score
+    }
+
+    /// Build a fresh entity with residue `residue_index` re-identified as
+    /// `aa` and carrying `sidechain` as its heavy sidechain. Backbone heavy
+    /// atoms are preserved; all other residues pass through unchanged.
+    fn rebuild_with_mutation(
+        &self,
+        residue_index: usize,
+        aa: AminoAcid,
+        sidechain: &[(AtomName, Element, Vec3)],
+    ) -> Self {
+        let mut new_atoms: Vec<Atom> =
+            Vec::with_capacity(self.columns.len() + sidechain.len());
+        let mut new_residues: Vec<Residue> =
+            Vec::with_capacity(self.residues.len());
+        for (ri, res) in self.residues.iter().enumerate() {
+            let start = new_atoms.len();
+            let name = if ri == residue_index {
+                self.push_mutated_residue(
+                    res.atom_range.clone(),
+                    sidechain,
+                    &mut new_atoms,
+                );
+                aa.code()
+            } else {
+                for i in res.atom_range.clone() {
+                    new_atoms.push(self.columns.gather(i));
+                }
+                res.name
+            };
+            new_residues.push(Residue {
+                name,
+                label_seq_id: res.label_seq_id,
+                auth_seq_id: res.auth_seq_id,
+                auth_comp_id: res.auth_comp_id,
+                ins_code: res.ins_code,
+                atom_range: start..new_atoms.len(),
+                variants: res.variants.clone(),
+            });
+        }
+        build_protein(
+            self.id,
+            new_atoms,
+            new_residues,
+            self.pdb_chain_id.clone(),
+            Completion::Raw,
+            false,
+        )
+    }
+
+    /// Emit the mutated residue's atoms: existing backbone heavy atoms
+    /// (N, CA, C, O, and OXT when present), then the new heavy sidechain.
+    fn push_mutated_residue(
+        &self,
+        range: std::ops::Range<usize>,
+        sidechain: &[(AtomName, Element, Vec3)],
+        out: &mut Vec<Atom>,
+    ) {
+        let name_to_idx = residue_name_to_idx(range, |i| self.columns.name[i]);
+        for nm in [b"N".as_slice(), b"CA", b"C", b"O", b"OXT"] {
+            if let Some(&i) = name_to_idx.get(&AtomName::from_bytes(nm)) {
+                out.push(self.columns.gather(i));
+            }
+        }
+        for &(name, element, position) in sidechain {
+            out.push(Atom {
+                position,
+                occupancy: 1.0,
+                b_factor: 0.0,
+                element,
+                name: pad_atom_name(name.as_str()),
+                formal_charge: 0,
+                observed: false,
+            });
+        }
+    }
 }
 
 impl Entity for ProteinEntity {
@@ -620,7 +898,7 @@ fn emit_protein_residue_bonds(
 ///
 /// Emits: universal backbone bonds (N-CA, CA-C, C=O) per residue,
 /// sidechain/anchor bonds from [`AminoAcid::bonds()`] matched by
-/// [`AtomName`](crate::chemistry::atom_name::AtomName) within the residue,
+/// [`AtomName`] within the residue,
 /// and inter-residue peptide bonds
 /// `C(i)-N(i+1)` between consecutive kept residues that are not
 /// separated by a segment break.
@@ -755,6 +1033,314 @@ pub(crate) fn dihedral_deg(p0: Vec3, p1: Vec3, p2: Vec3, p3: Vec3) -> f32 {
     y.atan2(x).to_degrees()
 }
 
+/// Per-residue scratch buffer for rotamer placement: parallel `names` and
+/// `positions` whose first two slots are the fixed N and CA references and
+/// whose remaining slots are the heavy sidechain atoms (named, in order, by
+/// `atoms`).
+struct SidechainScratch<'a> {
+    names: &'a [AtomName],
+    positions: &'a [Vec3],
+    atoms: &'a [(AtomName, Element)],
+}
+
+/// Rigid transform mapping template-frame ideals into the real backbone
+/// frame, anchored on N/CA/C (`real`/`ideal` paired by position). Mirrors
+/// the Kabsch fit atom completion uses. Falls back to a pure translation
+/// aligning CA when an anchor is missing or the three are collinear (the
+/// only cases the fit is under-determined).
+fn backbone_fit(
+    real: [Option<Vec3>; 3],
+    ideal: [Option<Vec3>; 3],
+) -> (Mat3, Vec3) {
+    let mut reference = Vec::new();
+    let mut target = Vec::new();
+    for (r, t) in real.iter().zip(ideal.iter()) {
+        if let (Some(r), Some(t)) = (r, t) {
+            reference.push(*r);
+            target.push(*t);
+        }
+    }
+    if !backbone_is_collinear(real) {
+        if let Some(fit) = kabsch_alignment(&reference, &target) {
+            return fit;
+        }
+    }
+    let trans = real[1].zip(ideal[1]).map_or(Vec3::ZERO, |(r, t)| r - t);
+    (Mat3::IDENTITY, trans)
+}
+
+/// True when the real N/CA/C anchors are all present but (near-)collinear.
+/// Collinear anchors cannot define a unique orientation, so Kabsch returns a
+/// finite but under-determined rotation that seats the sidechain at a garbage
+/// angle; the caller routes such triads to the translation-only fallback.
+/// The test is on the normalized cross product of the two edge vectors from N
+/// (the sine of the angle at vertex N), a vertex-invariant collinearity
+/// measure: zero area means the three anchors are collinear at every vertex.
+/// A real backbone gives a sine well away from zero, so a 1e-3 threshold only
+/// trips on a triad within ~0.06 deg of a straight line.
+fn backbone_is_collinear(real: [Option<Vec3>; 3]) -> bool {
+    let (Some(n), Some(ca), Some(c)) = (real[0], real[1], real[2]) else {
+        return false;
+    };
+    let e1 = ca - n;
+    let e2 = c - n;
+    let denom = e1.length() * e2.length();
+    if denom < f32::EPSILON {
+        return true;
+    }
+    e1.cross(e2).length() / denom < 1e-3
+}
+
+/// Rotate the atoms distal to sidechain torsion `chi_index` so the dihedral
+/// reads `target_deg`. Operates on the scratch buffer `positions` (parallel
+/// to `names`); the axis atoms and every proximal/backbone atom stay put.
+/// A no-op when the residue lacks that torsion or any quad atom is absent.
+pub(crate) fn set_chi(
+    aa: AminoAcid,
+    chi_index: usize,
+    target_deg: f32,
+    names: &[AtomName],
+    positions: &mut [Vec3],
+) {
+    let Some(quad) = aa.chi_atoms().get(chi_index) else {
+        return;
+    };
+    let idx_of = |nm: AtomName| names.iter().position(|m| *m == nm);
+    let (Some(i0), Some(i1), Some(i2), Some(i3)) = (
+        idx_of(quad[0]),
+        idx_of(quad[1]),
+        idx_of(quad[2]),
+        idx_of(quad[3]),
+    ) else {
+        return;
+    };
+    let current = dihedral_deg(
+        positions[i0],
+        positions[i1],
+        positions[i2],
+        positions[i3],
+    );
+    let axis_vec = positions[i2] - positions[i1];
+    if axis_vec.length_squared() < 1e-12 {
+        return;
+    }
+    let rotation = Quat::from_axis_angle(
+        axis_vec.normalize(),
+        (target_deg - current).to_radians(),
+    );
+    let pivot = positions[i2];
+    for nm in distal_atoms(aa, quad[1], quad[2]) {
+        if let Some(j) = idx_of(nm) {
+            positions[j] = pivot + rotation * (positions[j] - pivot);
+        }
+    }
+}
+
 #[cfg(test)]
 #[path = "protein_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::float_cmp)]
+mod mutate_tests {
+    use super::*;
+    use crate::entity::molecule::id::EntityIdAllocator;
+
+    fn atom(name: &str, element: Element, pos: Vec3) -> Atom {
+        Atom {
+            position: pos,
+            occupancy: 1.0,
+            b_factor: 0.0,
+            element,
+            name: pad_atom_name(name),
+            formal_charge: 0,
+            observed: true,
+        }
+    }
+
+    fn res(name: &str, seq: i32, range: std::ops::Range<usize>) -> Residue {
+        Residue {
+            name: {
+                let mut b = [b' '; 3];
+                for (i, c) in name.bytes().take(3).enumerate() {
+                    b[i] = c;
+                }
+                b
+            },
+            label_seq_id: seq,
+            auth_seq_id: None,
+            auth_comp_id: None,
+            ins_code: None,
+            atom_range: range,
+            variants: Vec::new(),
+        }
+    }
+
+    /// A glycine-only backbone (N, CA, C, O) at a non-collinear frame,
+    /// ready to receive a mutated sidechain.
+    fn backbone_atoms(origin: Vec3) -> Vec<Atom> {
+        vec![
+            atom("N", Element::N, origin + Vec3::new(0.0, 0.0, 0.0)),
+            atom("CA", Element::C, origin + Vec3::new(1.458, 0.0, 0.0)),
+            atom("C", Element::C, origin + Vec3::new(2.0, 1.42, 0.0)),
+            atom("O", Element::O, origin + Vec3::new(1.5, 2.5, 0.0)),
+        ]
+    }
+
+    fn single_gly(origin: Vec3) -> ProteinEntity {
+        let mut alloc = EntityIdAllocator::new();
+        ProteinEntity::new(
+            alloc.allocate(),
+            backbone_atoms(origin),
+            vec![res("GLY", 1, 0..4)],
+            "A".to_owned(),
+        )
+    }
+
+    fn atom_pos(e: &ProteinEntity, res_idx: usize, name: &str) -> Option<Vec3> {
+        let r = &e.residues[res_idx];
+        for i in r.atom_range.clone() {
+            if std::str::from_utf8(&e.columns.name[i]).unwrap_or("").trim()
+                == name
+            {
+                return Some(e.columns.position[i]);
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn set_chi_reaches_each_target() {
+        // A bare N-CA-CB-CG quad; set_chi must drive the dihedral to the
+        // requested value regardless of the starting angle.
+        let names = [
+            AtomName::from_bytes(b"N"),
+            AtomName::from_bytes(b"CA"),
+            AtomName::from_bytes(b"CB"),
+            AtomName::from_bytes(b"CG"),
+        ];
+        for target in [60.0f32, -60.0, 170.0, -120.0] {
+            let mut pos = vec![
+                Vec3::new(0.0, 0.0, 0.0),
+                Vec3::new(1.5, 0.0, 0.0),
+                Vec3::new(2.0, 1.4, 0.0),
+                Vec3::new(3.5, 1.4, 0.3),
+            ];
+            set_chi(AminoAcid::Leu, 0, target, &names, &mut pos);
+            let measured = dihedral_deg(pos[0], pos[1], pos[2], pos[3]);
+            assert!(
+                (measured - target).abs() < 1e-2,
+                "target {target}, measured {measured}"
+            );
+        }
+    }
+
+    #[test]
+    fn mutation_lands_modal_chi_without_clash() {
+        // An isolated residue has no clash pressure, so the placer keeps the
+        // first (modal) rotamer; its χ1 must match the table within
+        // tolerance.
+        let gly = single_gly(Vec3::ZERO);
+        let mutated = gly.mutate_residue(0, AminoAcid::Leu).unwrap();
+        assert_eq!(&mutated.residues[0].name, b"LEU");
+        let chi1 = mutated.chi_angles()[0][0].expect("Leu χ1 present");
+        let modal = modal_rotamers(AminoAcid::Leu)[0][0];
+        assert!(
+            (chi1 - modal).abs() < 5.0,
+            "χ1 {chi1} should be near modal {modal}"
+        );
+    }
+
+    #[test]
+    fn clash_pushes_off_the_modal_rotamer() {
+        // Place the modal rotamer first in isolation to learn where its CG1
+        // tip lands, then drop a blocking residue exactly there: the second
+        // mutation must avoid the now-clashing modal and pick another χ1.
+        let isolated = single_gly(Vec3::ZERO)
+            .mutate_residue(0, AminoAcid::Val)
+            .unwrap();
+        let modal_chi1 = isolated.chi_angles()[0][0].unwrap();
+        let tip = atom_pos(&isolated, 0, "CG1").expect("Val CG1");
+
+        // Two residues: the target (res 0) plus a blocker (res 1) whose CA
+        // sits on the modal CG1 tip.
+        let mut atoms = backbone_atoms(Vec3::ZERO);
+        atoms.extend([
+            atom("N", Element::N, tip + Vec3::new(-1.458, 0.0, 0.0)),
+            atom("CA", Element::C, tip),
+            atom("C", Element::C, tip + Vec3::new(0.5, 1.42, 0.0)),
+            atom("O", Element::O, tip + Vec3::new(0.5, 2.5, 0.0)),
+        ]);
+        let mut alloc = EntityIdAllocator::new();
+        let blocked = ProteinEntity::new(
+            alloc.allocate(),
+            atoms,
+            vec![res("GLY", 1, 0..4), res("GLY", 2, 4..8)],
+            "A".to_owned(),
+        );
+
+        let mutated = blocked.mutate_residue(0, AminoAcid::Val).unwrap();
+        let chi1 = mutated.chi_angles()[0][0].unwrap();
+        assert!(
+            (chi1 - modal_chi1).abs() > 30.0,
+            "blocked χ1 {chi1} should differ from modal {modal_chi1}"
+        );
+    }
+
+    #[test]
+    fn collinear_backbone_seats_finite_sidechain() {
+        // N/CA/C on a straight line cannot define a unique rotation. The
+        // placer must route to the translation-only fallback rather than trust
+        // an under-determined Kabsch rotation, leaving every seated atom
+        // finite instead of NaN/Inf.
+        let mut alloc = EntityIdAllocator::new();
+        let atoms = vec![
+            atom("N", Element::N, Vec3::new(0.0, 0.0, 0.0)),
+            atom("CA", Element::C, Vec3::new(1.458, 0.0, 0.0)),
+            atom("C", Element::C, Vec3::new(2.916, 0.0, 0.0)),
+            atom("O", Element::O, Vec3::new(3.5, 1.0, 0.0)),
+        ];
+        let entity = ProteinEntity::new(
+            alloc.allocate(),
+            atoms,
+            vec![res("GLY", 1, 0..4)],
+            "A".to_owned(),
+        );
+        let mutated = entity.mutate_residue(0, AminoAcid::Leu).unwrap();
+        assert_eq!(&mutated.residues[0].name, b"LEU");
+        for i in mutated.residues[0].atom_range.clone() {
+            assert!(
+                mutated.columns.position[i].is_finite(),
+                "atom {i} seated non-finite on a collinear backbone",
+            );
+        }
+    }
+
+    #[test]
+    fn out_of_range_index_is_error() {
+        let gly = single_gly(Vec3::ZERO);
+        assert_eq!(
+            gly.mutate_residue(7, AminoAcid::Ala).unwrap_err(),
+            MutateResidueError::ResidueIndexOutOfRange(7)
+        );
+    }
+
+    #[test]
+    fn glycine_target_seats_backbone_only() {
+        // Mutating to Gly leaves only the backbone (no rotatable sidechain).
+        let ala = {
+            let mut alloc = EntityIdAllocator::new();
+            let mut atoms = backbone_atoms(Vec3::ZERO);
+            atoms.push(atom("CB", Element::C, Vec3::new(2.0, -1.3, 0.5)));
+            ProteinEntity::new(
+                alloc.allocate(),
+                atoms,
+                vec![res("ALA", 1, 0..5)],
+                "A".to_owned(),
+            )
+        };
+        let mutated = ala.mutate_residue(0, AminoAcid::Gly).unwrap();
+        assert_eq!(&mutated.residues[0].name, b"GLY");
+        assert!(atom_pos(&mutated, 0, "CB").is_none(), "Gly has no CB");
+    }
+}

@@ -5,9 +5,9 @@ use crate::analysis::SSType;
 /// Parse a DSSP-style secondary structure annotation string.
 ///
 /// Character mapping:
-/// - `H`, `G`, `I` → Helix (α-helix, 3₁₀-helix, π-helix)
-/// - `E`, `B` → Sheet (strand, isolated bridge)
-/// - Everything else → Coil
+/// - `H`, `G`, `I` -> Helix (alpha-helix, 3_1_0-helix, pi-helix)
+/// - `E`, `B` -> Sheet (strand, isolated bridge)
+/// - Everything else -> Coil
 ///
 /// Also handles simplified notation where lowercase is accepted.
 #[must_use]

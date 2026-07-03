@@ -1,12 +1,12 @@
 //! Operations on molecular data.
 
-/// Wire formats (COORDS01, ASSEM01), their types, and assembly helpers.
-pub mod codec;
+/// Typed Assembly edits + apply path.
+pub mod edit;
+/// Adapter / wire error type.
+pub mod error;
 pub mod transform;
+/// Assembly + delta binary wire format encoder/decoder.
+pub mod wire;
 
-pub use transform::{
-    align_coords_bytes, align_to_reference, centroid,
-    extract_backbone_segments, extract_ca_from_chains, extract_ca_positions,
-    kabsch_alignment, kabsch_alignment_with_scale, transform_entities,
-    transform_entities_with_scale,
-};
+pub use edit::{AssemblyEdit, BulkEditError, EditError};
+pub use transform::kabsch_alignment;

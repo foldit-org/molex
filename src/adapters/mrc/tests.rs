@@ -41,12 +41,12 @@ fn make_test_mrc(p: &TestMrcParams<'_>) -> Vec<u8> {
     put_i32(&mut header, 32, p.nr);
     put_i32(&mut header, 36, p.ns);
 
-    // Cell dimensions (10 Å each)
+    // Cell dimensions (10 A each)
     put_f32(&mut header, 40, 10.0);
     put_f32(&mut header, 44, 10.0);
     put_f32(&mut header, 48, 10.0);
 
-    // Cell angles (90°)
+    // Cell angles (90 deg)
     put_f32(&mut header, 52, 90.0);
     put_f32(&mut header, 56, 90.0);
     put_f32(&mut header, 60, 90.0);
@@ -191,7 +191,7 @@ fn voxel_size_and_grid_to_cartesian() {
         data_values: &data,
     });
 
-    // Set cell dims to 20, 30, 40 Å with MX=2, MY=3, MZ=4
+    // Set cell dims to 20, 30, 40 A with MX=2, MY=3, MZ=4
     mrc[40..44].copy_from_slice(&20.0f32.to_le_bytes());
     mrc[44..48].copy_from_slice(&30.0f32.to_le_bytes());
     mrc[48..52].copy_from_slice(&40.0f32.to_le_bytes());
@@ -425,7 +425,7 @@ fn origin_and_start_indices() {
     assert_eq!(map.nystart, 2);
     assert_eq!(map.nzstart, 3);
 
-    // voxel_size = 10/2 = 5 Å per axis
+    // voxel_size = 10/2 = 5 A per axis
     // grid_to_cartesian(0,0,0) = origin + start * voxel_size
     let pos = map.grid_to_cartesian(0, 0, 0);
     assert!((pos[0] - 10.0).abs() < 1e-6); // 5.0 + 1*5.0

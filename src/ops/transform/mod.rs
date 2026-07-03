@@ -1,14 +1,5 @@
-//! Transformation utilities: extraction and alignment.
+//! Transformation utilities: Kabsch alignment and superposition RMSD.
 
 mod alignment;
-mod extract;
 
-pub use alignment::{
-    align_coords_bytes, align_to_reference, kabsch_alignment,
-    kabsch_alignment_with_scale, transform_entities,
-    transform_entities_with_scale,
-};
-pub use extract::{
-    centroid, extract_backbone_segments, extract_ca_from_chains,
-    extract_ca_positions,
-};
+pub use alignment::{kabsch_alignment, rmsd};

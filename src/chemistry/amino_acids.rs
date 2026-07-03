@@ -49,6 +49,31 @@ pub enum AminoAcid {
 }
 
 impl AminoAcid {
+    /// The 20 canonical amino acids in enum-declaration order. Lets
+    /// consumers enumerate the full set without re-listing the variants.
+    pub const ALL: &'static [AminoAcid] = &[
+        Self::Ala,
+        Self::Arg,
+        Self::Asn,
+        Self::Asp,
+        Self::Cys,
+        Self::Gln,
+        Self::Glu,
+        Self::Gly,
+        Self::His,
+        Self::Ile,
+        Self::Leu,
+        Self::Lys,
+        Self::Met,
+        Self::Phe,
+        Self::Pro,
+        Self::Ser,
+        Self::Thr,
+        Self::Trp,
+        Self::Tyr,
+        Self::Val,
+    ];
+
     /// Parse a 3-letter PDB residue code (case-insensitive ASCII).
     /// Returns `None` for unknown codes.
     #[must_use]
@@ -110,6 +135,33 @@ impl AminoAcid {
         }
     }
 
+    /// 1-letter amino acid code (uppercase ASCII).
+    #[must_use]
+    pub const fn one_letter(self) -> u8 {
+        match self {
+            Self::Ala => b'A',
+            Self::Arg => b'R',
+            Self::Asn => b'N',
+            Self::Asp => b'D',
+            Self::Cys => b'C',
+            Self::Gln => b'Q',
+            Self::Glu => b'E',
+            Self::Gly => b'G',
+            Self::His => b'H',
+            Self::Ile => b'I',
+            Self::Leu => b'L',
+            Self::Lys => b'K',
+            Self::Met => b'M',
+            Self::Phe => b'F',
+            Self::Pro => b'P',
+            Self::Ser => b'S',
+            Self::Thr => b'T',
+            Self::Trp => b'W',
+            Self::Tyr => b'Y',
+            Self::Val => b'V',
+        }
+    }
+
     /// Heavy-atom intra-residue bonds beyond the universal N-CA, CA-C,
     /// and C=O backbone bonds.
     ///
@@ -117,14 +169,11 @@ impl AminoAcid {
     /// sidechain-internal heavy bonds. Glycine has no sidechain heavy
     /// atoms and returns an empty slice.
     ///
-    /// Lifted directly from viso's pre-migration `get_residue_bonds`
-    /// table. Phase 2 of the assembly migration uses this with explicit
-    /// backbone (N-CA, CA-C, C=O) and inter-residue peptide bonds when
-    /// populating `ProteinEntity` bond graphs.
+    /// Consumers add backbone (N-CA, CA-C, C=O) and inter-residue
+    /// peptide bonds separately when populating `ProteinEntity` bond
+    /// graphs.
     ///
-    /// Note: the proline ring-closure bond CD-N is intentionally
-    /// omitted to match the pre-migration behavior; if a Phase 2
-    /// consumer needs it, lock the change in `decision_log.md` first.
+    /// The proline ring-closure bond CD-N is intentionally omitted.
     #[must_use]
     pub const fn bonds(self) -> &'static [(AtomName, AtomName)] {
         match self {
@@ -151,30 +200,91 @@ impl AminoAcid {
         }
     }
 
-    /// Whether this amino acid is classified as hydrophobic.
+    /// Sidechain torsion (χ) atom quads, in order χ1, χ2, ...
     ///
-    /// Membership matches viso's pre-migration table:
-    /// Ala, Val, Ile, Leu, Met, Phe, Trp, Pro, Gly.
+    /// Each quad is the four atom names defining one χ dihedral under the
+    /// standard IUPAC convention (χ1 = N-CA-CB-*G, with the branched/heteroatom
+    /// exceptions: Ser OG, Thr OG1, Cys SG, Ile/Val CG1). Ala and Gly have no
+    /// rotatable sidechain torsions and return an empty slice.
     #[must_use]
-    pub const fn is_hydrophobic(self) -> bool {
+    pub const fn chi_atoms(self) -> &'static [[AtomName; 4]] {
+        match self {
+            Self::Ala | Self::Gly => &[],
+            Self::Arg => ARG_CHI,
+            Self::Asn => ASN_CHI,
+            Self::Asp => ASP_CHI,
+            Self::Cys => CYS_CHI,
+            Self::Gln => GLN_CHI,
+            Self::Glu => GLU_CHI,
+            Self::His => HIS_CHI,
+            Self::Ile => ILE_CHI,
+            Self::Leu => LEU_CHI,
+            Self::Lys => LYS_CHI,
+            Self::Met => MET_CHI,
+            Self::Phe => PHE_CHI,
+            Self::Pro => PRO_CHI,
+            Self::Ser => SER_CHI,
+            Self::Thr => THR_CHI,
+            Self::Trp => TRP_CHI,
+            Self::Tyr => TYR_CHI,
+            Self::Val => VAL_CHI,
+        }
+    }
+
+    /// Whether this amino acid carries Rosetta's POLAR residue-type property.
+    ///
+    /// Polar set (Rosetta `fa_standard` POLAR property): Arg, Asn, Asp, Gln,
+    /// Glu, His, Lys, Ser, Thr.
+    #[must_use]
+    pub const fn is_polar(self) -> bool {
         matches!(
             self,
-            Self::Ala
-                | Self::Val
-                | Self::Ile
-                | Self::Leu
-                | Self::Met
-                | Self::Phe
-                | Self::Trp
-                | Self::Pro
-                | Self::Gly
+            Self::Arg
+                | Self::Asn
+                | Self::Asp
+                | Self::Gln
+                | Self::Glu
+                | Self::His
+                | Self::Lys
+                | Self::Ser
+                | Self::Thr
         )
+    }
+
+    /// Whether this amino acid is hydrophobic, i.e. not polar.
+    ///
+    /// Defined as the complement of [`Self::is_polar`], matching Rosetta's
+    /// binary polar/non-polar partition. Hydrophobic set: Ala, Cys, Gly,
+    /// Ile, Leu, Met, Phe, Pro, Trp, Tyr, Val.
+    #[must_use]
+    pub const fn is_hydrophobic(self) -> bool {
+        !self.is_polar()
     }
 }
 
-// ---------------------------------------------------------------------------
+/// One-letter code for a modified amino-acid residue name that
+/// [`AminoAcid::from_code`] does not parse but [`crate::entity::molecule`]
+/// classifies as protein.
+///
+/// Maps the standard genetically/selenium-substituted residues to their parent:
+/// MSE (selenomethionine) -> M, SEC (selenocysteine) -> U, PYL (pyrrolysine)
+/// -> O. Returns `None` for any other code.
+#[must_use]
+pub fn modified_aa_one_letter(code: [u8; 3]) -> Option<u8> {
+    let upper = [
+        code[0].to_ascii_uppercase(),
+        code[1].to_ascii_uppercase(),
+        code[2].to_ascii_uppercase(),
+    ];
+    match &upper {
+        b"MSE" => Some(b'M'),
+        b"SEC" => Some(b'U'),
+        b"PYL" => Some(b'O'),
+        _ => None,
+    }
+}
+
 // Bond tables
-// ---------------------------------------------------------------------------
 
 const fn an(b: &'static [u8]) -> AtomName {
     AtomName::from_bytes(b)
@@ -325,36 +435,92 @@ const VAL_BONDS: &[(AtomName, AtomName)] = &[
     (an(b"CB"), an(b"CG2")),
 ];
 
+// Sidechain χ tables (IUPAC convention)
+
+const fn chi(
+    a: &'static [u8],
+    b: &'static [u8],
+    c: &'static [u8],
+    d: &'static [u8],
+) -> [AtomName; 4] {
+    [an(a), an(b), an(c), an(d)]
+}
+
+const ARG_CHI: &[[AtomName; 4]] = &[
+    chi(b"N", b"CA", b"CB", b"CG"),
+    chi(b"CA", b"CB", b"CG", b"CD"),
+    chi(b"CB", b"CG", b"CD", b"NE"),
+    chi(b"CG", b"CD", b"NE", b"CZ"),
+];
+const ASN_CHI: &[[AtomName; 4]] = &[
+    chi(b"N", b"CA", b"CB", b"CG"),
+    chi(b"CA", b"CB", b"CG", b"OD1"),
+];
+const ASP_CHI: &[[AtomName; 4]] = &[
+    chi(b"N", b"CA", b"CB", b"CG"),
+    chi(b"CA", b"CB", b"CG", b"OD1"),
+];
+const CYS_CHI: &[[AtomName; 4]] = &[chi(b"N", b"CA", b"CB", b"SG")];
+const GLN_CHI: &[[AtomName; 4]] = &[
+    chi(b"N", b"CA", b"CB", b"CG"),
+    chi(b"CA", b"CB", b"CG", b"CD"),
+    chi(b"CB", b"CG", b"CD", b"OE1"),
+];
+const GLU_CHI: &[[AtomName; 4]] = &[
+    chi(b"N", b"CA", b"CB", b"CG"),
+    chi(b"CA", b"CB", b"CG", b"CD"),
+    chi(b"CB", b"CG", b"CD", b"OE1"),
+];
+const HIS_CHI: &[[AtomName; 4]] = &[
+    chi(b"N", b"CA", b"CB", b"CG"),
+    chi(b"CA", b"CB", b"CG", b"ND1"),
+];
+const ILE_CHI: &[[AtomName; 4]] = &[
+    chi(b"N", b"CA", b"CB", b"CG1"),
+    chi(b"CA", b"CB", b"CG1", b"CD1"),
+];
+const LEU_CHI: &[[AtomName; 4]] = &[
+    chi(b"N", b"CA", b"CB", b"CG"),
+    chi(b"CA", b"CB", b"CG", b"CD1"),
+];
+const LYS_CHI: &[[AtomName; 4]] = &[
+    chi(b"N", b"CA", b"CB", b"CG"),
+    chi(b"CA", b"CB", b"CG", b"CD"),
+    chi(b"CB", b"CG", b"CD", b"CE"),
+    chi(b"CG", b"CD", b"CE", b"NZ"),
+];
+const MET_CHI: &[[AtomName; 4]] = &[
+    chi(b"N", b"CA", b"CB", b"CG"),
+    chi(b"CA", b"CB", b"CG", b"SD"),
+    chi(b"CB", b"CG", b"SD", b"CE"),
+];
+const PHE_CHI: &[[AtomName; 4]] = &[
+    chi(b"N", b"CA", b"CB", b"CG"),
+    chi(b"CA", b"CB", b"CG", b"CD1"),
+];
+const PRO_CHI: &[[AtomName; 4]] = &[
+    chi(b"N", b"CA", b"CB", b"CG"),
+    chi(b"CA", b"CB", b"CG", b"CD"),
+];
+const SER_CHI: &[[AtomName; 4]] = &[chi(b"N", b"CA", b"CB", b"OG")];
+const THR_CHI: &[[AtomName; 4]] = &[chi(b"N", b"CA", b"CB", b"OG1")];
+const TRP_CHI: &[[AtomName; 4]] = &[
+    chi(b"N", b"CA", b"CB", b"CG"),
+    chi(b"CA", b"CB", b"CG", b"CD1"),
+];
+const TYR_CHI: &[[AtomName; 4]] = &[
+    chi(b"N", b"CA", b"CB", b"CG"),
+    chi(b"CA", b"CB", b"CG", b"CD1"),
+];
+const VAL_CHI: &[[AtomName; 4]] = &[chi(b"N", b"CA", b"CB", b"CG1")];
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const ALL: &[AminoAcid] = &[
-        AminoAcid::Ala,
-        AminoAcid::Arg,
-        AminoAcid::Asn,
-        AminoAcid::Asp,
-        AminoAcid::Cys,
-        AminoAcid::Gln,
-        AminoAcid::Glu,
-        AminoAcid::Gly,
-        AminoAcid::His,
-        AminoAcid::Ile,
-        AminoAcid::Leu,
-        AminoAcid::Lys,
-        AminoAcid::Met,
-        AminoAcid::Phe,
-        AminoAcid::Pro,
-        AminoAcid::Ser,
-        AminoAcid::Thr,
-        AminoAcid::Trp,
-        AminoAcid::Tyr,
-        AminoAcid::Val,
-    ];
-
     #[test]
     fn from_code_round_trips_every_variant() {
-        for &aa in ALL {
+        for &aa in AminoAcid::ALL {
             assert_eq!(AminoAcid::from_code(aa.code()), Some(aa));
         }
     }
@@ -373,8 +539,42 @@ mod tests {
     }
 
     #[test]
+    fn chi_atoms_counts_and_first_quad() {
+        // Expected χ count per residue; Ala/Gly have none.
+        let n = |aa: AminoAcid| aa.chi_atoms().len();
+        assert_eq!(n(AminoAcid::Ala), 0);
+        assert_eq!(n(AminoAcid::Gly), 0);
+        assert_eq!(n(AminoAcid::Ser), 1);
+        assert_eq!(n(AminoAcid::Val), 1);
+        assert_eq!(n(AminoAcid::Phe), 2);
+        assert_eq!(n(AminoAcid::Met), 3);
+        assert_eq!(n(AminoAcid::Arg), 4);
+        assert_eq!(n(AminoAcid::Lys), 4);
+
+        // χ1 of a standard residue is N-CA-CB-CG; Ser swaps in OG.
+        assert_eq!(
+            AminoAcid::Arg.chi_atoms()[0],
+            [an(b"N"), an(b"CA"), an(b"CB"), an(b"CG")]
+        );
+        assert_eq!(
+            AminoAcid::Ser.chi_atoms()[0],
+            [an(b"N"), an(b"CA"), an(b"CB"), an(b"OG")]
+        );
+    }
+
+    #[test]
+    fn modified_aa_one_letter_known_and_unknown() {
+        assert_eq!(modified_aa_one_letter(*b"MSE"), Some(b'M'));
+        assert_eq!(modified_aa_one_letter(*b"SEC"), Some(b'U'));
+        assert_eq!(modified_aa_one_letter(*b"PYL"), Some(b'O'));
+        assert_eq!(modified_aa_one_letter(*b"mse"), Some(b'M'));
+        assert_eq!(modified_aa_one_letter(*b"ALA"), None);
+        assert_eq!(modified_aa_one_letter(*b"XXX"), None);
+    }
+
+    #[test]
     fn bonds_non_empty_for_every_variant_except_gly() {
-        for &aa in ALL {
+        for &aa in AminoAcid::ALL {
             let bonds = aa.bonds();
             if matches!(aa, AminoAcid::Gly) {
                 assert!(bonds.is_empty(), "Gly bonds should be empty");
@@ -394,16 +594,18 @@ mod tests {
     fn is_hydrophobic_matches_reference_table() {
         let hydrophobic = [
             AminoAcid::Ala,
-            AminoAcid::Val,
+            AminoAcid::Cys,
+            AminoAcid::Gly,
             AminoAcid::Ile,
             AminoAcid::Leu,
             AminoAcid::Met,
             AminoAcid::Phe,
-            AminoAcid::Trp,
             AminoAcid::Pro,
-            AminoAcid::Gly,
+            AminoAcid::Trp,
+            AminoAcid::Tyr,
+            AminoAcid::Val,
         ];
-        for &aa in ALL {
+        for &aa in AminoAcid::ALL {
             let expected = hydrophobic.contains(&aa);
             assert_eq!(aa.is_hydrophobic(), expected, "{aa:?} hydrophobicity");
         }

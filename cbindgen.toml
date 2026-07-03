@@ -1,0 +1,35 @@
+language = "C"
+include_guard = "MOLEX_H"
+pragma_once = true
+no_includes = false
+sys_includes = ["stddef.h", "stdint.h"]
+includes = []
+cpp_compat = true
+documentation = true
+documentation_style = "doxy"
+style = "type"
+line_length = 80
+
+[parse]
+parse_deps = false
+
+[export]
+include = [
+    "molex_Assembly",
+    "molex_Entity",
+    "molex_Residue",
+    "molex_Atom",
+    "molex_MoleculeType",
+]
+exclude = [
+    "DEFAULT_TOLERANCE",
+]
+
+[fn]
+prefix = ""
+postfix = ""
+args = "vertical"
+
+[enum]
+prefix_with_name = true
+rename_variants = "ScreamingSnakeCase"

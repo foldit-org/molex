@@ -2,7 +2,7 @@
 set windows-shell := ["powershell.exe", "-NoLogo", "-Command"]
 
 # Run all checks (what CI runs)
-check: fmt-check clippy test doc
+check: fmt-check clippy test doc doc-python
 
 # Format check (nightly)
 fmt-check:
@@ -16,13 +16,28 @@ fmt:
 clippy:
     cargo clippy --all-targets --all-features -- -D warnings
 
-# Run tests
+# Run tests (pure-Rust + non-Python features). Portable: needs no Python.
+# NOT --all-features, because `extension-module` cannot link a standalone test
+# binary. The Python bindings are tested separately by `test-python`.
 test:
-    cargo test --all-features
+    cargo test --features serde,specta,c-api
+
+# Run the Python-binding tests. Requires a shared, embeddable CPython; pin it
+# explicitly so pyo3 doesn't auto-grab an inconsistent interpreter (e.g. a
+# pixi/uv env) whose libpython isn't on the runtime path. `auto-initialize`
+# gives the in-process tests an interpreter to attach to.
+test-python python="python3":
+    PYO3_PYTHON=`which {{python}}` cargo test --features python,serde,specta,c-api,pyo3/auto-initialize
 
 # Build docs and check for warnings
 doc $RUSTDOCFLAGS="-D warnings":
     cargo doc --no-deps --document-private-items
+
+# Build docs for the Python/c-api surface and check for warnings. The
+# featureless `doc` recipe never compiles the pyo3 surface, so intra-doc
+# links in those modules go unchecked unless we build with the feature set.
+doc-python $RUSTDOCFLAGS="-D warnings":
+    cargo doc --no-deps --document-private-items --features python,serde,specta,c-api
 
 # Dependency audit
 deny:
@@ -32,9 +47,11 @@ deny:
 machete:
     cargo machete
 
-# Check file lengths (max 800 lines)
+# Check file lengths (max 800 lines). A file opts out by placing the sentinel
+# comment `foldit:allow-long-file` within its first 10 lines (mirrors the
+# repo-wide scripts/check_file_lengths.py convention).
 file-lengths:
-    python3 -c "import os, sys; files = [os.path.join(r,f) for r,_,fs in os.walk('src') for f in fs if f.endswith('.rs') and 'target' not in r]; bad = [(f,sum(1 for _ in open(f,encoding='utf-8',errors='replace'))) for f in files]; bad = [(f,n) for f,n in bad if n > 800]; [print(f'ERROR: {f} has {n} lines (max 800)') for f,n in bad]; sys.exit(1 if bad else 0)"
+    python3 -c "import os, sys; SENTINEL='foldit:allow-long-file'; files = [os.path.join(r,f) for r,_,fs in os.walk('src') for f in fs if f.endswith('.rs') and 'target' not in r]; bad = []; [bad.append((f,len(L))) for f in files for L in [open(f,encoding='utf-8',errors='replace').readlines()] if len(L) > 800 and not any(SENTINEL in ln for ln in L[:10])]; [print(f'ERROR: {f} has {n} lines (max 800)') for f,n in bad]; sys.exit(1 if bad else 0)"
 
 # One-time repo setup (hooks + commit template)
 setup:

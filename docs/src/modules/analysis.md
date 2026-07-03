@@ -1,22 +1,27 @@
 # Analysis
 
-Structural analysis lives in `molex::analysis` (source: `src/analysis/`). All analysis functions operate on entity-level types (`&[Atom]`, `&[ResidueBackbone]`).
+Structural analysis lives in `molex::analysis` (source: `src/analysis/`). Most analysis functions operate on entity-level types (`&[Atom]`, `&[ResidueBackbone]`, `&[MoleculeEntity]`).
+
+`Assembly` exposes a few of these analyses as methods: `ss_types` (after
+`recompute_ss`), `detect_fallback_connections` (disulfide + backbone-H-bond
+geometry), `covalent_bonds`, `contacts`, and `sasa`. The standalone functions
+documented below are the building blocks underneath. Note that secondary
+structure is opt-in (it is empty until `recompute_ss` runs) and H-bonds /
+disulfides are computed on demand rather than stored on the `Assembly`.
 
 ## Secondary structure (`analysis::ss`)
 
 DSSP-based secondary structure classification.
 
 ```rust,ignore
-use molex::analysis::{detect_dssp, resolve_ss, SSType};
+use molex::analysis::ss::{classify, from_string};
+use molex::analysis::{HBond, SSType};
 
-// Full DSSP: detect H-bonds, then classify
-let (ss_types, hbonds) = detect_dssp(&backbone_residues);
-// ss_types: Vec<SSType> -- one per residue (Helix, Sheet, or Coil)
-// hbonds: Vec<HBond> -- backbone H-bond pairs that produced the assignment
+// Classify residues from a precomputed H-bond list.
+let ss_types: Vec<SSType> = classify(&hbonds, n_residues);
 
-// With optional override (e.g. from mmCIF annotation)
-let ss = resolve_ss(Some(&override_ss), &backbone_residues);
-// Falls back to DSSP if override is None
+// Parse a secondary-structure string like "HHHCCCEEE" into Vec<SSType>.
+let ss_types = from_string("HHHCCCEEE");
 ```
 
 `SSType` is a Q3 classification:
@@ -27,59 +32,113 @@ pub enum SSType { Helix, Sheet, Coil }
 
 Each variant has a `.color()` method returning an RGB `[f32; 3]` for rendering.
 
-Short isolated segments (1-residue helix/sheet runs) are automatically merged to `Coil` by `merge_short_segments`.
+`analysis::merge_short_segments` converts isolated 1-residue helix/sheet runs to `Coil`.
 
-### SS from string
-
-`analysis::ss::from_string` parses secondary structure strings (e.g. `"HHHCCCEEE"`) into `Vec<SSType>`.
+For most callers the recommended path is to construct an `Assembly`, call `assembly.recompute_ss()`, then read `assembly.ss_types(entity_id)`. `recompute_ss` runs H-bond detection and `classify` for every protein entity; until it is called, `ss_types` is empty.
 
 ## Bond detection (`analysis::bonds`)
 
-### Covalent bonds
+### Covalent bonds (distance-based)
 
 ```rust,ignore
 use molex::analysis::{infer_bonds, InferredBond, BondOrder, DEFAULT_TOLERANCE};
 
-let bonds: Vec<InferredBond> = infer_bonds(atoms, tolerance);
+let bonds: Vec<InferredBond> = infer_bonds(atoms, DEFAULT_TOLERANCE);
 // InferredBond { atom_a: usize, atom_b: usize, order: BondOrder }
 // BondOrder: Single, Double, Triple, Aromatic
 ```
 
-Distance-based inference using element covalent radii with a configurable tolerance (default: `DEFAULT_TOLERANCE`).
+Distance-based inference using element covalent radii with a configurable tolerance. Used for ligands and other non-protein entities where bond topology isn't supplied by a chemistry table. Protein and nucleic-acid bonds are populated from the chemistry tables at entity construction time and live on `ProteinEntity::bonds` / `NAEntity::bonds`.
 
 ### Hydrogen bonds
 
-```rust,ignore
-use molex::analysis::detect_hbonds;
+Backbone H-bond detection is an in-crate helper; the function `analysis::bonds::hydrogen::detect_hbonds(&[ResidueBackbone])` is `pub(crate)`. `Assembly` does not store H-bonds; the viewer-facing geometry is computed on demand via `assembly.detect_fallback_connections()`, which returns backbone H-bonds (and disulfides) keyed by `ConnectionType`:
 
-let hbonds: Vec<HBond> = detect_hbonds(&backbone_residues);
-// HBond { donor: usize, acceptor: usize } -- residue indices
+```rust,ignore
+use molex::{Assembly, ConnectionType};
+
+let assembly = Assembly::new(entities);
+if let Some(hbonds) = assembly.detect_fallback_connections().get(&ConnectionType::HBond) {
+    for link in hbonds {
+        println!("a={:?} b={:?}", link.a, link.b);
+    }
+}
 ```
 
-DSSP-style backbone N-H...O=C hydrogen bond detection using electrostatic energy criteria.
+`HBond` is `{ donor: usize, acceptor: usize, energy: f32 }` (Kabsch-Sander electrostatic energy in kcal/mol).
 
 ### Disulfide bonds
 
 ```rust,ignore
-use molex::analysis::{detect_disulfide_bonds, DisulfideBond};
+use molex::{detect_disulfides, CovalentBond};
 
-let disulfides: Vec<DisulfideBond> = detect_disulfide_bonds(atoms);
+let disulfides: Vec<CovalentBond> = detect_disulfides(&entities);
 ```
 
-Detects CYS SG-SG bonds by distance.
+Scans every protein entity for CYS SG atoms and emits one `CovalentBond` (with `AtomId` endpoints) per SG-SG pair within 1.5 to 2.5 angstroms. `Assembly` does not store disulfides; the same pairs surface for rendering via `assembly.detect_fallback_connections()` under `ConnectionType::Disulfide`.
 
-## Bounding box (`analysis::aabb`)
+## Volumetric (`analysis::volumetric`)
+
+Voxel-grid analysis used for surface and cavity work:
 
 ```rust,ignore
-use molex::analysis::Aabb;
-
-let aabb = Aabb::from_positions(&positions)?;
-aabb.center();   // Vec3 -- geometric center
-aabb.extents();  // Vec3 -- size along each axis
-aabb.radius();   // f32 -- bounding sphere radius
-
-let merged = aabb.union(&other_aabb);
-let combined = Aabb::from_aabbs(&[aabb1, aabb2, aabb3])?;
+use molex::analysis::{
+    binary_to_sdf, compute_gaussian_field, compute_ses_sdf, detect_cavities,
+    detect_cavity_mask, edt_1d, edt_3d, voxelize_sas,
+    DetectedCavity, ScalarVoxelGrid, VoxelBbox,
+};
 ```
 
-Also available directly on entities: `entity.aabb()`.
+These power Gaussian density approximations, solvent-excluded surface SDFs, and cavity detection.
+
+## Solvent-accessible surface area (`analysis::sasa`)
+
+Shrake-Rupley SASA over an assembly's protein atoms, using Bondi van der
+Waals radii and a deterministic golden-spiral sampling of each atom's probe
+sphere (no RNG). Water, ions, ligands, and nucleic acids are excluded,
+matching the protein-scope convention of freesasa and biotite.
+
+```rust,ignore
+use molex::analysis::sasa::{DEFAULT_PROBE_RADIUS, DEFAULT_N_POINTS};
+
+// Total protein SASA in Angstrom^2.
+let area = assembly.sasa(DEFAULT_PROBE_RADIUS, DEFAULT_N_POINTS);
+```
+
+`DEFAULT_PROBE_RADIUS` is 1.4 (water); `DEFAULT_N_POINTS` is 960 test points
+per atom (higher is finer and slower).
+
+## Contacts (`analysis::contacts`)
+
+`Assembly::contacts` enumerates atom pairs closer than a cutoff, reported at
+the requested granularity. A single spatial grid keeps neighbor lookups
+near-linear.
+
+```rust,ignore
+use molex::analysis::{Contact, ContactLevel};
+
+// All atom-atom contacts within 4.0 A, deduped to residue pairs,
+// keeping only inter-entity pairs.
+let contacts: Vec<Contact> = assembly.contacts(4.0, ContactLevel::Residue, true);
+```
+
+`ContactLevel` is `Atom`, `Residue`, or `Chain`; `Residue` and `Chain` dedup
+to unique residue/entity pairs, each keeping one representative atom pair.
+
+## Transforms (`ops::transform`)
+
+Kabsch alignment and superposition RMSD. `kabsch_alignment` is re-exported
+from `molex::ops`; `rmsd` lives at `molex::ops::transform`.
+
+```rust,ignore
+use molex::ops::kabsch_alignment;
+use molex::ops::transform::rmsd;
+
+// Kabsch alignment (the rigid motion that minimizes RMSD between two point
+// sets); None for mismatched lengths or fewer than 3 points.
+let aligned: Option<(Mat3, Vec3)> = kabsch_alignment(&source, &target);
+
+// Optimal-superposition RMSD; None for fewer than 3 points.
+let deviation: Option<f32> = rmsd(&a, &b);
+```
+

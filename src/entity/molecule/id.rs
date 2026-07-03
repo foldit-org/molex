@@ -5,9 +5,11 @@
 
 /// Opaque entity identifier.
 ///
-/// Cannot be constructed directly — only through [`EntityIdAllocator`].
+/// Cannot be constructed directly, only through [`EntityIdAllocator`].
 /// Use [`raw()`](EntityId::raw) for serialization or GPU buffer usage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct EntityId(u32);
 
 impl EntityId {
@@ -15,6 +17,16 @@ impl EntityId {
     #[must_use]
     pub fn raw(self) -> u32 {
         self.0
+    }
+
+    /// Rebuild a host-assigned id from its raw value, for wire decode.
+    ///
+    /// Unlike [`EntityIdAllocator::from_raw`], this touches no allocator
+    /// and advances no counter: the wire only ever carries ids the host
+    /// already minted, so no uniqueness bookkeeping is needed here.
+    #[must_use]
+    pub fn from_raw(raw: u32) -> EntityId {
+        EntityId(raw)
     }
 }
 

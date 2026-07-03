@@ -2,9 +2,8 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
-    branches: [main]
 
 env:
   CARGO_TERM_COLOR: always
@@ -34,12 +33,33 @@ jobs:
         run: cargo +stable clippy --all-targets --all-features -- -D warnings
 
       - name: Test
-        run: cargo +stable test --all-features
+        # NOT --all-features: the `extension-module` feature makes pyo3 omit the
+        # libpython link, so a standalone test binary fails to resolve Py*
+        # symbols. Python bindings are exercised by the `python` job below.
+        run: cargo +stable test --features serde,specta,c-api
 
       - name: Rustdoc
         env:
           RUSTDOCFLAGS: "-D warnings"
         run: cargo +stable doc --no-deps --document-private-items
+
+  python:
+    name: Python binding tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: Swatinem/rust-cache@v2
+      - name: Install numpy (runtime dep of the PyAtomTable rust-numpy bindings)
+        run: python -m pip install --upgrade pip numpy
+      - name: Test (with embedded interpreter)
+        # setup-python provides a shared libpython; pyo3 links it (no
+        # extension-module), and auto-initialize boots an interpreter for the
+        # in-process tests. PYO3_PYTHON pins the interpreter explicitly.
+        run: PYO3_PYTHON=$(which python) cargo +stable test --features python,serde,specta,c-api,pyo3/auto-initialize
 
   deny:
     name: Dependency audit

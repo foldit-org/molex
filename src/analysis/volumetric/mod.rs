@@ -2,22 +2,22 @@
 //!
 //! Primitives and pipelines that rasterize atoms into a voxel grid and
 //! run distance-field / connectivity analyses on the result. Everything
-//! in this module is pure CPU computation with no rendering concepts —
+//! in this module is pure CPU computation with no rendering concepts;
 //! the output is a scalar voxel field or a list of detected cavities,
 //! ready to be consumed by any mesher or downstream analysis.
 //!
 //! **Grid primitives** ([`crate::analysis::volumetric::grid`]):
 //! solvent-accessible-surface (SAS) rasterization,
-//! Felzenszwalb–Huttenlocher 3D Euclidean distance transform,
+//! Felzenszwalb-Huttenlocher 3D Euclidean distance transform,
 //! binary-to-SDF conversion, exterior flood-fill for cavity masks.
 //!
 //! **Detection pipelines**:
-//! - [`crate::analysis::volumetric::detect_cavities`] →
+//! - [`crate::analysis::volumetric::detect_cavities`] ->
 //!   [`Vec<DetectedCavity>`]: internal cavities found via SES erosion + flood
 //!   fill + connected components.
-//! - [`crate::analysis::volumetric::compute_ses_sdf`] → [`ScalarVoxelGrid`]:
+//! - [`crate::analysis::volumetric::compute_ses_sdf`] -> [`ScalarVoxelGrid`]:
 //!   the solvent-excluded-surface signed distance field.
-//! - [`crate::analysis::volumetric::compute_gaussian_field`] →
+//! - [`crate::analysis::volumetric::compute_gaussian_field`] ->
 //!   [`ScalarVoxelGrid`]: summed Gaussian blobs for smooth molecular surface
 //!   rendering.
 
@@ -29,9 +29,7 @@ pub mod ses;
 pub use cavity::{detect_cavities, DetectedCavity, VoxelBbox};
 pub use gaussian::compute_gaussian_field;
 use glam::Vec3;
-pub use grid::{
-    binary_to_sdf, detect_cavity_mask, edt_1d, edt_3d, voxelize_sas,
-};
+pub use grid::binary_to_sdf;
 pub use ses::compute_ses_sdf;
 
 /// Geometry of a uniform orthogonal voxel grid: dimensions, world-space
@@ -42,11 +40,11 @@ pub use ses::compute_ses_sdf;
 /// six-argument helper functions and to centralize the grid-sizing
 /// arithmetic via [`GridSpec::from_bounds`].
 ///
-/// Indexing convention is `x-major → y → z`; use [`GridSpec::lin`] to
+/// Indexing convention is `x-major -> y -> z`; use [`GridSpec::lin`] to
 /// compute linear indices.
 #[derive(Debug, Clone, Copy)]
 pub struct GridSpec {
-    /// `[nx, ny, nz]` — grid dimensions in voxels.
+    /// `[nx, ny, nz]`: grid dimensions in voxels.
     pub dims: [usize; 3],
     /// World-space position of voxel `(0, 0, 0)` (Angstroms).
     pub origin: [f32; 3],
@@ -63,16 +61,16 @@ impl GridSpec {
     /// extent inclusively (`spacing = extent / (n - 1)`).
     ///
     /// The `usize -> f32` cast on dimensions is precision-safe: voxel
-    /// counts are bounded by available memory (≪ 2²⁴) and so always fit
+    /// counts are bounded by available memory (<< 2^2^4) and so always fit
     /// in f32's 23-bit mantissa exactly.
     #[must_use]
     #[allow(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
         clippy::cast_precision_loss,
-        reason = "voxel count is bounded by memory (≪ 2²⁴), always fits f32 \
-                  mantissa and round-tripping through usize is the natural \
-                  representation"
+        reason = "voxel count is bounded by memory (<< 2^2^4), always fits \
+                  f32 mantissa and round-tripping through usize is the \
+                  natural representation"
     )]
     pub fn from_bounds(min: Vec3, max: Vec3, resolution: f32) -> Self {
         let extent = max - min;
@@ -99,7 +97,7 @@ impl GridSpec {
 
     /// Linear index for `(ix, iy, iz)` in x-major, y, z order.
     ///
-    /// Caller is responsible for `ix < dims[0]` etc. — this is a
+    /// Caller is responsible for `ix < dims[0]` etc.; this is a
     /// hot-path helper and does not bounds-check.
     #[must_use]
     #[inline]
@@ -116,17 +114,17 @@ impl GridSpec {
 /// axis-aligned and uniformly spaced: just dimensions, origin, and
 /// spacing.
 ///
-/// Indexing is `x-major → y → z`:
+/// Indexing is `x-major -> y -> z`:
 /// `index = ix * dims[1] * dims[2] + iy * dims[2] + iz`.
 #[derive(Debug, Clone)]
 pub struct ScalarVoxelGrid {
-    /// `[nx, ny, nz]` — grid dimensions in voxels.
+    /// `[nx, ny, nz]`: grid dimensions in voxels.
     pub dims: [usize; 3],
     /// World-space position of voxel `(0, 0, 0)` (Angstroms).
     pub origin: [f32; 3],
     /// Angstroms per voxel along each axis.
     pub spacing: [f32; 3],
-    /// Scalar values, one per voxel, laid out `x-major → y → z`.
+    /// Scalar values, one per voxel, laid out `x-major -> y -> z`.
     pub data: Vec<f32>,
 }
 

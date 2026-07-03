@@ -85,9 +85,11 @@ impl Element {
     /// Infer element from a standard protein atom name (e.g., "CA" -> C, "OG"
     /// -> O, "SD" -> S).
     ///
-    /// For standard protein atoms, the first alphabetic character reliably
-    /// identifies the element. This is the same heuristic used by
-    /// `gpu.rs:atom_name_to_type_index`.
+    /// For standard protein atoms, the first alphabetic character of the
+    /// atom name reliably identifies the element (e.g. `CA`, `CB`, `CG` all
+    /// begin with `C` for carbon). Only the common biomolecular elements
+    /// (C, N, O, S, H, P) are recognized; anything else maps to
+    /// [`Element::Unknown`].
     #[must_use]
     pub fn from_atom_name(name: &str) -> Self {
         let name = name.trim();
@@ -104,6 +106,65 @@ impl Element {
                 _ => Element::Unknown,
             },
         )
+    }
+
+    /// Atomic number. Returns 0 for [`Element::Unknown`].
+    #[must_use]
+    pub fn atomic_number(self) -> u8 {
+        match self {
+            Element::H => 1,
+            Element::C => 6,
+            Element::N => 7,
+            Element::O => 8,
+            Element::F => 9,
+            Element::Na => 11,
+            Element::Mg => 12,
+            Element::P => 15,
+            Element::S => 16,
+            Element::Cl => 17,
+            Element::K => 19,
+            Element::Ca => 20,
+            Element::Mn => 25,
+            Element::Fe => 26,
+            Element::Co => 27,
+            Element::Ni => 28,
+            Element::Cu => 29,
+            Element::Zn => 30,
+            Element::Se => 34,
+            Element::Br => 35,
+            Element::I => 53,
+            Element::Unknown => 0,
+        }
+    }
+
+    /// Lookup by atomic number. Returns [`Element::Unknown`] for any
+    /// number not in this enum.
+    #[must_use]
+    pub fn from_atomic_number(z: u8) -> Self {
+        match z {
+            1 => Element::H,
+            6 => Element::C,
+            7 => Element::N,
+            8 => Element::O,
+            9 => Element::F,
+            11 => Element::Na,
+            12 => Element::Mg,
+            15 => Element::P,
+            16 => Element::S,
+            17 => Element::Cl,
+            19 => Element::K,
+            20 => Element::Ca,
+            25 => Element::Mn,
+            26 => Element::Fe,
+            27 => Element::Co,
+            28 => Element::Ni,
+            29 => Element::Cu,
+            30 => Element::Zn,
+            34 => Element::Se,
+            35 => Element::Br,
+            53 => Element::I,
+            _ => Element::Unknown,
+        }
     }
 
     /// Standard CPK coloring (Corey-Pauling-Koltun).
@@ -157,6 +218,37 @@ impl Element {
             Element::Ni => 1.24,
             Element::F => 0.57,
             Element::Unknown => 0.77,
+        }
+    }
+
+    /// Standard atomic weight in daltons (unified atomic mass units).
+    ///
+    /// `Unknown` is treated as carbon (12.011), mirroring the
+    /// [`Self::vdw_radius`] `Unknown -> C` precedent.
+    #[must_use]
+    pub fn mass(self) -> f32 {
+        match self {
+            Element::H => 1.008,
+            Element::C | Element::Unknown => 12.011,
+            Element::N => 14.007,
+            Element::O => 15.999,
+            Element::S => 32.06,
+            Element::P => 30.974,
+            Element::Se => 78.97,
+            Element::Fe => 55.845,
+            Element::Zn => 65.38,
+            Element::Mg => 24.305,
+            Element::Ca => 40.078,
+            Element::Na => 22.990,
+            Element::Cl => 35.45,
+            Element::K => 39.098,
+            Element::Mn => 54.938,
+            Element::Co => 58.933,
+            Element::Ni => 58.693,
+            Element::Cu => 63.546,
+            Element::Br => 79.904,
+            Element::I => 126.904,
+            Element::F => 18.998,
         }
     }
 
@@ -503,6 +595,20 @@ mod tests {
         assert_eq!(Element::C.vdw_radius(), 1.70);
         assert_eq!(Element::N.vdw_radius(), 1.55);
         assert_eq!(Element::O.vdw_radius(), 1.52);
+    }
+
+    #[test]
+    fn mass_known_values() {
+        assert_eq!(Element::H.mass(), 1.008);
+        assert_eq!(Element::C.mass(), 12.011);
+        assert_eq!(Element::N.mass(), 14.007);
+        assert_eq!(Element::O.mass(), 15.999);
+        assert_eq!(Element::S.mass(), 32.06);
+    }
+
+    #[test]
+    fn mass_unknown_treated_as_carbon() {
+        assert_eq!(Element::Unknown.mass(), Element::C.mass());
     }
 
     #[test]

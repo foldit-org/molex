@@ -26,8 +26,8 @@ const DEFAULT_PROBE_RADIUS: f32 = 1.4;
 ///
 /// - `positions`: atom world-space positions (Angstroms)
 /// - `radii`: per-atom van der Waals radii (Angstroms)
-/// - `probe_radius`: solvent probe radius; defaults to 1.4 Å
-/// - `resolution`: grid spacing in Angstroms (lower = finer; 0.5–1.0 typical)
+/// - `probe_radius`: solvent probe radius; defaults to 1.4 A
+/// - `resolution`: grid spacing in Angstroms (lower = finer; 0.5-1.0 typical)
 ///
 /// Returns a [`ScalarVoxelGrid`] with the SDF sampled on a uniform
 /// orthogonal grid. Sign convention: **negative inside, positive
@@ -70,10 +70,10 @@ pub fn compute_ses_sdf(
     // Step 1: Build binary SAS solid
     let sas_solid = voxelize_sas(positions, radii, probe, &spec);
 
-    // Step 2: EDT on interior → distance to nearest outside voxel
+    // Step 2: EDT on interior -> distance to nearest outside voxel
     let interior_edt = edt_3d(&sas_solid, spec.dims, &spec.spacing);
 
-    // Step 3: Carve — voxels where EDT < probe become outside
+    // Step 3: Carve. Voxels where EDT < probe become outside
     let total = spec.voxel_count();
     let mut ses_solid = vec![false; total];
     for i in 0..total {

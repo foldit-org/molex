@@ -83,6 +83,22 @@ pub fn infer_bonds(atoms: &[Atom], tolerance: f32) -> Vec<InferredBond> {
 /// Default tolerance for bond inference (0.4 angstroms).
 pub const DEFAULT_TOLERANCE: f32 = 0.4;
 
+impl crate::Assembly {
+    /// All intra-entity covalent bonds across this assembly, aggregated
+    /// from each entity's stored bond topology
+    /// ([`MoleculeEntity::bonds`](crate::entity::molecule::MoleculeEntity::bonds)),
+    /// in entity-declaration order. Inter-entity bonds (e.g. disulfides)
+    /// are not included; surface those for rendering via
+    /// [`crate::Assembly::detect_fallback_connections`].
+    #[must_use]
+    pub fn covalent_bonds(&self) -> Vec<crate::bond::CovalentBond> {
+        self.entities()
+            .iter()
+            .flat_map(|e| e.bonds().iter().cloned())
+            .collect()
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
@@ -97,6 +113,8 @@ mod tests {
             b_factor: 0.0,
             element,
             name: *b"X   ",
+            formal_charge: 0,
+            observed: true,
         }
     }
 

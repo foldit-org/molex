@@ -45,3 +45,5 @@ ENV/
 .pytest_cache/
 .coverage
 htmlcov/
+
+docs/book/

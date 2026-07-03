@@ -9,7 +9,7 @@ use glam::Vec3;
 
 use crate::entity::molecule::protein::ResidueBackbone;
 
-/// Kabsch-Sander electrostatic energy constant (kcal/mol · Å).
+/// Kabsch-Sander electrostatic energy constant (kcal/mol * A).
 const KS_FACTOR: f32 = 27.888;
 
 /// H-bond energy threshold (kcal/mol). Bonds with E < this are accepted.
@@ -33,15 +33,18 @@ pub struct HBond {
 ///
 /// Returns all donor-acceptor pairs with energy below the threshold,
 /// sorted by donor index then by energy (strongest first).
+///
+/// Internal implementation detail of `Assembly`'s derived-data pipeline,
+/// reached through `detect_fallback_connections` and the SS computation.
 #[must_use]
-pub fn detect_hbonds(residues: &[ResidueBackbone]) -> Vec<HBond> {
+pub(crate) fn detect_hbonds(residues: &[ResidueBackbone]) -> Vec<HBond> {
     let n = residues.len();
     if n < 2 {
         return Vec::new();
     }
 
     // Estimate amide H positions using the bisector method:
-    // H is placed 1.0 Å from N along the bisector of (N - C_prev) and
+    // H is placed 1.0 A from N along the bisector of (N - C_prev) and
     // (N - CA). This matches the canonical DSSP placement.
     let h_positions: Vec<Vec3> = (0..n)
         .map(|i| {

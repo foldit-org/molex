@@ -52,8 +52,8 @@ impl VoxelGrid {
 
     /// Build the 3x3 fractional-to-Cartesian matrix.
     ///
-    /// For orthogonal cells (α=β=γ=90°) this is diagonal with (a,b,c).
-    /// For non-orthogonal cells the off-diagonal terms handle the
+    /// For orthogonal cells (alpha=beta=gamma=90 deg) this is diagonal with
+    /// (a,b,c). For non-orthogonal cells the off-diagonal terms handle the
     /// skew.
     #[must_use]
     pub fn frac_to_cart_matrix(&self) -> [[f32; 3]; 3] {

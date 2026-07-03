@@ -2,19 +2,26 @@
 
 ## Module layout
 
-```
+```text
 molex/src/
 ├── adapters/         File format parsers (PDB, mmCIF, BinaryCIF, MRC, DCD, AtomWorks)
-├── analysis/         Structural analysis (bonds, secondary structure, AABB)
-├── element.rs        Element enum (symbols, covalent radii, colors)
+├── analysis/         Structural analysis (bonds, secondary structure, SASA, contacts, volumetric)
+├── chemistry/        Static residue tables + missing-atom completion
 ├── entity/           Entity system
 │   ├── molecule/     MoleculeEntity enum + subtypes (protein, nucleic acid, small molecule, bulk)
 │   └── surface/      Surface types (VoxelGrid, Density)
 ├── ops/              Operations
-│   ├── codec/        Wire formats (COORDS01, ASSEM01), serialize/deserialize, split/merge
-│   └── transform/    Kabsch alignment, CA extraction, backbone segments
-├── ffi.rs            C FFI bindings
-├── python.rs         PyO3 bindings
+│   ├── edit/         Typed AssemblyEdit + apply path
+│   ├── error/        AdapterError
+│   ├── transform/    Kabsch alignment, superposition RMSD
+│   └── wire/         Assembly + delta binary wire format encoder/decoder
+├── assembly.rs       Top-level Assembly container (entities + opt-in SS + connections)
+├── atom_id.rs        Cross-cutting AtomId (entity + index)
+├── bond.rs           Cross-cutting CovalentBond (AtomId endpoints)
+├── connection.rs     Inter-entity rendering connections (ConnectionType, AtomEnd, AtomLink)
+├── element.rs        Element enum (symbols, covalent radii, colors)
+├── c_api/            C ABI surface (feature = "c-api")
+├── python/           PyO3 bindings (feature = "python")
 └── lib.rs            Crate root, re-exports
 ```
 
@@ -22,11 +29,24 @@ molex/src/
 
 Entities (`Vec<MoleculeEntity>`) are the primary data model.
 
-**Adapters** parse files into entities. The `*_to_entities` functions are the primary API. The `*_to_coords` functions parse to entities, then flatten to `Coords` via `merge_entities`.
+**Adapters** parse files into entities. The `*_to_entities` functions are the primary API; the `*_to_all_models` variants return one entity list per MODEL block for NMR ensembles or multi-state trajectories.
 
 **Analysis** operates on `&[Atom]`, `&[ResidueBackbone]`, or `&[MoleculeEntity]`.
 
-**`Coords`** is a flat, column-oriented wire format for FFI and IPC (parallel arrays of x/y/z, chain IDs, residue names, etc.).
+## Assembly
+
+`Assembly` (in `src/assembly.rs`) is the host-owned structural source of truth. It bundles:
+
+- a `Vec<Arc<MoleculeEntity>>`
+- per-entity `SSType` arrays (`ss_types`), empty until `recompute_ss()` is called
+- owner-set rendering connections keyed by `ConnectionType`
+- a generation counter that bumps on every mutation
+
+Construction is secondary-structure-free and mutations only bump the
+generation counter; secondary structure is opt-in via `recompute_ss()`, and
+disulfide / backbone-H-bond geometry is computed on demand by
+`detect_fallback_connections()` rather than stored. See the
+[Assembly](../modules/assembly.md) page for the full contract.
 
 ## Entity classification
 
@@ -46,7 +66,7 @@ When a file is parsed, atoms are grouped into entities by chain ID, residue name
 
 ## Type hierarchy
 
-```
+```text
 MoleculeEntity (enum)
 ├── Protein(ProteinEntity)      -- chain with residues, segment breaks
 ├── NucleicAcid(NAEntity)       -- DNA/RNA chain with residues
@@ -66,9 +86,6 @@ The `entity::surface` module provides volumetric data types:
 - **`VoxelGrid`** -- a generic 3D grid (`ndarray::Array3<f32>`) with crystallographic cell metadata. Handles fractional-to-Cartesian coordinate conversion.
 - **`Density`** -- wraps `VoxelGrid` with density-specific metadata. Constructed by the MRC adapter.
 
-## Binary formats
+## Binary format
 
-molex defines two compact binary formats for IPC:
-
-- **COORDS01** -- flat atom array with element data (magic: `COORDS01`)
-- **ASSEM01** -- entity-aware format preserving molecule type metadata per entity (magic: `ASSEM01\0`)
+The **assembly format** is molex's compact binary IPC format: a fixed 8-byte magic (`ASSEMBLY`) followed by a version byte that selects the payload layout (only version 1 exists today). It is entity-aware: each entity is preceded by a 9-byte header (molecule-type byte, atom count, and `EntityId`) so the decoder reconstructs `MoleculeEntity` variants without re-running residue classification, and a trailing variants section carries per-residue variant tags. See the [Wire Format](../modules/wire.md) page for the full byte layout.

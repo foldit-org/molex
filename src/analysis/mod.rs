@@ -1,26 +1,28 @@
 //! Structural analysis: bond detection, secondary structure, and geometry.
 
-/// Axis-aligned bounding box.
-pub mod aabb;
 /// Bond detection: covalent, hydrogen, and disulfide.
 pub mod bonds;
+/// Atom-atom and residue/chain contact enumeration.
+pub mod contacts;
+/// Mass-weighted geometry: center of mass and radius of gyration.
+pub mod geometry;
+/// Uniform spatial hash for near-linear neighbor queries.
+pub(crate) mod grid;
+/// Shrake-Rupley solvent-accessible surface area.
+pub mod sasa;
 /// Secondary structure detection and parsing.
 pub mod ss;
 /// Volumetric analysis: voxel grids, SDFs, cavity detection, surfaces.
 pub mod volumetric;
 
-pub use aabb::Aabb;
 pub use bonds::{
-    detect_disulfide_bonds, detect_hbonds, infer_bonds, BondOrder,
-    DisulfideBond, HBond, InferredBond, DEFAULT_TOLERANCE,
+    infer_bonds, BondOrder, HBond, InferredBond, DEFAULT_TOLERANCE,
 };
+pub use contacts::{Contact, ContactLevel};
 pub use volumetric::{
     binary_to_sdf, compute_gaussian_field, compute_ses_sdf, detect_cavities,
-    detect_cavity_mask, edt_1d, edt_3d, voxelize_sas, DetectedCavity,
-    ScalarVoxelGrid, VoxelBbox,
+    DetectedCavity, ScalarVoxelGrid, VoxelBbox,
 };
-
-use crate::entity::molecule::protein::ResidueBackbone;
 
 /// Q3 secondary structure classification for a single residue.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -34,6 +36,16 @@ pub enum SSType {
 }
 
 impl SSType {
+    /// Single-character Q3 code: `'H'` (helix), `'E'` (sheet), `'C'` (coil).
+    #[must_use]
+    pub fn one_letter(self) -> char {
+        match self {
+            SSType::Helix => 'H',
+            SSType::Sheet => 'E',
+            SSType::Coil => 'C',
+        }
+    }
+
     /// Get the color for this SS type (RGB, 0-1 range).
     #[must_use]
     pub fn color(&self) -> [f32; 3] {
@@ -43,37 +55,6 @@ impl SSType {
             SSType::Coil => [0.6, 0.85, 0.6],
         }
     }
-}
-
-/// Full DSSP analysis: detect H-bonds then classify secondary structure.
-///
-/// Returns both the SS assignments and the H-bond pairs that produced
-/// them. Use [`bonds::hydrogen::detect_hbonds`] directly if you only need
-/// H-bonds.
-#[must_use]
-pub fn detect_dssp(residues: &[ResidueBackbone]) -> (Vec<SSType>, Vec<HBond>) {
-    let hbonds = detect_hbonds(residues);
-    let ss = ss::classify(&hbonds, residues.len());
-    (ss, hbonds)
-}
-
-/// Resolve secondary structure with optional override.
-///
-/// If `override_ss` is provided, uses it directly (after merging short
-/// segments). Otherwise runs DSSP detection on the backbone residues.
-#[must_use]
-pub fn resolve_ss(
-    override_ss: Option<&[SSType]>,
-    residues: &[ResidueBackbone],
-) -> Vec<SSType> {
-    let raw = override_ss.map_or_else(
-        || {
-            let (ss, _) = detect_dssp(residues);
-            ss
-        },
-        <[SSType]>::to_vec,
-    );
-    merge_short_segments(&raw)
 }
 
 /// Convert isolated 1-residue helix/sheet runs to Coil.

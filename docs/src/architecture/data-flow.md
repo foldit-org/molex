@@ -2,36 +2,35 @@
 
 ## Overview
 
-```
+```text
                        ┌──────────────┐
  PDB / mmCIF / BCIF ──>│              ├──> Vec<MoleculeEntity>
- MRC / CCP4         ──>│   Adapters   ├──> Density (SurfaceEntity)
+ MRC / CCP4         ──>│   Adapters   ├──> Density (wraps VoxelGrid)
  DCD                ──>│              ├──> Vec<DcdFrame>
                        └──────┬───────┘
                               │
                               v
                   ┌───────────────────────┐
-                  │       Entities        │
-                  │                       │
-                  │  MoleculeEntity       │
-                  │  SurfaceEntity        │
+                  │       Assembly        │
+                  │  (entities + opt-in   │
+                  │   ss + connections)   │
                   └──┬────────┬────────┬──┘
                      │        │        │
                      v        v        v
-              ┌──────────┐ ┌────────┐ ┌─────────┐
-              │ Analysis │ │  Ops   │ │  Codec  │
-              │          │ │        │ │         │
-              │ dssp     │ │ kabsch │ │serialize│
-              │ bonds    │ │ align  │ │serialize│
-              │ disulfide│ │extract │ │_assembly│
-              │ aabb     │ │        │ │         │
-              └──────────┘ └────────┘ └────┬────┘
-                                           │
-                                           v
-                                  FFI / IPC / Python
+              ┌──────────┐ ┌──────────┐ ┌───────────┐
+              │ Analysis │ │Transform │ │   Wire    │
+              │          │ │          │ │           │
+              │ dssp     │ │ kabsch   │ │ assembly  │
+              │ bonds    │ │ align    │ │  bytes    │
+              │ disulfide│ │ rmsd     │ │    +      │
+              │ sasa     │ │          │ │  delta    │
+              └──────────┘ └──────────┘ └─────┬─────┘
+                                              │
+                                              v
+                                     FFI / IPC / Python
 ```
 
-Analysis, Transform, and Codec are independent — use any combination depending on what you need.
+Analysis, Transform, and Wire are independent; use any combination depending on what you need.
 
 ## 1. Parsing
 
@@ -40,7 +39,9 @@ Every structure adapter returns `Vec<MoleculeEntity>`:
 ```rust,ignore
 let entities = pdb_file_to_entities(Path::new("1ubq.pdb"))?;
 let entities = mmcif_file_to_entities(Path::new("3nez.cif"))?;
-let entities = bcif_file_to_entities(Path::new("1ubq.bcif"))?;
+// BinaryCIF parses from bytes (no path-taking entry point):
+let bytes = std::fs::read("1ubq.bcif")?;
+let entities = Assembly::from_bcif(&bytes)?.into_entities();
 ```
 
 Density and trajectory adapters return their own types:
@@ -50,42 +51,65 @@ let density = mrc_file_to_density(Path::new("emd_1234.map"))?;
 let frames = dcd_file_to_frames(Path::new("trajectory.dcd"))?;
 ```
 
-## 2. Entity splitting
+## 2. Entity construction
 
-`split_into_entities` groups atoms by:
+Each parser tokenizes its input and pushes one `AtomRow` per atom into an
+`EntityBuilder`. `EntityBuilder` is the single point of classification: it
+groups rows by chain plus residue scope, joins mmCIF `_entity` /
+`_entity_poly` hints when present, and emits one `MoleculeEntity` per
+logical molecule (protein chain, NA chain, ligand instance, water bulk,
+solvent bulk) at `finish()`. Each emitted entity carries a freshly
+allocated `EntityId`.
 
-1. Chain ID + molecule type for polymers (one entity per chain)
-2. Chain ID + residue number for small molecules (one entity each)
-3. All waters into a single `Bulk` entity
-4. All solvents into a single `Bulk` entity
-
-Each entity gets a unique `EntityId`.
+For NMR ensembles or multi-model trajectories, the adapter-level
+`*_to_all_models` entry points (`pdb_str_to_all_models`,
+`mmcif_str_to_all_models`, `bcif_to_all_models`, plus the matching
+`_file_*` variants) return one `Vec<MoleculeEntity>` per MODEL.
 
 ## 3. Analysis
 
 ```rust,ignore
-let (ss_types, hbonds) = detect_dssp(&backbone_residues);
-let bonds = infer_bonds(&atoms, DEFAULT_TOLERANCE);
-let disulfides = detect_disulfide_bonds(&atoms);
-let aabb = entity.aabb();
+use molex::{detect_disulfides, Assembly};
+use molex::analysis::{infer_bonds, DEFAULT_TOLERANCE};
+
+// Secondary structure is opt-in: build, then recompute.
+let mut assembly = Assembly::new(entities);
+assembly.recompute_ss();
+let ss = assembly.ss_types(entity_id);
+
+// Disulfide + backbone-H-bond geometry is computed on demand for
+// rendering, not stored on the Assembly:
+let connections = assembly.detect_fallback_connections();
+
+// Or call the building blocks directly:
+let bonds      = infer_bonds(atoms, DEFAULT_TOLERANCE);   // distance-based
+let disulfides = detect_disulfides(&entities);             // CYS SG-SG
 ```
 
 ## 4. Transforms
 
+`molex::ops` exposes Kabsch alignment and superposition RMSD; nothing else
+lives in the transform surface.
+
 ```rust,ignore
-let (rotation, translation) = kabsch_alignment(&reference_ca, &target_ca);
-transform_entities(&mut entities, rotation, translation);
-let ca_positions = extract_ca_positions(&entities);
+use molex::ops::kabsch_alignment;
+use molex::ops::transform::rmsd;
+
+let aligned = kabsch_alignment(&reference, &target); // Option<(Mat3, Vec3)>
+let deviation = rmsd(&a, &b);                         // Option<f32>
 ```
 
 ## 5. Serialization
 
-For sending to C/C++/Python consumers:
+For sending to C/C++/Python consumers, `assembly_bytes` is the only public
+wire entry point (it serializes a raw entity slice). Decode with
+`Assembly::from_bytes`, which returns a secondary-structure-free assembly;
+call `recompute_ss()` if you need SS.
 
 ```rust,ignore
-// COORDS01 (flat atom array)
-let bytes = serialize(&merge_entities(&entities))?;
+use molex::ops::wire::assembly_bytes;
 
-// ASSEM01 (preserves entity types)
-let bytes = serialize_assembly(&entities)?;
+let bytes = assembly_bytes(&entities)?;
+let mut assembly = molex::Assembly::from_bytes(&bytes)?; // ss_types empty
+assembly.recompute_ss();
 ```

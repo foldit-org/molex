@@ -2,7 +2,7 @@
 //!
 //! Parses any valid CIF or STAR file into an untyped [`Document`] tree.
 //! Handles all value forms: unquoted, single/double-quoted, and semicolon
-//! text fields. Endianness and case conventions are preserved in tag names.
+//! text fields. The original case of tag names and values is preserved.
 
 use super::dom::{Block, Document, Loop, Value};
 
@@ -27,9 +27,7 @@ pub fn parse(input: &str) -> Result<Document, CifParseError> {
     Parser::new(input).parse_document()
 }
 
-// ---------------------------------------------------------------------------
 // Internal tokenizer / parser
-// ---------------------------------------------------------------------------
 
 #[derive(Debug)]
 enum Token {
@@ -73,7 +71,7 @@ impl<'a> Parser<'a> {
         self.pending = Some(token);
     }
 
-    // --- Tokenizer ---
+    // Tokenizer
 
     fn skip_whitespace_and_comments(&mut self) {
         while self.pos < self.bytes.len() {
@@ -178,7 +176,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    // --- Structure parsing ---
+    // Structure parsing
 
     fn parse_document(&mut self) -> Result<Document, CifParseError> {
         let mut blocks = Vec::new();

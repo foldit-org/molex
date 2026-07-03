@@ -1,0 +1,55 @@
+data_TEST
+#
+loop_
+_entity.id
+_entity.type
+1 polymer
+#
+loop_
+_entity_poly.entity_id
+_entity_poly.type
+1 polyribonucleotide
+#
+loop_
+_atom_site.group_PDB
+_atom_site.id
+_atom_site.label_atom_id
+_atom_site.label_comp_id
+_atom_site.label_asym_id
+_atom_site.label_seq_id
+_atom_site.label_entity_id
+_atom_site.Cartn_x
+_atom_site.Cartn_y
+_atom_site.Cartn_z
+_atom_site.occupancy
+_atom_site.B_iso_or_equiv
+_atom_site.type_symbol
+_atom_site.pdbx_PDB_model_num
+ATOM  1  P    PSU A 1 1  0.000 0.000 0.000 1.00 10.00 P 1
+ATOM  2  OP1  PSU A 1 1  0.500 0.000 0.000 1.00 10.00 O 1
+ATOM  3  OP2  PSU A 1 1  1.000 0.000 0.000 1.00 10.00 O 1
+ATOM  4  O5'  PSU A 1 1  1.500 0.000 0.000 1.00 10.00 O 1
+ATOM  5  C5'  PSU A 1 1  2.000 0.000 0.000 1.00 10.00 C 1
+ATOM  6  C4'  PSU A 1 1  2.500 0.000 0.000 1.00 10.00 C 1
+ATOM  7  O4'  PSU A 1 1  3.000 0.000 0.000 1.00 10.00 O 1
+ATOM  8  C3'  PSU A 1 1  3.500 0.000 0.000 1.00 10.00 C 1
+ATOM  9  O3'  PSU A 1 1  4.000 0.000 0.000 1.00 10.00 O 1
+ATOM 10  P    5MU A 2 1  4.500 0.000 0.000 1.00 10.00 P 1
+ATOM 11  OP1  5MU A 2 1  5.000 0.000 0.000 1.00 10.00 O 1
+ATOM 12  OP2  5MU A 2 1  5.500 0.000 0.000 1.00 10.00 O 1
+ATOM 13  O5'  5MU A 2 1  6.000 0.000 0.000 1.00 10.00 O 1
+ATOM 14  C5'  5MU A 2 1  6.500 0.000 0.000 1.00 10.00 C 1
+ATOM 15  C4'  5MU A 2 1  7.000 0.000 0.000 1.00 10.00 C 1
+ATOM 16  O4'  5MU A 2 1  7.500 0.000 0.000 1.00 10.00 O 1
+ATOM 17  C3'  5MU A 2 1  8.000 0.000 0.000 1.00 10.00 C 1
+ATOM 18  O3'  5MU A 2 1  8.500 0.000 0.000 1.00 10.00 O 1
+ATOM 19  P    OMC A 3 1  9.000 0.000 0.000 1.00 10.00 P 1
+ATOM 20  OP1  OMC A 3 1  9.500 0.000 0.000 1.00 10.00 O 1
+ATOM 21  OP2  OMC A 3 1 10.000 0.000 0.000 1.00 10.00 O 1
+ATOM 22  O5'  OMC A 3 1 10.500 0.000 0.000 1.00 10.00 O 1
+ATOM 23  C5'  OMC A 3 1 11.000 0.000 0.000 1.00 10.00 C 1
+ATOM 24  C4'  OMC A 3 1 11.500 0.000 0.000 1.00 10.00 C 1
+ATOM 25  O4'  OMC A 3 1 12.000 0.000 0.000 1.00 10.00 O 1
+ATOM 26  C3'  OMC A 3 1 12.500 0.000 0.000 1.00 10.00 C 1
+ATOM 27  O3'  OMC A 3 1 13.000 0.000 0.000 1.00 10.00 O 1
+#

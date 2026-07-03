@@ -2,7 +2,7 @@
 //!
 //! Each atom contributes a 3D Gaussian blob to a scalar field; the
 //! isosurface of the summed field produces a smooth, blobby surface
-//! that envelops the molecule. Resolution controls smoothness — low
+//! that envelops the molecule. Resolution controls smoothness: low
 //! values give a coarse overview, high values resolve individual
 //! atoms.
 //!
@@ -17,14 +17,14 @@ use super::{GridSpec, ScalarVoxelGrid};
 ///
 /// - `positions`: atom world-space positions (Angstroms)
 /// - `radii`: per-atom van der Waals radii (Angstroms)
-/// - `resolution`: grid spacing in Angstroms (lower = finer; 0.5–2.0 typical)
+/// - `resolution`: grid spacing in Angstroms (lower = finer; 0.5-2.0 typical)
 ///
-/// Each atom contributes `amplitude * exp(-r² / (2·σ²))` with
-/// `σ = 0.7·vdW` and `amplitude = vdW`. Gaussian contributions are
-/// clipped at `3·σ` for efficiency.
+/// Each atom contributes `amplitude * exp(-r^2 / (2*sigma^2))` with
+/// `sigma = 0.7*vdW` and `amplitude = vdW`. Gaussian contributions are
+/// clipped at `3*sigma` for efficiency.
 ///
 /// Returns an empty grid (zero dims) for empty input. The field is
-/// zero-initialized on unaffected voxels — the isosurface threshold
+/// zero-initialized on unaffected voxels; the isosurface threshold
 /// `level` chosen by the caller determines where the surface lies.
 #[must_use]
 pub fn compute_gaussian_field(
@@ -74,15 +74,15 @@ pub fn compute_gaussian_field(
 
 /// Splat a single atom's Gaussian blob onto the grid.
 ///
-/// World→voxel index casts are clamped to `[0, dim - 1]` before the
+/// World->voxel index casts are clamped to `[0, dim - 1]` before the
 /// `as usize` conversion, and voxel indices are bounded by the grid
 /// dimensions (which fit f32 mantissa precision).
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
     clippy::cast_precision_loss,
-    reason = "world→voxel casts are clamped before truncation and voxel \
-              indices are bounded by grid dims (≪ 2²⁴, fits f32 mantissa)"
+    reason = "world->voxel casts are clamped before truncation and voxel \
+              indices are bounded by grid dims (<< 2^2^4, fits f32 mantissa)"
 )]
 fn splat_gaussian(
     grid: &mut [f32],
@@ -124,8 +124,10 @@ fn splat_gaussian(
                 let dz = (iz as f32).mul_add(spacing[2], origin[2]) - pos.z;
                 let r2 = dz.mul_add(dz, dxy2);
                 if r2 <= cutoff2 {
-                    grid[spec.lin(ix, iy, iz)] +=
-                        amplitude * (-r2 * inv_2sigma2).exp();
+                    grid[spec.lin(ix, iy, iz)] = amplitude.mul_add(
+                        (-r2 * inv_2sigma2).exp(),
+                        grid[spec.lin(ix, iy, iz)],
+                    );
                 }
             }
         }

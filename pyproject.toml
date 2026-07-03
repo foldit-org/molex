@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "molex"
-version = "0.2.2"
+version = "0.7.2"
 description = "Parse, analyze, and transform molecular structure data (PDB, mmCIF, BinaryCIF, MRC)"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -30,6 +30,9 @@ Repository = "https://github.com/petridecus/molex"
 Documentation = "https://petridecus.github.io/molex/"
 
 [tool.maturin]
-features = ["pyo3/extension-module", "python"]
+features = ["python", "extension-module"]
 bindings = "pyo3"
 module-name = "molex"
+# Pure-Rust extension (no `python-source`): maturin ships the project-root
+# `molex.pyi` type stubs and adds the `py.typed` marker automatically. The
+# stubs are hand-maintained against the pyo3 surface in `src/python/`.

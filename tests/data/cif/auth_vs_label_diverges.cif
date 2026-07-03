@@ -1,0 +1,48 @@
+data_TEST
+#
+loop_
+_entity.id
+_entity.type
+1 polymer
+#
+loop_
+_entity_poly.entity_id
+_entity_poly.type
+1 'polypeptide(L)'
+#
+loop_
+_atom_site.group_PDB
+_atom_site.id
+_atom_site.label_atom_id
+_atom_site.label_comp_id
+_atom_site.label_asym_id
+_atom_site.label_seq_id
+_atom_site.label_entity_id
+_atom_site.auth_asym_id
+_atom_site.auth_seq_id
+_atom_site.auth_comp_id
+_atom_site.auth_atom_id
+_atom_site.Cartn_x
+_atom_site.Cartn_y
+_atom_site.Cartn_z
+_atom_site.occupancy
+_atom_site.B_iso_or_equiv
+_atom_site.type_symbol
+_atom_site.pdbx_PDB_model_num
+ATOM  1  N   ALA A 1 1 H 11 ALA N  0.000 0.000 0.000 1.00 10.00 N 1
+ATOM  2  CA  ALA A 1 1 H 11 ALA CA 1.450 0.000 0.000 1.00 10.00 C 1
+ATOM  3  C   ALA A 1 1 H 11 ALA C  2.400 0.000 0.000 1.00 10.00 C 1
+ATOM  4  O   ALA A 1 1 H 11 ALA O  2.800 0.000 0.000 1.00 10.00 O 1
+ATOM  5  N   GLY A 2 1 H 12 GLY N  3.800 0.000 0.000 1.00 10.00 N 1
+ATOM  6  CA  GLY A 2 1 H 12 GLY CA 5.250 0.000 0.000 1.00 10.00 C 1
+ATOM  7  C   GLY A 2 1 H 12 GLY C  6.200 0.000 0.000 1.00 10.00 C 1
+ATOM  8  O   GLY A 2 1 H 12 GLY O  6.600 0.000 0.000 1.00 10.00 O 1
+ATOM  9  N   ALA B 1 1 H 21 ALA N 20.000 0.000 0.000 1.00 10.00 N 1
+ATOM 10  CA  ALA B 1 1 H 21 ALA CA 21.450 0.000 0.000 1.00 10.00 C 1
+ATOM 11  C   ALA B 1 1 H 21 ALA C  22.400 0.000 0.000 1.00 10.00 C 1
+ATOM 12  O   ALA B 1 1 H 21 ALA O  22.800 0.000 0.000 1.00 10.00 O 1
+ATOM 13  N   GLY B 2 1 H 22 GLY N  23.800 0.000 0.000 1.00 10.00 N 1
+ATOM 14  CA  GLY B 2 1 H 22 GLY CA 25.250 0.000 0.000 1.00 10.00 C 1
+ATOM 15  C   GLY B 2 1 H 22 GLY C  26.200 0.000 0.000 1.00 10.00 C 1
+ATOM 16  O   GLY B 2 1 H 22 GLY O  26.600 0.000 0.000 1.00 10.00 O 1
+#

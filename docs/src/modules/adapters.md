@@ -1,50 +1,67 @@
 # Adapters
 
-Format adapters live in `molex::adapters` (source: `src/adapters/`). Each adapter's primary API returns `Vec<MoleculeEntity>`. Coords-based variants are available for FFI/IPC consumers.
+Format adapters live in `molex::adapters` (source: `src/adapters/`). Each adapter's primary API returns `Vec<MoleculeEntity>`.
+
+Every structure parser feeds parser-emitted atom rows into the shared `EntityBuilder`, so chain/residue grouping, modified-residue merge logic, and entity classification are identical regardless of input format. Residues populate both their structural-side identifiers (`label_seq_id`, `name`) and the optional author-side identifiers from mmCIF / BinaryCIF (`auth_seq_id`, `auth_comp_id`, `ins_code`). `ProteinEntity` and `NAEntity` likewise carry an `auth_asym_id: Option<u8>` for the author-side chain label.
 
 ## PDB (`adapters::pdb`)
 
-Parses PDB files using the `pdbtbx` crate. Handles non-standard lines (GROMACS/MemProtMD output) via sanitization.
+Hand-rolled column-positional scanner over wwPDB v3.3 section 9. Records other than `ATOM`, `HETATM`, `MODEL`, `ENDMDL`, `TER`, and `END` are skipped.
 
 ```rust,ignore
-// Primary API
-pdb_file_to_entities(path: &Path) -> Result<Vec<MoleculeEntity>, CoordsError>
-pdb_str_to_entities(pdb_str: &str) -> Result<Vec<MoleculeEntity>, CoordsError>
-structure_file_to_entities(path: &Path) -> Result<Vec<MoleculeEntity>, CoordsError>
+pdb_file_to_entities(path: &Path) -> Result<Vec<MoleculeEntity>, AdapterError>
+pdb_str_to_entities(pdb_str: &str) -> Result<Vec<MoleculeEntity>, AdapterError>
+structure_file_to_entities(path: &Path) -> Result<Vec<MoleculeEntity>, AdapterError>
 
-// Derived Coords API
-pdb_file_to_coords(path: &Path) -> Result<Coords, CoordsError>
-pdb_str_to_coords(pdb_str: &str) -> Result<Coords, CoordsError>
-pdb_to_coords(pdb_str: &str) -> Result<Vec<u8>, CoordsError>  // serialized bytes
+// Per-MODEL entry points (NMR ensembles, multi-state trajectories)
+pdb_str_to_all_models(pdb_str: &str)
+    -> Result<Vec<Vec<MoleculeEntity>>, AdapterError>
+pdb_file_to_all_models(path: &Path)
+    -> Result<Vec<Vec<MoleculeEntity>>, AdapterError>
 
-// Coords -> PDB
-coords_to_pdb(coords_bytes: &[u8]) -> Result<String, CoordsError>
+// Writers
+assembly_to_pdb(assembly: &Assembly) -> Result<String, AdapterError>
+entities_to_pdb<E: Borrow<MoleculeEntity>>(entities: &[E])
+    -> Result<String, AdapterError>
 ```
 
 `structure_file_to_entities` auto-detects PDB vs mmCIF by file extension (`.pdb`/`.ent` -> PDB, everything else -> mmCIF).
 
+The writers refuse to emit when the assembly exceeds any legacy PDB limit (>99,999 atoms, >62 polymer chains, >9,999 residues per chain), returning `AdapterError::InvalidFormat` so callers can switch to the mmCIF writer.
+
 ## mmCIF (`adapters::cif`)
 
-Custom DOM-based parser (no external crate). Parses CIF text into a DOM, then extracts atom sites via typed extractors.
+A streaming fast scanner handles the common case directly; a DOM-backed fallback covers structurally awkward files. Both paths emit `AtomRow` into `EntityBuilder`. The DOM types are also re-exported for typed extractors (`CoordinateData`, `ReflectionData`, `UnitCell`).
 
 ```rust,ignore
-mmcif_file_to_entities(path: &Path) -> Result<Vec<MoleculeEntity>, CoordsError>
-mmcif_str_to_entities(cif_str: &str) -> Result<Vec<MoleculeEntity>, CoordsError>
+mmcif_file_to_entities(path: &Path) -> Result<Vec<MoleculeEntity>, AdapterError>
+mmcif_str_to_entities(cif_str: &str) -> Result<Vec<MoleculeEntity>, AdapterError>
 
-mmcif_file_to_coords(path: &Path) -> Result<Coords, CoordsError>
-mmcif_str_to_coords(cif_str: &str) -> Result<Coords, CoordsError>
+// One entity list per pdbx_PDB_model_num
+mmcif_str_to_all_models(cif_str: &str)
+    -> Result<Vec<Vec<MoleculeEntity>>, AdapterError>
+mmcif_file_to_all_models(path: &Path)
+    -> Result<Vec<Vec<MoleculeEntity>>, AdapterError>
 ```
 
 ## BinaryCIF (`adapters::bcif`)
 
 Decodes BinaryCIF (MessagePack-encoded CIF) with column-level codecs.
 
-```rust,ignore
-bcif_file_to_entities(path: &Path) -> Result<Vec<MoleculeEntity>, CoordsError>
-bcif_to_entities(data: &[u8]) -> Result<Vec<MoleculeEntity>, CoordsError>
+BinaryCIF is parsed from bytes, not a path: read the file and build an
+`Assembly` directly. `Assembly::from_file` covers only the text formats
+(`.pdb`/`.ent`/`.cif`/`.mmcif`), so `.bcif` callers read the bytes themselves.
 
-bcif_file_to_coords(path: &Path) -> Result<Coords, CoordsError>
-bcif_to_coords(data: &[u8]) -> Result<Coords, CoordsError>
+```rust,ignore
+Assembly::from_bcif(bytes: &[u8]) -> Result<Assembly, AdapterError>
+Assembly::from_bcif_with(bytes: &[u8], level: Completion)
+    -> Result<Assembly, AdapterError>
+
+// One entity list per pdbx_PDB_model_num
+bcif_to_all_models(bytes: &[u8])
+    -> Result<Vec<Vec<MoleculeEntity>>, AdapterError>
+bcif_file_to_all_models(path: &Path)
+    -> Result<Vec<Vec<MoleculeEntity>>, AdapterError>
 ```
 
 ## MRC/CCP4 density maps (`adapters::mrc`)
@@ -61,32 +78,15 @@ mrc_to_density(data: &[u8]) -> Result<Density, DensityError>
 Reads DCD binary trajectory files (CHARMM/NAMD format).
 
 ```rust,ignore
-dcd_file_to_frames(path: &Path) -> Result<Vec<DcdFrame>, CoordsError>
+dcd_file_to_frames(path: &Path) -> Result<Vec<DcdFrame>, AdapterError>
 
 pub struct DcdHeader { /* timestep, n_atoms, etc. */ }
 pub struct DcdFrame { pub x: Vec<f32>, pub y: Vec<f32>, pub z: Vec<f32> }
 pub struct DcdReader<R> { /* streaming reader */ }
 ```
 
-## AtomWorks (`adapters::atomworks`, feature = `python`)
+## AtomWorks vocab (`adapters::atomworks`, feature = `python`)
 
-Bidirectional conversion between molex entities and Biotite `AtomArray` objects with AtomWorks annotations. Requires the `python` feature.
+Molecule-type vocabulary maps (`MoleculeType` <-> AtomWorks `chain_type` / `mol_type`) and the `columns` de-vocab layer that marshals a native `AtomTable` into the vocab-bearing per-atom columns the Python interchange exposes. No runtime dependency on AtomWorks or Biotite. Requires the `python` feature.
 
-Entity-aware functions (preserve molecule type, entity ID, chain grouping):
-
-```rust,ignore
-entities_to_atom_array(assembly_bytes: Vec<u8>) -> PyResult<PyObject>
-entities_to_atom_array_plus(assembly_bytes: Vec<u8>) -> PyResult<PyObject>
-atom_array_to_entities(atom_array: PyObject) -> PyResult<Vec<u8>>
-entities_to_atom_array_parsed(assembly_bytes: Vec<u8>, filename: &str) -> PyResult<PyObject>
-parse_file_to_entities(path: &str) -> PyResult<Vec<u8>>
-parse_file_full(path: &str) -> PyResult<PyObject>
-```
-
-Flat Coords functions:
-
-```rust,ignore
-coords_to_atom_array(py: Python, coords_bytes: Vec<u8>) -> PyResult<PyObject>
-coords_to_atom_array_plus(py: Python, coords_bytes: Vec<u8>) -> PyResult<PyObject>
-atom_array_to_coords(atom_array: PyObject) -> PyResult<Vec<u8>>
-```
+The Python-facing columnar interchange built on this layer is `PyAtomTable`; see the [Python bindings](python.md) page.

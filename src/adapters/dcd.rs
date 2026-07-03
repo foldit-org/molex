@@ -5,7 +5,7 @@
 //! - Header: magic `CORD`, frame/atom counts, timestep, title
 //! - Per-frame: optional unit cell, then X\[N\], Y\[N\], Z\[N\] as f32 arrays
 //!
-//! No atom metadata is stored — topology must come from the loaded structure.
+//! No atom metadata is stored; topology must come from the loaded structure.
 
 use std::fs::File;
 use std::io::{self, BufReader, Read, Seek, SeekFrom};
@@ -139,9 +139,7 @@ pub fn dcd_file_to_frames(
     Ok((header, frames))
 }
 
-// ---------------------------------------------------------------------------
 // Internal parsing helpers
-// ---------------------------------------------------------------------------
 
 fn read_i32(r: &mut impl Read) -> io::Result<i32> {
     let mut buf = [0u8; 4];

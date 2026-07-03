@@ -1,97 +1,88 @@
 //! Benchmarks for structural analysis operations.
+//!
+//! `kabsch_alignment` runs on synthetic point clouds (it's a pure geometry
+//! kernel, independent of structure parsing). Everything else runs on real
+//! RCSB fixtures (1UBQ, 4HHB), with `MOLEX_BENCH_LARGE_DIR` adding 6VXX and
+//! 3J3Q when set.
 #![allow(
     missing_docs,
     unused_results,
-    unused_imports,
-    unused_variables,
     clippy::unwrap_used,
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
-    clippy::cast_possible_wrap
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::suboptimal_flops,
+    clippy::format_push_string,
+    clippy::uninlined_format_args
 )]
+
+use std::path::PathBuf;
 
 use criterion::{
     black_box, criterion_group, criterion_main, BenchmarkId, Criterion,
+    Throughput,
 };
 use glam::Vec3;
-use molex::analysis::bonds::hydrogen::{detect_hbonds, HBond};
-use molex::analysis::ss::dssp::classify;
-use molex::entity::molecule::protein::ResidueBackbone;
-use molex::ops::transform::{extract_ca_positions, kabsch_alignment};
+use molex::analysis::sasa::DEFAULT_N_POINTS;
+use molex::analysis::{infer_bonds, ContactLevel};
+use molex::ops::transform::kabsch_alignment;
+use molex::Assembly;
 
-/// Generate a synthetic alpha-helix backbone with `n` residues.
-/// Positions approximate ideal helix geometry (3.6 residues/turn, 1.5 Å rise).
-fn make_helix_backbone(n: usize) -> Vec<ResidueBackbone> {
-    (0..n)
-        .map(|i| {
-            let t = i as f32;
-            let angle = t * std::f32::consts::TAU / 3.6;
-            let rise = t * 1.5;
-            let r = 2.3; // helix radius
-
-            ResidueBackbone {
-                n: Vec3::new(r * angle.cos(), r * angle.sin(), rise),
-                ca: Vec3::new(
-                    r * (angle + 0.3).cos(),
-                    r * (angle + 0.3).sin(),
-                    rise + 0.5,
-                ),
-                c: Vec3::new(
-                    r * (angle + 0.6).cos(),
-                    r * (angle + 0.6).sin(),
-                    rise + 1.0,
-                ),
-                o: Vec3::new(
-                    (r + 1.2) * (angle + 0.6).cos(),
-                    (r + 1.2) * (angle + 0.6).sin(),
-                    rise + 1.0,
-                ),
-            }
-        })
-        .collect()
+/// A real structure parsed into an `Assembly`.
+struct Fixture {
+    name: &'static str,
+    assembly: Assembly,
+    /// Total atom count, for per-atom `Throughput` normalization.
+    atoms: u64,
 }
 
-fn bench_hbond_detection(c: &mut Criterion) {
-    let mut group = c.benchmark_group("hbond_detection");
-
-    for n_residues in [20, 50, 100, 300] {
-        let backbone = make_helix_backbone(n_residues);
-
-        group.bench_with_input(
-            BenchmarkId::new("detect_hbonds", format!("{n_residues}_residues")),
-            &backbone,
-            |b, backbone| {
-                b.iter(|| detect_hbonds(black_box(backbone)));
-            },
-        );
-    }
-
-    group.finish();
+fn committed_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("benches/data")
 }
 
-fn bench_dssp_classification(c: &mut Criterion) {
-    let mut group = c.benchmark_group("dssp_classification");
+/// Parse the always-committed fixtures plus, if `MOLEX_BENCH_LARGE_DIR` is set
+/// and the files exist, the large perf targets.
+fn load_fixtures() -> Vec<Fixture> {
+    let mut out = Vec::new();
+    let dir = committed_dir();
+    let mut names: Vec<(&'static str, PathBuf)> = vec![
+        ("1ubq", dir.join("1ubq.cif")),
+        ("4hhb", dir.join("4hhb.cif")),
+    ];
 
-    for n_residues in [20, 50, 100, 300] {
-        let backbone = make_helix_backbone(n_residues);
-        let hbonds = detect_hbonds(&backbone);
-
-        group.bench_with_input(
-            BenchmarkId::new("classify", format!("{n_residues}_residues")),
-            &(hbonds.clone(), n_residues),
-            |b, (hbonds, n)| {
-                b.iter(|| classify(black_box(hbonds), black_box(*n)));
-            },
-        );
+    if let Some(large) = std::env::var_os("MOLEX_BENCH_LARGE_DIR") {
+        let large = PathBuf::from(large);
+        names.push(("6vxx", large.join("6vxx.cif")));
+        names.push(("3j3q", large.join("3j3q.cif")));
     }
 
-    group.finish();
+    for (name, path) in names {
+        let Ok(cif) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let assembly = Assembly::from_mmcif(&cif).unwrap();
+        let atoms = assembly
+            .entities()
+            .iter()
+            .map(|e| e.atom_count())
+            .sum::<usize>() as u64;
+        out.push(Fixture {
+            name,
+            assembly,
+            atoms,
+        });
+    }
+
+    out
 }
 
 fn bench_kabsch_alignment(c: &mut Criterion) {
     let mut group = c.benchmark_group("kabsch_alignment");
 
     for n_points in [10, 50, 200, 1000] {
+        // Synthetic, but point count is the natural element count here.
+        group.throughput(Throughput::Elements(n_points as u64));
         let reference: Vec<Vec3> = (0..n_points)
             .map(|i| {
                 let t = i as f32 * 0.1;
@@ -122,53 +113,110 @@ fn bench_kabsch_alignment(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_ca_extraction(c: &mut Criterion) {
-    use molex::element::Element;
-    use molex::ops::codec::{split_into_entities, Coords, CoordsAtom};
-
-    let mut group = c.benchmark_group("ca_extraction");
-
-    for n_residues in [50, 200, 1000] {
-        let n_atoms = n_residues * 5;
-        let atom_names_cycle: &[[u8; 4]] =
-            &[*b"N   ", *b"CA  ", *b"C   ", *b"O   ", *b"CB  "];
-
-        let coords = Coords {
-            num_atoms: n_atoms,
-            atoms: (0..n_atoms)
-                .map(|i| CoordsAtom {
-                    x: (i as f32) * 1.5,
-                    y: 0.0,
-                    z: 0.0,
-                    occupancy: 1.0,
-                    b_factor: 0.0,
-                })
-                .collect(),
-            chain_ids: vec![b'A'; n_atoms],
-            res_names: vec![*b"ALA"; n_atoms],
-            res_nums: (0..n_atoms).map(|i| (i / 5 + 1) as i32).collect(),
-            atom_names: (0..n_atoms).map(|i| atom_names_cycle[i % 5]).collect(),
-            elements: vec![Element::N; n_atoms],
-        };
-        let entities = split_into_entities(&coords);
-
+fn bench_sasa(c: &mut Criterion, fixtures: &[Fixture]) {
+    let mut group = c.benchmark_group("sasa");
+    // SASA at full angular resolution is the slowest analysis; cap its sample
+    // count so the group stays usable while still real.
+    group.sample_size(20);
+    for fx in fixtures {
+        group.throughput(Throughput::Elements(fx.atoms));
         group.bench_with_input(
-            BenchmarkId::new("extract_ca", format!("{n_residues}_residues")),
-            &entities,
-            |b, entities| {
-                b.iter(|| extract_ca_positions(black_box(entities)));
+            BenchmarkId::new("assembly_sasa", fx.name),
+            &fx.assembly,
+            |b, asm| {
+                b.iter(|| black_box(asm).sasa(1.4, DEFAULT_N_POINTS));
             },
         );
     }
-
     group.finish();
 }
 
-criterion_group!(
-    benches,
-    bench_hbond_detection,
-    bench_dssp_classification,
-    bench_kabsch_alignment,
-    bench_ca_extraction
-);
+fn bench_recompute_ss(c: &mut Criterion, fixtures: &[Fixture]) {
+    let mut group = c.benchmark_group("recompute_ss");
+    for fx in fixtures {
+        group.throughput(Throughput::Elements(fx.atoms));
+        group.bench_with_input(
+            BenchmarkId::new("recompute_ss", fx.name),
+            &fx.assembly,
+            |b, asm| {
+                b.iter(|| {
+                    let mut a = asm.clone();
+                    a.recompute_ss();
+                    black_box(a);
+                });
+            },
+        );
+    }
+    group.finish();
+}
+
+fn bench_phi_psi(c: &mut Criterion, fixtures: &[Fixture]) {
+    let mut group = c.benchmark_group("phi_psi");
+    for fx in fixtures {
+        group.throughput(Throughput::Elements(fx.atoms));
+        group.bench_with_input(
+            BenchmarkId::new("phi_psi", fx.name),
+            &fx.assembly,
+            |b, asm| {
+                b.iter(|| {
+                    let proteins =
+                        asm.entities().iter().filter_map(|e| e.as_protein());
+                    for p in proteins {
+                        black_box(p.phi_psi());
+                    }
+                });
+            },
+        );
+    }
+    group.finish();
+}
+
+fn bench_infer_bonds(c: &mut Criterion, fixtures: &[Fixture]) {
+    let mut group = c.benchmark_group("infer_bonds");
+    for fx in fixtures {
+        group.throughput(Throughput::Elements(fx.atoms));
+        group.bench_with_input(
+            BenchmarkId::new("infer_bonds", fx.name),
+            &fx.assembly,
+            |b, asm| {
+                b.iter(|| {
+                    for entity in asm.entities() {
+                        let atoms = entity.columns().to_atoms();
+                        black_box(infer_bonds(black_box(&atoms), 0.45));
+                    }
+                });
+            },
+        );
+    }
+    group.finish();
+}
+
+fn bench_contacts(c: &mut Criterion, fixtures: &[Fixture]) {
+    let mut group = c.benchmark_group("contacts");
+    for fx in fixtures {
+        group.throughput(Throughput::Elements(fx.atoms));
+        group.bench_with_input(
+            BenchmarkId::new("contacts", fx.name),
+            &fx.assembly,
+            |b, asm| {
+                b.iter(|| {
+                    black_box(asm.contacts(4.0, ContactLevel::Atom, false));
+                });
+            },
+        );
+    }
+    group.finish();
+}
+
+fn bench_analysis(c: &mut Criterion) {
+    bench_kabsch_alignment(c);
+    let fixtures = load_fixtures();
+    bench_sasa(c, &fixtures);
+    bench_recompute_ss(c, &fixtures);
+    bench_phi_psi(c, &fixtures);
+    bench_infer_bonds(c, &fixtures);
+    bench_contacts(c, &fixtures);
+}
+
+criterion_group!(benches, bench_analysis);
 criterion_main!(benches);

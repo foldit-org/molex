@@ -1,0 +1,460 @@
+//! Top-level `Assembly` container: entities plus opt-in secondary
+//! structure.
+//!
+//! `Assembly` is the host-owned structural source of truth. Construction
+//! and `&mut Assembly` mutation are secondary-structure-free: per-entity
+//! DSSP classification is expensive, so `ss_types` starts empty and is
+//! populated only when a caller explicitly opts in via
+//! [`Assembly::recompute_ss`]. Every `&mut Assembly` mutation still bumps
+//! the generation counter. Rendering connections (disulfides, backbone
+//! H-bonds, etc.) are owner-populated via `set_connections`, not derived
+//! here.
+
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use crate::analysis::bonds::disulfide::detect_disulfides;
+use crate::analysis::bonds::hydrogen::{detect_hbonds, HBond};
+use crate::analysis::ss::dssp::classify;
+use crate::analysis::SSType;
+use crate::atom_id::AtomId;
+use crate::connection::{AtomEnd, AtomLink, ConnectionType};
+use crate::entity::molecule::id::EntityId;
+use crate::entity::molecule::{Completion, MoleculeEntity};
+
+/// Top-level container of entities plus opt-in secondary structure.
+///
+/// Each entity is stored behind an `Arc`, so cloning an `Assembly` is
+/// O(entities) of refcount bumps, independent of the total atom count.
+/// Mutations clone only the touched entity (`Arc::make_mut`) and leave
+/// the rest aliased with prior snapshots. Per-entity `ss_types` is also
+/// `Arc`-shared so snapshots that didn't trigger a rebuild stay aliased.
+/// The generation counter increments on every mutation so consumers can
+/// detect snapshots cheaply.
+#[derive(Debug, Clone)]
+pub struct Assembly {
+    entities: Vec<Arc<MoleculeEntity>>,
+    ss_types: HashMap<EntityId, Arc<Vec<SSType>>>,
+    /// Owner-populated rendering connections, keyed by category. NOT
+    /// computed by `recompute_ss`; the assembly's owner selects a
+    /// provider and sets this. Empty until populated.
+    connections: HashMap<ConnectionType, Vec<AtomLink>>,
+    generation: u64,
+}
+
+impl Assembly {
+    /// Build an `Assembly` from a collection of entities.
+    ///
+    /// Construction is secondary-structure-free: `ss_types` starts empty.
+    /// Call [`Assembly::recompute_ss`] to populate it. `generation` is
+    /// initialized to 0.
+    #[must_use]
+    pub fn new(entities: Vec<MoleculeEntity>) -> Self {
+        Self {
+            entities: entities.into_iter().map(Arc::new).collect(),
+            ss_types: HashMap::new(),
+            connections: HashMap::new(),
+            generation: 0,
+        }
+    }
+
+    /// Build an `Assembly` from entities a host already holds behind
+    /// `Arc`s, preserving that sharing.
+    ///
+    /// The `Arc`-preserving sibling of [`Assembly::new`]: hosts that
+    /// already keep `Arc<MoleculeEntity>` snapshots (e.g. foldit's
+    /// `EntityStore`) can hand them straight in instead of deep-cloning
+    /// each payload only to have `new` re-`Arc` it. Like `new`,
+    /// construction is secondary-structure-free: `ss_types` starts empty,
+    /// populate it via [`Assembly::recompute_ss`]. `generation` is
+    /// initialized to 0; stamp it via [`Assembly::set_generation`] if the
+    /// host tracks its own version counter.
+    #[must_use]
+    pub fn from_arcs(entities: Vec<Arc<MoleculeEntity>>) -> Self {
+        Self {
+            entities,
+            ss_types: HashMap::new(),
+            connections: HashMap::new(),
+            generation: 0,
+        }
+    }
+
+    /// Project to a fresh `Assembly` re-completed to `level`: every protein
+    /// and nucleic-acid entity is rebuilt at that completion level (see
+    /// [`MoleculeEntity::complete`]); non-polymer entities pass through
+    /// unchanged. Completion runs on each chain's surviving residues;
+    /// residues dropped at construction are not resurrected. The canonical
+    /// re-completion projection; [`Assembly::normalize`] and
+    /// [`Assembly::to_all_atom`] are thin wrappers over it.
+    ///
+    /// The result is a brand-new assembly with re-indexed atoms (any
+    /// fabricated atom shifts every later atom), so atom indices and
+    /// `AtomId`s are NOT stable across this projection. Rendering
+    /// connections are therefore dropped rather than copied: their stored
+    /// `AtomLink` endpoints reference the pre-completion indices and would
+    /// mis-point after the shift. Owners re-populate them on the next
+    /// publish. The generation counter is carried forward for snapshot
+    /// continuity.
+    #[must_use]
+    pub fn complete(&self, level: Completion) -> Assembly {
+        let entities: Vec<Arc<MoleculeEntity>> = self
+            .entities
+            .iter()
+            .map(|e| Arc::new(e.complete(level)))
+            .collect();
+        let mut projected = Assembly::from_arcs(entities);
+        projected.set_generation(self.generation);
+        projected
+    }
+
+    /// Project to a fresh heavy-complete `Assembly`: every protein and
+    /// nucleic-acid entity is rebuilt with its missing heavy atoms
+    /// fabricated; non-polymer entities pass through unchanged. A thin
+    /// wrapper over [`Assembly::complete`] at [`Completion::Heavy`].
+    #[must_use]
+    pub fn normalize(&self) -> Assembly {
+        self.complete(Completion::Heavy)
+    }
+
+    /// Project to a fresh all-atom `Assembly`: every protein and
+    /// nucleic-acid entity is rebuilt with its template hydrogens
+    /// fabricated; non-polymer entities pass through unchanged. The
+    /// file-ingest path stays heavy-only; this is the opt-in to a fully
+    /// protonated model. A thin wrapper over [`Assembly::complete`] at
+    /// [`Completion::AllAtom`].
+    #[must_use]
+    pub fn to_all_atom(&self) -> Assembly {
+        self.complete(Completion::AllAtom)
+    }
+
+    // Read accessors
+
+    /// All entities in declaration order.
+    ///
+    /// Each entry is an `Arc<MoleculeEntity>` so cloning the slice into
+    /// a new `Assembly` is O(entities) of refcount bumps. `&Arc<T>`
+    /// derefs to `&T` for method calls, so most call sites do not need
+    /// to change shape.
+    #[must_use]
+    pub fn entities(&self) -> &[Arc<MoleculeEntity>] {
+        &self.entities
+    }
+
+    /// Consume the assembly, returning its entities as an owned `Vec`.
+    ///
+    /// Moves each entity out of its `Arc` when uniquely held (the common
+    /// case right after parsing), cloning only entities still shared
+    /// elsewhere. Non-entity assembly state (`ss_types`, rendering
+    /// connections, the generation counter) is discarded.
+    #[must_use]
+    pub fn into_entities(self) -> Vec<MoleculeEntity> {
+        self.entities
+            .into_iter()
+            .map(|arc| {
+                Arc::try_unwrap(arc).unwrap_or_else(|arc| (*arc).clone())
+            })
+            .collect()
+    }
+
+    /// Look up an entity by id.
+    #[must_use]
+    pub fn entity(&self, id: EntityId) -> Option<&MoleculeEntity> {
+        self.entities.iter().map(Arc::as_ref).find(|e| e.id() == id)
+    }
+
+    /// One-letter sequences, one per polymer entity in declaration order.
+    ///
+    /// Non-polymer entities (ligands, ions, bulk solvent) contribute no
+    /// entry. See [`MoleculeEntity::sequence`] for the per-residue mapping.
+    #[must_use]
+    pub fn sequence(&self) -> Vec<String> {
+        self.entities
+            .iter()
+            .filter(|e| e.residues().is_some())
+            .map(|e| e.sequence())
+            .collect()
+    }
+
+    /// Per-entity Q3 secondary structure, one string per entity in declaration
+    /// order. Each protein entity's string carries one character per residue
+    /// via [`SSType::one_letter`] (`'H'`/`'E'`/`'C'`); non-protein entities
+    /// contribute an empty string (so the result aligns 1:1 with
+    /// [`Self::entities`], unlike [`Self::sequence`] which drops non-polymers).
+    ///
+    /// Reads the SS [`Self::recompute_ss`] computed; call that first. Without
+    /// it every protein string is all-`'C'`.
+    #[must_use]
+    pub fn secondary_structure(&self) -> Vec<String> {
+        self.entities
+            .iter()
+            .map(|e| {
+                self.ss_per_residue(e.id()).map_or_else(String::new, |ss| {
+                    ss.into_iter().map(SSType::one_letter).collect()
+                })
+            })
+            .collect()
+    }
+
+    /// Monotonic counter incremented on every mutation.
+    #[must_use]
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Stamp `generation` directly. Use when constructing a fresh
+    /// `Assembly` snapshot from a host that tracks its own version
+    /// counter (e.g., foldit's `EntityStore::head_assembly`): without
+    /// this, a freshly-built `Assembly::new` always starts at
+    /// generation 0 and downstream consumers that gate on the
+    /// counter (viso's `poll_assembly`) silently skip the second and
+    /// subsequent publishes.
+    pub fn set_generation(&mut self, generation: u64) {
+        self.generation = generation;
+    }
+
+    /// Secondary structure classification for an entity.
+    ///
+    /// Returns an empty slice for entities that don't have an SS
+    /// assignment (non-protein, or proteins with fewer than two complete
+    /// backbone residues).
+    #[must_use]
+    pub fn ss_types(&self, id: EntityId) -> &[SSType] {
+        self.ss_types.get(&id).map_or(&[], |ss| ss.as_slice())
+    }
+
+    /// Per-residue secondary structure for a protein entity, aligned to its
+    /// full residue list.
+    ///
+    /// Returns one [`SSType`] per residue (`Vec` length ==
+    /// `entity.residue_count()`), in residue order, or `None` for a
+    /// non-protein entity. The stored [`Self::ss_types`] vector only covers
+    /// backbone-complete residues (the ones DSSP assigns); this spreads it
+    /// back across every residue, emitting [`SSType::Coil`] for the
+    /// backbone-incomplete residues DSSP skips, so the result indexes 1:1
+    /// against the entity's residues. Without a prior
+    /// [`Self::recompute_ss`] the stored vector is empty, so every residue
+    /// reports `Coil`.
+    #[must_use]
+    pub fn ss_per_residue(&self, id: EntityId) -> Option<Vec<SSType>> {
+        let protein = self.entity(id)?.as_protein()?;
+        Some(protein.ss_per_residue(self.ss_types(id)))
+    }
+
+    /// Copy per-entity secondary structure from `src` onto `self`, in place,
+    /// for every entity `self` and `src` share whose SS vector length matches.
+    ///
+    /// Lets a freshly built coordinate-only snapshot inherit the secondary
+    /// structure of an earlier snapshot without re-running DSSP (the streaming
+    /// render path: a mid-edit frame carries the last committed SS forward so
+    /// the cartoon keeps its helices/sheets while coordinates animate).
+    ///
+    /// For each entity present in `self`, the source `ss_types` entry is copied
+    /// only when its length equals the length [`Assembly::recompute_ss`] would
+    /// produce for that entity here (the per-entity backbone-residue count).
+    /// A mismatch (an indel, a backbone-completeness change, a non-protein, or
+    /// no source entry) leaves `self`'s entry untouched (empty unless already
+    /// set), so a stale SS can never be indexed against the wrong residues.
+    /// The `Arc<Vec<SSType>>` is shared, not deep-copied.
+    pub fn carry_ss_from(&mut self, src: &Assembly) {
+        for entity in &self.entities {
+            let id = entity.id();
+            let Some(src_ss) = src.ss_types.get(&id) else {
+                continue;
+            };
+            if src_ss.len() == ss_len_for_entity(entity.as_ref()) {
+                let _ = self.ss_types.insert(id, Arc::clone(src_ss));
+            }
+        }
+    }
+
+    /// Current rendering connections, keyed by category.
+    #[must_use]
+    pub fn connections(&self) -> &HashMap<ConnectionType, Vec<AtomLink>> {
+        &self.connections
+    }
+
+    /// Replace the rendering connections wholesale. The owner re-applies
+    /// the selected provider's set on every publish.
+    pub fn set_connections(
+        &mut self,
+        connections: HashMap<ConnectionType, Vec<AtomLink>>,
+    ) {
+        self.connections = connections;
+    }
+
+    /// Compute the viewer-only fallback connections (disulfides and
+    /// backbone hydrogen bonds) from geometry. Used when no host provider
+    /// supplies connections. Pure: does not mutate `self`.
+    #[must_use]
+    pub fn detect_fallback_connections(
+        &self,
+    ) -> HashMap<ConnectionType, Vec<AtomLink>> {
+        let mut out = HashMap::new();
+
+        let disulfides: Vec<AtomLink> = detect_disulfides(&self.entities)
+            .iter()
+            .map(|b| AtomLink::new(AtomEnd::Atom(b.a), AtomEnd::Atom(b.b)))
+            .collect();
+        if !disulfides.is_empty() {
+            let _ = out.insert(ConnectionType::Disulfide, disulfides);
+        }
+
+        let hbonds = self.fallback_hbond_links();
+        if !hbonds.is_empty() {
+            let _ = out.insert(ConnectionType::HBond, hbonds);
+        }
+
+        out
+    }
+
+    /// Resolve the flat-backbone hbond list to per-entity atom-pair links,
+    /// mirroring the viewer's flat-to-atom resolution: donor N to acceptor
+    /// carbonyl C.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "atom indices are bounded by entity size (< u32::MAX)"
+    )]
+    fn fallback_hbond_links(&self) -> Vec<AtomLink> {
+        let mut flat_to_atoms: Vec<[AtomId; 4]> = Vec::new();
+        for entity in &self.entities {
+            let Some(protein) = entity.as_protein() else {
+                continue;
+            };
+            let eid = protein.id;
+            for residue in &protein.residues {
+                let start = residue.atom_range.start as u32;
+                flat_to_atoms.push([
+                    AtomId {
+                        entity: eid,
+                        index: start,
+                    },
+                    AtomId {
+                        entity: eid,
+                        index: start + 1,
+                    },
+                    AtomId {
+                        entity: eid,
+                        index: start + 2,
+                    },
+                    AtomId {
+                        entity: eid,
+                        index: start + 3,
+                    },
+                ]);
+            }
+        }
+
+        compute_flat_hbonds(&self.entities)
+            .iter()
+            .filter_map(|h| {
+                let donor = flat_to_atoms.get(h.donor)?;
+                let acceptor = flat_to_atoms.get(h.acceptor)?;
+                Some(AtomLink::new(
+                    AtomEnd::Atom(donor[0]),
+                    AtomEnd::Atom(acceptor[2]),
+                ))
+            })
+            .collect()
+    }
+
+    // Mutation methods
+    //
+    // All direct content mutators are `pub(crate)`: cross-crate callers
+    // must go through [`Self::apply_edit`] / [`Self::apply_edits`] so the
+    // host's broadcast routing has a single typed funnel. The reason is
+    // protocol-shaped: every host-side Assembly change must produce
+    // exactly one `UpdateAssembly` payload (`Full` or `Delta`) per the
+    // plugin protocol; a caller that mutates directly bypasses the
+    // queue and leaves peer plugins one generation behind.
+
+    /// Append an entity. Bumps the generation counter. Does not recompute
+    /// secondary structure; callers opt in via [`Assembly::recompute_ss`].
+    pub(crate) fn add_entity(&mut self, entity: MoleculeEntity) {
+        self.entities.push(Arc::new(entity));
+        self.after_mutation();
+    }
+
+    /// Remove an entity by id. Bumps the generation counter and drops the
+    /// entity's stale `ss_types` entry. Does not recompute secondary
+    /// structure; callers opt in via [`Assembly::recompute_ss`].
+    pub(crate) fn remove_entity(&mut self, id: EntityId) {
+        self.entities.retain(|e| e.id() != id);
+        let _ = self.ss_types.remove(&id);
+        self.after_mutation();
+    }
+
+    /// Mutable slice of the entity list. Crate-internal; reserved for
+    /// the `ops::edit` apply path which needs `Arc::make_mut` access
+    /// to individual entities while running its own derived-data
+    /// bookkeeping via [`Self::after_mutation_pub`].
+    pub(crate) fn entities_mut(&mut self) -> &mut [Arc<MoleculeEntity>] {
+        &mut self.entities
+    }
+
+    /// Bump the generation counter. Crate-internal counterpart to the
+    /// private `after_mutation` for the `ops::edit` apply functions.
+    pub(crate) fn after_mutation_pub(&mut self) {
+        self.after_mutation();
+    }
+
+    /// Recompute per-entity secondary structure into `ss_types`.
+    ///
+    /// Per-entity DSSP classification is expensive, so construction and
+    /// mutation leave `ss_types` empty; call this when a caller needs
+    /// secondary structure populated (e.g. after a load or before a
+    /// render that reads SS). Replaces any prior `ss_types`.
+    pub fn recompute_ss(&mut self) {
+        self.ss_types = compute_per_entity_ss(&self.entities);
+    }
+
+    // Internal helpers
+
+    fn after_mutation(&mut self) {
+        self.generation = self.generation.saturating_add(1);
+    }
+}
+
+/// Length the `ss_types` entry for `entity` would have after
+/// [`Assembly::recompute_ss`]: the count of residues with a complete
+/// backbone (`0` for a non-protein or a protein with no complete backbone
+/// residues). Mirrors the sizing in [`compute_per_entity_ss`] so the
+/// `carry_ss_from` length guard uses the same notion of "residue count".
+fn ss_len_for_entity(entity: &MoleculeEntity) -> usize {
+    entity.as_protein().map_or(0, |p| p.to_backbone().len())
+}
+
+fn compute_per_entity_ss<E: std::borrow::Borrow<MoleculeEntity>>(
+    entities: &[E],
+) -> HashMap<EntityId, Arc<Vec<SSType>>> {
+    let mut out = HashMap::new();
+    for entity in entities {
+        let Some(protein) = entity.borrow().as_protein() else {
+            continue;
+        };
+        let backbone = protein.to_backbone();
+        if backbone.is_empty() {
+            continue;
+        }
+        let hbonds = detect_hbonds(&backbone);
+        let ss = classify(&hbonds, backbone.len());
+        let _ = out.insert(protein.id, Arc::new(ss));
+    }
+    out
+}
+
+fn compute_flat_hbonds<E: std::borrow::Borrow<MoleculeEntity>>(
+    entities: &[E],
+) -> Vec<HBond> {
+    let mut flat = Vec::new();
+    for entity in entities {
+        let Some(protein) = entity.borrow().as_protein() else {
+            continue;
+        };
+        flat.extend(protein.to_backbone());
+    }
+    detect_hbonds(&flat)
+}
+
+#[cfg(test)]
+#[path = "assembly_tests.rs"]
+mod tests;

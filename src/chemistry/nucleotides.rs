@@ -1,8 +1,10 @@
 //! Canonical nucleotides: enum + 3-letter code parsing.
 //!
-//! The bond table is a skeleton in Phase 1 — `bonds()` returns an
-//! empty slice. The real per-base table lands in Phase 2 if a concrete
-//! `NAEntity::new` consumer needs it.
+//! Per-base bond tables cover sugar-backbone bonds shared across all
+//! nucleotides, sugar-to-base anchor, and the heterocyclic base ring
+//! bonds. Inter-residue phosphodiester bonds live at the
+//! [`crate::entity::molecule::nucleic_acid::NAEntity`] level and are
+//! not part of these tables.
 
 use super::atom_name::AtomName;
 
@@ -59,12 +61,158 @@ impl Nucleotide {
         }
     }
 
-    /// Per-base bond table. Empty in Phase 1 — populated in Phase 2 if
-    /// a concrete `NAEntity::new` consumer requires it.
+    /// 1-letter nucleotide code (uppercase ASCII).
+    #[must_use]
+    pub const fn one_letter(self) -> u8 {
+        match self {
+            Self::A => b'A',
+            Self::C => b'C',
+            Self::G => b'G',
+            Self::T => b'T',
+            Self::U => b'U',
+        }
+    }
+
+    /// Heavy-atom intra-residue bonds for this nucleotide.
+    ///
+    /// Covers: the shared sugar ring (C1'-C2'-C3'-C4'-O4'-C1'), the
+    /// sugar-phosphate backbone bonds (P-O5'-C5'-C4', C3'-O3'), the
+    /// 2'-OH on ribose (C2'-O2'), the sugar-to-base anchor (C1'-N for
+    /// purines at N9, pyrimidines at N1), and the heterocyclic base
+    /// ring bonds. Phosphate terminal oxygens (OP1, OP2, OP3) are
+    /// intentionally absent from sugar-phosphate heavy-heavy coverage
+    /// because their variable presence in PDB data would generate
+    /// dangling bonds; `NAEntity::new` emits P-OP* via name-matching
+    /// when the terminal oxygens are present.
+    ///
+    /// Inter-residue phosphodiester bonds (O3'(i)-P(i+1)) are emitted
+    /// at the entity level, not here.
     #[must_use]
     pub const fn bonds(self) -> &'static [(AtomName, AtomName)] {
-        &[]
+        match self {
+            Self::A => &ADENINE_BONDS,
+            Self::C => &CYTOSINE_BONDS,
+            Self::G => &GUANINE_BONDS,
+            Self::T => &THYMINE_BONDS,
+            Self::U => &URACIL_BONDS,
+        }
     }
+}
+
+// Bond tables
+
+const fn an(b: &'static [u8]) -> AtomName {
+    AtomName::from_bytes(b)
+}
+
+/// Sugar-phosphate backbone bonds shared by every nucleotide.
+const SUGAR_PHOSPHATE_BONDS: &[(AtomName, AtomName)] = &[
+    (an(b"P"), an(b"O5'")),
+    (an(b"O5'"), an(b"C5'")),
+    (an(b"C5'"), an(b"C4'")),
+    (an(b"C4'"), an(b"C3'")),
+    (an(b"C3'"), an(b"O3'")),
+    (an(b"C4'"), an(b"O4'")),
+    (an(b"O4'"), an(b"C1'")),
+    (an(b"C1'"), an(b"C2'")),
+    (an(b"C2'"), an(b"C3'")),
+    (an(b"C2'"), an(b"O2'")),
+];
+
+/// Purine (A/G) shared ring skeleton: 6-membered + fused 5-membered,
+/// plus the sugar-to-base anchor C1'-N9.
+const PURINE_RING_BONDS: &[(AtomName, AtomName)] = &[
+    (an(b"C1'"), an(b"N9")),
+    (an(b"N9"), an(b"C8")),
+    (an(b"C8"), an(b"N7")),
+    (an(b"N7"), an(b"C5")),
+    (an(b"C5"), an(b"C4")),
+    (an(b"C4"), an(b"N9")),
+    (an(b"C5"), an(b"C6")),
+    (an(b"C6"), an(b"N1")),
+    (an(b"N1"), an(b"C2")),
+    (an(b"C2"), an(b"N3")),
+    (an(b"N3"), an(b"C4")),
+];
+
+/// Pyrimidine (C/T/U) shared ring: 6-membered with sugar anchor C1'-N1.
+const PYRIMIDINE_RING_BONDS: &[(AtomName, AtomName)] = &[
+    (an(b"C1'"), an(b"N1")),
+    (an(b"N1"), an(b"C2")),
+    (an(b"C2"), an(b"N3")),
+    (an(b"N3"), an(b"C4")),
+    (an(b"C4"), an(b"C5")),
+    (an(b"C5"), an(b"C6")),
+    (an(b"C6"), an(b"N1")),
+];
+
+const ADENINE_BASE_BONDS: &[(AtomName, AtomName)] = &[(an(b"C6"), an(b"N6"))];
+const GUANINE_BASE_BONDS: &[(AtomName, AtomName)] =
+    &[(an(b"C6"), an(b"O6")), (an(b"C2"), an(b"N2"))];
+const CYTOSINE_BASE_BONDS: &[(AtomName, AtomName)] =
+    &[(an(b"C2"), an(b"O2")), (an(b"C4"), an(b"N4"))];
+const URACIL_BASE_BONDS: &[(AtomName, AtomName)] =
+    &[(an(b"C2"), an(b"O2")), (an(b"C4"), an(b"O4"))];
+const THYMINE_BASE_BONDS: &[(AtomName, AtomName)] = &[
+    (an(b"C2"), an(b"O2")),
+    (an(b"C4"), an(b"O4")),
+    (an(b"C5"), an(b"C7")),
+];
+
+// Tables below are built by const concatenation of the shared sugar-
+// phosphate skeleton with each base's ring + substituent bonds.
+// Sizes: 10 sugar-phosphate + 11 purine-ring = 21;
+//        10 sugar-phosphate + 7 pyrimidine-ring = 17.
+const ADENINE_BONDS: [(AtomName, AtomName); 22] =
+    concat_three(SUGAR_PHOSPHATE_BONDS, PURINE_RING_BONDS, ADENINE_BASE_BONDS);
+const GUANINE_BONDS: [(AtomName, AtomName); 23] =
+    concat_three(SUGAR_PHOSPHATE_BONDS, PURINE_RING_BONDS, GUANINE_BASE_BONDS);
+const CYTOSINE_BONDS: [(AtomName, AtomName); 19] = concat_three(
+    SUGAR_PHOSPHATE_BONDS,
+    PYRIMIDINE_RING_BONDS,
+    CYTOSINE_BASE_BONDS,
+);
+const URACIL_BONDS: [(AtomName, AtomName); 19] = concat_three(
+    SUGAR_PHOSPHATE_BONDS,
+    PYRIMIDINE_RING_BONDS,
+    URACIL_BASE_BONDS,
+);
+const THYMINE_BONDS: [(AtomName, AtomName); 20] = concat_three(
+    SUGAR_PHOSPHATE_BONDS,
+    PYRIMIDINE_RING_BONDS,
+    THYMINE_BASE_BONDS,
+);
+
+/// `const fn` concatenation of three bond slices, sized by explicit
+/// output length `N`. Callers infer `N` from the surrounding slice
+/// binding's length expectation.
+const fn concat_three<const N: usize>(
+    a: &[(AtomName, AtomName)],
+    b: &[(AtomName, AtomName)],
+    c: &[(AtomName, AtomName)],
+) -> [(AtomName, AtomName); N] {
+    let zero = an(b"");
+    let mut out = [(zero, zero); N];
+    let mut idx = 0;
+    let mut i = 0;
+    while i < a.len() {
+        out[idx] = a[i];
+        idx += 1;
+        i += 1;
+    }
+    let mut i = 0;
+    while i < b.len() {
+        out[idx] = b[i];
+        idx += 1;
+        i += 1;
+    }
+    let mut i = 0;
+    while i < c.len() {
+        out[idx] = c[i];
+        idx += 1;
+        i += 1;
+    }
+    out
 }
 
 #[cfg(test)]
@@ -107,7 +255,20 @@ mod tests {
     }
 
     #[test]
-    fn bonds_skeleton_is_empty() {
+    fn one_letter_round_trips() {
+        for (nt, c) in [
+            (Nucleotide::A, b'A'),
+            (Nucleotide::C, b'C'),
+            (Nucleotide::G, b'G'),
+            (Nucleotide::T, b'T'),
+            (Nucleotide::U, b'U'),
+        ] {
+            assert_eq!(nt.one_letter(), c);
+        }
+    }
+
+    #[test]
+    fn bonds_tables_non_empty() {
         for nt in [
             Nucleotide::A,
             Nucleotide::C,
@@ -115,7 +276,30 @@ mod tests {
             Nucleotide::T,
             Nucleotide::U,
         ] {
-            assert!(nt.bonds().is_empty());
+            assert!(!nt.bonds().is_empty(), "{nt:?} should have bonds");
         }
+    }
+
+    #[test]
+    fn purine_bonds_include_sugar_base_anchor() {
+        let table = Nucleotide::A.bonds();
+        let anchor =
+            (AtomName::from_bytes(b"C1'"), AtomName::from_bytes(b"N9"));
+        assert!(table.contains(&anchor));
+    }
+
+    #[test]
+    fn pyrimidine_bonds_include_sugar_base_anchor() {
+        let table = Nucleotide::C.bonds();
+        let anchor =
+            (AtomName::from_bytes(b"C1'"), AtomName::from_bytes(b"N1"));
+        assert!(table.contains(&anchor));
+    }
+
+    #[test]
+    fn thymine_has_methyl_c7_bond() {
+        let table = Nucleotide::T.bonds();
+        let methyl = (AtomName::from_bytes(b"C5"), AtomName::from_bytes(b"C7"));
+        assert!(table.contains(&methyl));
     }
 }

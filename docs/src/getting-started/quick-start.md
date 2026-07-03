@@ -51,37 +51,52 @@ for entity in &proteins {
 
 ## Run DSSP secondary structure assignment
 
-```rust,ignore
-use molex::analysis::{detect_dssp, SSType};
+Secondary structure is opt-in: an `Assembly` starts with empty `ss_types`, so
+call `recompute_ss()` before reading it. Backbone H-bonds are never stored;
+they surface on demand through `detect_fallback_connections()`.
 
-let protein = entities[0].as_protein().unwrap();
-let backbone = protein.to_backbone();
-let (ss_types, hbonds) = detect_dssp(&backbone);
-for (i, ss) in ss_types.iter().enumerate() {
+```rust,ignore
+use molex::{Assembly, ConnectionType, SSType};
+
+let mut assembly = Assembly::new(entities);
+assembly.recompute_ss(); // populate ss_types (expensive; skipped at construction)
+
+let protein_id = assembly.entities()[0].id();
+for (i, ss) in assembly.ss_types(protein_id).iter().enumerate() {
     println!("Residue {}: {:?}", i, ss); // Helix, Sheet, or Coil
+}
+if let Some(hbonds) = assembly.detect_fallback_connections().get(&ConnectionType::HBond) {
+    for link in hbonds {
+        println!("hbond {:?} -> {:?}", link.a, link.b);
+    }
 }
 ```
 
-## Serialize to COORDS binary (for FFI/IPC)
+## Serialize to assembly binary (for FFI/IPC)
 
 ```rust,ignore
-use molex::ops::codec::{serialize, merge_entities};
+use molex::ops::wire::assembly_bytes;
 
-let coords = merge_entities(&entities);
-let bytes = serialize(&coords)?;
+let bytes = assembly_bytes(&entities)?;
 // Send `bytes` over FFI, IPC, or network
 ```
+
+`assembly_bytes` is the only public wire entry point. To serialize an
+`Assembly` rather than a raw entity slice, call `assembly.to_bytes()`; decode
+with `Assembly::from_bytes(&bytes)`, which returns an assembly with empty
+`ss_types`.
 
 ## Python usage
 
 ```python
 import molex
 
-# PDB round-trip
-coords_bytes = molex.pdb_to_coords(pdb_string)
-pdb_back = molex.coords_to_pdb(coords_bytes)
+# PDB round-trip via assembly bytes
+assembly_bytes = molex.pdb_to_assembly_bytes(pdb_string)
+pdb_back = molex.assembly_bytes_to_pdb(assembly_bytes)
 
-# Entity-aware AtomArray conversion (for ML pipelines)
-atom_array = molex.entities_to_atom_array(assembly_bytes)
-assembly_bytes = molex.atom_array_to_entities(atom_array)
+# Biotite-agnostic columnar interchange (for ML pipelines)
+table = molex.PyAtomTable.from_assembly_bytes(assembly_bytes)
+coords = table.coords  # (N, 3) float32 numpy array
+assembly_bytes = table.to_assembly_bytes()
 ```

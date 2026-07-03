@@ -2,10 +2,10 @@
 //!
 //! Pipeline:
 //! 1. Voxelize the SAS solid from atom positions
-//! 2. EDT on the solid interior → erode by `probe` → SES solid
-//! 3. Flood-fill from grid exterior → cavity mask (non-solid voxels unreachable
-//!    from the outside)
-//! 4. Connected-component label the cavity mask → per-cavity sub-grids
+//! 2. EDT on the solid interior -> erode by `probe` -> SES solid
+//! 3. Flood-fill from grid exterior -> cavity mask (non-solid voxels
+//!    unreachable from the outside)
+//! 4. Connected-component label the cavity mask -> per-cavity sub-grids
 //!
 //! Each returned [`DetectedCavity`] carries a padded binary mask on its
 //! own sub-grid, ready to be handed to a mesher (marching cubes,
@@ -34,11 +34,11 @@ pub struct VoxelBbox {
 /// The sub-grid is a local slice of the full voxelization, padded by 1
 /// voxel in every direction so a downstream mesher can close surfaces
 /// against the boundary. Only voxels belonging to **this** cavity are
-/// marked `true` in `sub_mask` — other cavities and the exterior are
+/// marked `true` in `sub_mask`; other cavities and the exterior are
 /// `false`.
 #[derive(Debug, Clone)]
 pub struct DetectedCavity {
-    /// Binary mask indexed `x-major → y → z` with dimensions `sub_dims`.
+    /// Binary mask indexed `x-major -> y -> z` with dimensions `sub_dims`.
     pub sub_mask: Vec<bool>,
     /// Sub-grid dimensions in voxels.
     pub sub_dims: [usize; 3],
@@ -55,8 +55,8 @@ pub struct DetectedCavity {
 ///
 /// - `positions`: atom world-space positions (Angstroms)
 /// - `radii`: per-atom van der Waals radii (Angstroms)
-/// - `probe_radius`: solvent probe radius; defaults to 1.4 Å
-/// - `resolution`: grid spacing in Angstroms (lower = finer; 0.5–1.0 typical)
+/// - `probe_radius`: solvent probe radius; defaults to 1.4 A
+/// - `resolution`: grid spacing in Angstroms (lower = finer; 0.5-1.0 typical)
 ///
 /// Returns one [`DetectedCavity`] per connected component, in label
 /// order (no guaranteed ordering otherwise).
@@ -100,7 +100,7 @@ pub fn detect_cavities(
     // Step 1: Binary SAS solid
     let sas_solid = voxelize_sas(positions, radii, probe, &spec);
 
-    // Step 2: SES carve — voxels where EDT < probe become outside
+    // Step 2: SES carve; voxels where EDT < probe become outside
     let interior_edt = edt_3d(&sas_solid, spec.dims, &spec.spacing);
     let total = spec.voxel_count();
     let mut ses_solid = vec![false; total];
@@ -112,7 +112,7 @@ pub fn detect_cavities(
     // the grid exterior)
     let cavity_mask = detect_cavity_mask(&ses_solid, spec.dims);
 
-    // Step 4: Label connected components → per-cavity IDs + bboxes
+    // Step 4: Label connected components -> per-cavity IDs + bboxes
     let (labels, bboxes) = label_connected_components(&cavity_mask, spec.dims);
     if bboxes.is_empty() {
         return Vec::new();
@@ -132,7 +132,7 @@ pub fn detect_cavities(
 /// Build a padded per-cavity sub-grid mask.
 #[allow(
     clippy::cast_precision_loss,
-    reason = "voxel index → f32 cast: indices bounded by grid dims, fit f32 \
+    reason = "voxel index -> f32 cast: indices bounded by grid dims, fit f32 \
               mantissa exactly"
 )]
 fn extract_sub_mask(
@@ -164,7 +164,7 @@ fn extract_sub_mask(
     ];
 
     // Build per-cavity binary mask in local sub-grid coordinates. Only
-    // voxels carrying this cavity's label become solid — other cavities
+    // voxels carrying this cavity's label become solid; other cavities
     // and exterior are treated as outside.
     let sub_total = sub_dims[0] * sub_dims[1] * sub_dims[2];
     let mut sub_mask = vec![false; sub_total];
@@ -238,17 +238,22 @@ fn label_connected_components(
             continue;
         }
         let label = bboxes.len() as u32 + 1;
-        let bbox =
-            flood_fill((ix, iy, iz), label, cavity_mask, &mut labels, dims);
+        let bbox = label_component(
+            (ix, iy, iz),
+            label,
+            cavity_mask,
+            &mut labels,
+            dims,
+        );
         bboxes.push(bbox);
     }
 
     (labels, bboxes)
 }
 
-/// Flood-fill from `start`, marking every connected cavity voxel with
-/// `label` and returning the resulting bounding box.
-fn flood_fill(
+/// Label the connected component containing `start`, marking every
+/// connected cavity voxel with `label` and returning the bounding box.
+fn label_component(
     start: (usize, usize, usize),
     label: u32,
     cavity_mask: &[bool],

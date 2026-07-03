@@ -6,14 +6,14 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-molex = "0.1"
+molex = "0.3"
 ```
 
 To enable Python bindings (PyO3 + NumPy + AtomWorks interop):
 
 ```toml
 [dependencies]
-molex = { version = "0.1", features = ["python"] }
+molex = { version = "0.3", features = ["python"] }
 ```
 
 ## As a Python package
@@ -30,7 +30,6 @@ python -c "import molex; print('OK')"
 molex pulls in:
 
 - **glam** -- 3D math (`Vec3`, `Mat4`)
-- **pdbtbx** -- PDB format parsing
 - **ndarray** -- 3D arrays for density grids
 - **rmp** -- MessagePack for BinaryCIF decoding
 - **flate2** -- gzip decompression

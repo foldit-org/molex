@@ -1,0 +1,24 @@
+data_FIRST
+loop_
+_atom_site.id
+_atom_site.label_atom_id
+_atom_site.label_comp_id
+_atom_site.label_asym_id
+_atom_site.label_seq_id
+_atom_site.Cartn_x
+_atom_site.Cartn_y
+_atom_site.Cartn_z
+1 N ALA A 1 0.0 0.0 0.0
+#
+data_SECOND
+loop_
+_atom_site.id
+_atom_site.label_atom_id
+_atom_site.label_comp_id
+_atom_site.label_asym_id
+_atom_site.label_seq_id
+_atom_site.Cartn_x
+_atom_site.Cartn_y
+_atom_site.Cartn_z
+1 N GLY B 1 0.0 0.0 0.0
+#

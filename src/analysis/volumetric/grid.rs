@@ -3,13 +3,12 @@
 //! These primitives are consumed by every surface/cavity flavor built on
 //! top of an atom-rasterized distance field:
 //!
-//! - [`voxelize_sas`] — rasterize a binary SAS solid from atom positions
-//! - [`edt_1d`] / [`edt_3d`] — Felzenszwalb–Huttenlocher Euclidean distance
+//! - `voxelize_sas`: rasterize a binary SAS solid from atom positions
+//! - `edt_1d` / `edt_3d`: Felzenszwalb-Huttenlocher Euclidean distance
 //!   transform
-//! - [`binary_to_sdf`] — binary mask → signed distance field
-//! - [`detect_cavity_mask`] — flood-fill from grid boundary to identify
-//!   non-solid voxels that are NOT reachable from the exterior (i.e. internal
-//!   cavities)
+//! - [`binary_to_sdf`]: binary mask -> signed distance field
+//! - `detect_cavity_mask`: flood-fill from grid boundary to identify non-solid
+//!   voxels that are NOT reachable from the exterior (i.e. internal cavities)
 //!
 //! Everything here is pure, thread-safe, and has no rendering or GPU
 //! concepts. Downstream consumers (cavity detection, SES, Gaussian
@@ -22,7 +21,7 @@ use super::GridSpec;
 
 /// Voxelize the SAS: voxel is `true` if within any atom's (vdW + probe).
 #[must_use]
-pub fn voxelize_sas(
+pub(crate) fn voxelize_sas(
     positions: &[Vec3],
     radii: &[f32],
     probe: f32,
@@ -37,7 +36,7 @@ pub fn voxelize_sas(
 
 /// Mark voxels within radius `r` of `pos` as solid.
 ///
-/// World→voxel index casts are clamped to `[0, dim - 1]` before the
+/// World->voxel index casts are clamped to `[0, dim - 1]` before the
 /// `as usize` conversion, and voxel indices are bounded by the grid
 /// dimensions (which fit f32 mantissa precision); the cast lints below
 /// flag arithmetic that is correct by construction in this layer.
@@ -45,8 +44,8 @@ pub fn voxelize_sas(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
     clippy::cast_precision_loss,
-    reason = "world→voxel casts are clamped before truncation and voxel \
-              indices are bounded by grid dims (≪ 2²⁴, fits f32 mantissa)"
+    reason = "world->voxel casts are clamped before truncation and voxel \
+              indices are bounded by grid dims (<< 2^2^4, fits f32 mantissa)"
 )]
 fn splat_sas_atom(solid: &mut [bool], spec: &GridSpec, pos: Vec3, r: f32) {
     let [nx, ny, nz] = spec.dims;
@@ -101,7 +100,7 @@ fn splat_sas_atom(solid: &mut [bool], spec: &GridSpec, pos: Vec3, r: f32) {
               counters use f32 boundaries by construction; `q as f32` and `vk \
               as f32` are bounded by grid dim (fits f32 mantissa)"
 )]
-pub fn edt_1d(f: &mut [f32], spacing: f32) {
+pub(crate) fn edt_1d(f: &mut [f32], spacing: f32) {
     let n = f.len();
     if n <= 1 {
         return;
@@ -161,7 +160,7 @@ pub fn edt_1d(f: &mut [f32], spacing: f32) {
     clippy::cast_precision_loss,
     reason = "(nx + ny + nz) bounded by grid memory, fits f32 mantissa"
 )]
-pub fn edt_3d(
+pub(crate) fn edt_3d(
     solid: &[bool],
     dims: [usize; 3],
     spacing: &[f32; 3],
@@ -223,12 +222,15 @@ pub fn edt_3d(
 /// a cavity mask.
 ///
 /// The returned mask is `true` at non-solid voxels that are NOT
-/// reachable from the exterior — i.e. internal cavities. The SES
+/// reachable from the exterior, i.e. internal cavities. The SES
 /// pipeline uses this to fill cavities back into the solid before
 /// extracting the outer envelope; the cavity pipeline uses it as the
 /// input to connected-component labeling + per-cavity mesh extraction.
 #[must_use]
-pub fn detect_cavity_mask(solid: &[bool], dims: [usize; 3]) -> Vec<bool> {
+pub(crate) fn detect_cavity_mask(
+    solid: &[bool],
+    dims: [usize; 3],
+) -> Vec<bool> {
     let [nx, ny, nz] = dims;
     let total = nx * ny * nz;
 
@@ -267,7 +269,7 @@ fn seed_face_voxels(
         }
     };
 
-    // ±Z faces
+    // +/-Z faces
     for ix in 0..nx {
         for iy in 0..ny {
             for &iz in &[0, nz - 1] {
@@ -275,7 +277,7 @@ fn seed_face_voxels(
             }
         }
     }
-    // ±Y faces (excluding the ±Z edges already seeded)
+    // +/-Y faces (excluding the +/-Z edges already seeded)
     for ix in 0..nx {
         for &iy in &[0, ny - 1] {
             for iz in 1..nz - 1 {
@@ -283,7 +285,7 @@ fn seed_face_voxels(
             }
         }
     }
-    // ±X faces (excluding the edges already seeded)
+    // +/-X faces (excluding the edges already seeded)
     for &ix in &[0, nx - 1] {
         for iy in 1..ny - 1 {
             for iz in 1..nz - 1 {

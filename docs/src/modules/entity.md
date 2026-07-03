@@ -25,8 +25,6 @@ Common methods available on all variants (delegated to the inner type):
 | `atom_count()` | `usize` | Number of atoms |
 | `positions()` | `Vec<Vec3>` | All atom positions |
 | `label()` | `String` | Human-readable label (e.g. "Protein A", "Ligand (ATP)") |
-| `aabb()` | `Option<Aabb>` | Axis-aligned bounding box |
-| `to_coords()` | `Coords` | Flatten to wire format |
 | `residue_count()` | `usize` | Residues (polymer) or molecules (bulk) |
 
 Variant-specific downcasting: `as_protein()`, `as_nucleic_acid()`, `as_small_molecule()`, `as_bulk()`.
@@ -45,15 +43,36 @@ Residue names are mapped to molecule types by `classify_residue()` using built-i
 
 ```rust,ignore
 pub struct Atom {
-    pub position: Vec3,    // 3D position in angstroms
-    pub occupancy: f32,    // 0.0 to 1.0
-    pub b_factor: f32,     // temperature factor
-    pub element: Element,  // chemical element
-    pub name: [u8; 4],     // PDB atom name (e.g. b"CA  ")
+    pub position: Vec3,      // 3D position in angstroms
+    pub occupancy: f32,      // 0.0 to 1.0
+    pub b_factor: f32,       // temperature factor
+    pub element: Element,    // chemical element
+    pub name: [u8; 4],       // PDB atom name (e.g. b"CA  ")
+    pub formal_charge: i8,   // signed formal charge; 0 = neutral
+    pub observed: bool,      // true if parsed, false if fabricated by completion
 }
 ```
 
+`observed` is provenance metadata only (never part of atom identity); it backs
+the Python `observed_mask` column. Atoms fabricated by completion carry
+`observed: false`.
+
 Residue name, residue number, and chain ID are stored on the entity/residue that owns the atom.
+
+## Residue
+
+```rust,ignore
+pub struct Residue {
+    pub name: [u8; 3],                  // structural-side residue name (e.g. b"ALA")
+    pub label_seq_id: i32,              // mmCIF label_seq_id / PDB resSeq
+    pub auth_seq_id: Option<i32>,       // mmCIF auth_seq_id; None falls back to label_seq_id
+    pub auth_comp_id: Option<[u8; 3]>,  // mmCIF auth_comp_id; None falls back to name
+    pub ins_code: Option<u8>,           // PDB iCode / mmCIF pdbx_PDB_ins_code; None = blank
+    pub atom_range: Range<usize>,       // index range into the parent entity's atoms
+}
+```
+
+Internal grouping uses the `label_*` fields; user-facing output uses the `auth_*` fields, falling back to the `label_*` values when the author-side identifiers are absent.
 
 ## ProteinEntity
 
@@ -62,24 +81,30 @@ A single protein chain. Implements both `Entity` and `Polymer` traits.
 ```rust,ignore
 pub struct ProteinEntity {
     pub id: EntityId,
-    pub atoms: Vec<Atom>,
+    pub atoms: Vec<Atom>,             // canonical order: N, CA, C, O, sidechain heavy..., H...
     pub residues: Vec<Residue>,       // name, number, atom_range
     pub segment_breaks: Vec<usize>,   // backbone gap indices
-    pub pdb_chain_id: u8,
+    pub bonds: Vec<CovalentBond>,     // intra-entity bonds (AtomId endpoints)
+    pub pdb_chain_id: u8,             // structural-side chain byte (label_asym_id)
+    pub auth_asym_id: Option<u8>,     // author-side chain byte; None = same as pdb_chain_id
 }
 ```
+
+Construction (`ProteinEntity::new`) reorders atoms into the canonical per-residue layout, drops residues missing any of N/CA/C/O (OXT counts as the C-terminal oxygen), computes segment breaks from C(i)->N(i+1) distance > 2.0 angstroms, and populates `bonds` from the `AminoAcid` chemistry tables plus universal backbone bonds (N-CA, CA-C, C=O) and inter-residue peptide bonds C(i)-N(i+1).
 
 Derived views (computed on each call, not cached):
 
 - `to_backbone() -> Vec<ResidueBackbone>` -- N, CA, C, O positions per residue
-- `to_protein_residues(is_hydrophobic, get_bonds) -> Vec<ProteinResidue>` -- full residue view with sidechain atoms and bond topology
 - `to_interleaved_segments() -> Vec<Vec<Vec3>>` -- N/CA/C positions per continuous segment (for spline rendering)
 
-Segment breaks are computed automatically from C(i)->N(i+1) distance > 2.0 angstroms.
+Bond filters:
+
+- `backbone_bonds()` -- iterator of bonds whose endpoints both fall inside the canonical backbone region of any residue (offsets 0..4)
+- `sidechain_bonds()` -- iterator of bonds with at least one heavy-atom sidechain endpoint
 
 ## NAEntity
 
-A single DNA or RNA chain. Same structure as `ProteinEntity` (atoms, residues, segment breaks, chain ID). Implements `Entity` and `Polymer`.
+A single DNA or RNA chain. Same overall shape as `ProteinEntity`: atoms, residues, segment breaks, intra-entity `bonds`, `pdb_chain_id`, and `auth_asym_id: Option<u8>`. The DNA-vs-RNA discriminator is carried in an extra `na_type: MoleculeType` field. Implements `Entity` and `Polymer`.
 
 ## SmallMoleculeEntity
 

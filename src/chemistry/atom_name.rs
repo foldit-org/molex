@@ -2,11 +2,11 @@
 
 /// Packed PDB-style atom name (4 bytes, NUL-padded on the right).
 ///
-/// PDB atom names are 1–4 ASCII characters (`"N"`, `"CA"`, `"OD1"`,
+/// PDB atom names are 1-4 ASCII characters (`"N"`, `"CA"`, `"OD1"`,
 /// `"HG21"`). Storing them as `[u8; 4]` enables integer-comparison
 /// matching in hot paths and keeps the type `Copy` + `Hash`-friendly.
 ///
-/// The packing convention is **NUL-padded on the right** — distinct
+/// The packing convention is **NUL-padded on the right**, distinct
 /// from the PDB column convention of space-padding. Use
 /// [`AtomName::from_bytes`] to construct from a slice; it strips
 /// trailing padding internally for you only if the slice itself
@@ -40,6 +40,21 @@ impl AtomName {
         let end = self.0.iter().position(|&b| b == 0).unwrap_or(4);
         core::str::from_utf8(&self.0[..end]).unwrap_or("")
     }
+
+    /// Whether this name denotes a protein backbone heavy atom
+    /// (`N`, `CA`, `C`, `O`, or terminal `OXT`). Returns `false` for
+    /// sidechain atoms and for non-protein atoms.
+    #[must_use]
+    pub fn is_protein_backbone(&self) -> bool {
+        is_protein_backbone_atom_name(self.as_str())
+    }
+}
+
+/// Whether a PDB atom-name string denotes a protein backbone heavy
+/// atom (`N`, `CA`, `C`, `O`, or terminal `OXT`).
+#[must_use]
+pub fn is_protein_backbone_atom_name(name: &str) -> bool {
+    matches!(name, "N" | "CA" | "C" | "O" | "OXT")
 }
 
 impl core::fmt::Display for AtomName {

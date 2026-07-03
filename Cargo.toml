@@ -1,40 +1,55 @@
+[workspace]
+
 [package]
 name = "molex"
-version = "0.2.2"
+version = "0.7.2"
 edition = "2021"
 authors = ["Andreas Petrides"]
 description = "Parse, analyze, and transform molecular structure data (PDB, mmCIF, BinaryCIF, MRC)"
 license = "MIT"
-repository = "https://github.com/petridecus/molconv"
+repository = "https://github.com/foldit-org/molex"
 readme = "README.md"
 keywords = ["protein", "molecular", "pdb", "mmcif", "structure"]
 categories = ["science", "parser-implementations", "data-structures"]
+# Regeneration provenance, not needed at runtime: the generated
+# src/chemistry/completion_data.rs is compiled-in const data.
+exclude = ["examples/gen_completion_table.rs", "data/ccd/"]
 
 [lib]
 name = "molex"
-crate-type = ["rlib"]
+crate-type = ["rlib", "staticlib"]
 
 [dependencies]
-pyo3 = { version = "0.27", features = ["extension-module"], optional = true }
-numpy = { version = "0.27", optional = true }
+pyo3 = { version = "0.28", optional = true }
+numpy = { version = "0.28", optional = true }
 ndarray = "0.15"
-pdbtbx = "0.12"
-thiserror = "1.0"
+thiserror = "2"
 glam = "0.30"
 rmp = "0.8"
 flate2 = "1"
-rustfft = { version = "6", optional = true }
+rustc-hash = "2"
+compact_str = "0.9"
+log = "0.4"
+serde = { version = "1", features = ["derive"], optional = true }
+specta = { version = "=2.0.0-rc.25", features = ["derive"], optional = true }
+
+[build-dependencies]
+cbindgen = { version = "0.29", optional = true }
 
 [features]
 default = []
 python = ["dep:pyo3", "dep:numpy"]
-xtal = ["dep:rustfft"]
+# Only for building the importable Python extension (via maturin). Enabling
+# this tells the linker NOT to link libpython, so it CANNOT be active during
+# `cargo test` (a standalone test binary would fail to resolve Py* symbols).
+extension-module = ["pyo3/extension-module"]
+serde = ["dep:serde"]
+specta = ["dep:specta"]
+c-api = ["dep:cbindgen"]
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
-
-[package.metadata.cargo-machete]
-ignored = ["numpy"]
+testing_logger = "0.1"
 
 [[bench]]
 name = "parsing"
@@ -46,6 +61,22 @@ harness = false
 
 [[bench]]
 name = "analysis"
+harness = false
+
+[[bench]]
+name = "assembly_clone"
+harness = false
+
+[[bench]]
+name = "writing"
+harness = false
+
+[[bench]]
+name = "alloc"
+harness = false
+
+[[bench]]
+name = "egress"
 harness = false
 
 [lints.clippy]

@@ -6,8 +6,14 @@
 
 pub mod amino_acids;
 pub mod atom_name;
+pub mod completion;
+mod completion_data;
 pub mod nucleotides;
+pub(crate) mod rotamer;
+pub mod variant;
 
 pub use amino_acids::AminoAcid;
-pub use atom_name::AtomName;
+pub use atom_name::{is_protein_backbone_atom_name, AtomName};
+pub use completion::{ResidueTemplate, TemplateAtom};
 pub use nucleotides::Nucleotide;
+pub use variant::{ProtonationState, VariantTag};

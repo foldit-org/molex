@@ -1,56 +1,20 @@
-//! AtomWorks adapter for RC-Foundry / ModelForge models.
+//! Molecule-type vocabulary maps and the columnar de-vocab layer shared by the
+//! Python interchange.
 //!
-//! Bidirectional conversion between molex's `Vec<MoleculeEntity>` and
-//! AtomWorks-annotated Biotite `AtomArray` objects.
+//! Holds the `MoleculeType` <-> AtomWorks `chain_type`/`mol_type` mappings and
+//! the [`columns`] de-vocab builders that turn a native [`AtomTable`] into the
+//! vocab-bearing per-atom columns [`PyAtomTable`] exposes to Python. No runtime
+//! dependency on AtomWorks or Biotite: the maps are static lookups consumed
+//! entirely in-process.
 //!
-//! This adapter:
-//!
-//! - Operates on **entities**, preserving molecule type, entity ID, and chain
-//!   grouping through the round-trip.
-//! - Populates **bonds** from distance inference.
-//! - Sets AtomWorks-specific per-atom annotations (`entity_id`, `mol_type`,
-//!   `pn_unit_iid`) so structures can feed directly into Foundry model
-//!   pipelines (RF3, RFdiffusion3, LigandMPNN) without re-parsing.
-//! - Can optionally invoke `atomworks.io.parser.parse()` on the Python side to
-//!   get the full cleaning pipeline (leaving group removal, charge correction,
-//!   missing atom imputation, etc.).
-//!
-//! # Usage from Python (via PyO3)
-//!
-//! ```python
-//! import molex
-//! from atomworks.io.parser import parse as aw_parse
-//!
-//! # ── molex → AtomWorks (for model inference) ──
-//! atom_array = molex.entities_to_atom_array(assembly_bytes)
-//! atom_array_plus = molex.entities_to_atom_array_plus(assembly_bytes)
-//!
-//! # ── AtomArray → molex (after model prediction) ──
-//! assembly_bytes = molex.atom_array_to_entities(atom_array)
-//!
-//! # ── Full AtomWorks cleaning pipeline ──
-//! atom_array = molex.entities_to_atom_array_parsed(assembly_bytes, "3nez.cif.gz")
-//! ```
+//! [`AtomTable`]: crate::adapters::table::AtomTable
+//! [`PyAtomTable`]: crate::python::PyAtomTable
 
-mod from_array;
-mod to_array;
-
-// Re-export all public items so they remain accessible at the same paths.
-pub use from_array::{
-    atom_array_to_coords, atom_array_to_entities, atom_array_to_entity_vec,
-    parse_file_full, parse_file_to_entities,
-};
-use pyo3::prelude::*;
-pub use to_array::{
-    coords_to_atom_array, coords_to_atom_array_plus, entities_to_atom_array,
-    entities_to_atom_array_parsed, entities_to_atom_array_plus,
-};
+pub mod columns;
 
 use crate::entity::molecule::MoleculeType;
 
-// ============================================================================
-// Molecule type ↔ AtomWorks chain type mapping
-// ============================================================================
+// Molecule type <-> AtomWorks chain type mapping
 
 /// AtomWorks `ChainType` enum values (from `atomworks.enums.ChainType`).
 ///
@@ -74,7 +38,7 @@ fn molecule_type_to_chain_type_id(mt: MoleculeType) -> u8 {
     }
 }
 
-fn chain_type_id_to_molecule_type(ct: u8) -> MoleculeType {
+pub(crate) fn chain_type_id_to_molecule_type(ct: u8) -> MoleculeType {
     match ct {
         3 | 4 => MoleculeType::DNA,     // DNA, DNA_RNA_HYBRID
         5 | 6 => MoleculeType::Protein, // POLYPEPTIDE_D, POLYPEPTIDE_L
@@ -100,7 +64,7 @@ fn molecule_type_to_mol_type_str(mt: MoleculeType) -> &'static str {
     }
 }
 
-fn mol_type_str_to_molecule_type(s: &str) -> MoleculeType {
+pub(crate) fn mol_type_str_to_molecule_type(s: &str) -> MoleculeType {
     match s.to_lowercase().as_str() {
         "protein" | "polypeptide_l" | "polypeptide_d" => MoleculeType::Protein,
         "dna" => MoleculeType::DNA,
@@ -112,22 +76,7 @@ fn mol_type_str_to_molecule_type(s: &str) -> MoleculeType {
     }
 }
 
-// ============================================================================
-// Helpers
-// ============================================================================
-
-/// Try to get an optional annotation array from an AtomArray.
-/// Returns `None` if the annotation doesn't exist.
-fn get_annotation_opt<'py>(
-    atom_array: &Bound<'py, PyAny>,
-    name: &str,
-) -> Option<Bound<'py, PyAny>> {
-    atom_array.call_method1("get_annotation", (name,)).ok()
-}
-
-// ============================================================================
 // Tests
-// ============================================================================
 
 #[cfg(test)]
 mod tests {

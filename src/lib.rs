@@ -82,6 +82,9 @@ fn molex(_py: Python, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(python::deserialize_assembly_bytes, m)?)?;
     // Biotite-agnostic columnar atom interchange.
     m.add_class::<python::PyAtomTable>()?;
+    // Resident crystallographic data (map/refine workflow).
+    #[cfg(feature = "xtal")]
+    m.add_class::<python::PyExperimentalData>()?;
     // Scalar analysis free functions.
     m.add_function(wrap_pyfunction!(python::rmsd, m)?)?;
 

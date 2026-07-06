@@ -41,6 +41,8 @@ mod entity;
 mod io;
 mod views;
 mod walk;
+#[cfg(all(feature = "python", feature = "xtal"))]
+mod xtal;
 
 pub use self::atom_table::PyAtomTable;
 pub use self::entity::{PyEntity, PyResidue};
@@ -52,6 +54,8 @@ pub use self::views::{
     PyMutateResidueView, PySetEntityCoordsView, PySetResidueCoordsView,
     PySetVariantsView,
 };
+#[cfg(all(feature = "python", feature = "xtal"))]
+pub use self::xtal::PyExperimentalData;
 
 fn value_err<E: std::fmt::Display>(e: E) -> PyErr {
     PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())

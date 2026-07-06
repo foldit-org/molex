@@ -411,6 +411,16 @@ impl PyAtomTable {
     }
 }
 
+#[cfg(feature = "xtal")]
+impl PyAtomTable {
+    /// Borrow the underlying native table, so an in-crate consumer can read the
+    /// `Element`/position/B-factor columns directly instead of round-tripping
+    /// through the Python-facing symbol-string getters.
+    pub(crate) fn table(&self) -> &AtomTable {
+        &self.table
+    }
+}
+
 /// Build a numpy str array from owned `String`s via `numpy.array`.
 fn str_array(py: Python<'_>, values: Vec<String>) -> PyResult<Py<PyAny>> {
     Ok(py

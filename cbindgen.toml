@@ -20,6 +20,7 @@ include = [
     "molex_Residue",
     "molex_Atom",
     "molex_MoleculeType",
+    "molex_ExperimentalData",
 ]
 exclude = [
     "DEFAULT_TOLERANCE",

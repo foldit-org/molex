@@ -1,4 +1,5 @@
-// foldit:allow-long-file: cohesive xtal primitives — unit cell, symmetry ops, space-group tables, grid helpers.
+// foldit:allow-long-file: cohesive xtal primitives — unit cell, symmetry ops,
+// space-group tables, grid helpers.
 //! Core crystallographic types: unit cell, symmetry operations, space groups.
 
 use std::f64::consts::PI;

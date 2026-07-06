@@ -22,6 +22,7 @@
 // `mul_add` rewrite, whose fused rounding would perturb R-factor outputs.
 #![allow(clippy::suboptimal_flops)]
 
+mod atom_workflow;
 mod bessel;
 #[cfg(feature = "minimization")]
 mod bfactor_refine;
@@ -41,6 +42,9 @@ mod types;
 
 // ── Public re-exports ───────────────────────────────────────────────
 
+pub use atom_workflow::density_from_atom_table;
+#[cfg(feature = "minimization")]
+pub use atom_workflow::refine_b_from_atom_table;
 pub use bessel::log_bessel_i0;
 pub use density::{
     compute_blur, cutoff_radius, kernel_eval, splat_density, SplatParams,

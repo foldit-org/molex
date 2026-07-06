@@ -19,44 +19,7 @@ use pyo3::prelude::*;
 
 use super::atom_table::PyAtomTable;
 use super::value_err;
-use crate::adapters::table::AtomTable;
-use crate::element::Element;
-use crate::xtal::{ExperimentalData, XtalRefinement};
-
-/// Non-hydrogen atom columns lifted out of a [`PyAtomTable`], parallel arrays
-/// plus the map back to full-table atom indices for scatter-out.
-struct NonHydrogenAtoms {
-    positions: Vec<[f32; 3]>,
-    elements: Vec<Element>,
-    b_factors: Vec<f32>,
-    occupancies: Vec<f32>,
-    /// Full-table atom index of each retained atom, parallel to the columns.
-    full_indices: Vec<usize>,
-}
-
-/// Gather the non-hydrogen atoms of `table` into parallel Cartesian-`f32`
-/// columns, recording each retained atom's full-table index.
-fn non_hydrogen_atoms(table: &AtomTable) -> NonHydrogenAtoms {
-    let mut out = NonHydrogenAtoms {
-        positions: Vec::new(),
-        elements: Vec::new(),
-        b_factors: Vec::new(),
-        occupancies: Vec::new(),
-        full_indices: Vec::new(),
-    };
-    for i in 0..table.len() {
-        if table.element[i] == Element::H {
-            continue;
-        }
-        let p = table.position[i];
-        out.positions.push([p.x, p.y, p.z]);
-        out.elements.push(table.element[i]);
-        out.b_factors.push(table.b_factor[i]);
-        out.occupancies.push(table.occupancy[i]);
-        out.full_indices.push(i);
-    }
-    out
-}
+use crate::xtal::ExperimentalData;
 
 /// Resident experimental crystallographic data: parse an sf.cif once, then run
 /// the map/refine workflow against a `PyAtomTable`.
@@ -168,29 +131,14 @@ impl PyExperimentalData {
         py: Python<'_>,
         atoms: &PyAtomTable,
     ) -> PyResult<Py<PyAny>> {
-        let subset = non_hydrogen_atoms(atoms.table());
-        let inputs = self.inner.refinement_inputs(
-            &subset.positions,
-            &subset.elements,
-            &subset.b_factors,
-            &subset.occupancies,
-        );
-
-        let mut refinement =
-            XtalRefinement::from_experimental_data(&self.inner);
-        let grid = refinement
-            .compute_map(
-                &inputs.positions,
-                &inputs.elements,
-                &inputs.b_factors,
-                &inputs.occupancies,
-            )
-            .ok_or_else(|| {
-                value_err(
-                    "density computation failed (unsupported space group or \
-                     empty data)",
-                )
-            })?;
+        let grid =
+            crate::xtal::density_from_atom_table(&self.inner, atoms.table())
+                .ok_or_else(|| {
+                    value_err(
+                        "density computation failed (unsupported space group \
+                         or empty data)",
+                    )
+                })?;
 
         let arr = grid
             .data
@@ -220,41 +168,12 @@ impl PyExperimentalData {
         atoms: &PyAtomTable,
         n_macro_cycles: usize,
     ) -> PyResult<(Py<PyAny>, f64, f64)> {
-        let table = atoms.table();
-        let subset = non_hydrogen_atoms(table);
-        let inputs = self.inner.refinement_inputs(
-            &subset.positions,
-            &subset.elements,
-            &subset.b_factors,
-            &subset.occupancies,
-        );
-
-        let mut refinement =
-            XtalRefinement::from_experimental_data(&self.inner);
-        let mut refined_b = inputs.b_factors;
-        let (r_work, r_free) = refinement
-            .refine(
-                &inputs.positions,
-                &inputs.elements,
-                &mut refined_b,
-                &inputs.occupancies,
-                n_macro_cycles,
-            )
-            .ok_or_else(|| value_err("B-factor refinement failed"))?;
-
-        // Scatter the refined non-H B-factors back over the full atom table;
-        // hydrogens retain their input value.
-        let mut full_b = table.b_factor.clone();
-        for (&idx, &b) in subset.full_indices.iter().zip(refined_b.iter()) {
-            #[allow(
-                clippy::cast_possible_truncation,
-                reason = "B-factors are small positive magnitudes; f64 -> f32 \
-                          write-back mirrors the ingest column dtype"
-            )]
-            {
-                full_b[idx] = b as f32;
-            }
-        }
+        let (full_b, r_work, r_free) = crate::xtal::refine_b_from_atom_table(
+            &self.inner,
+            atoms.table(),
+            n_macro_cycles,
+        )
+        .ok_or_else(|| value_err("B-factor refinement failed"))?;
 
         let arr = full_b.into_pyarray(py).into_any().unbind();
         Ok((arr, r_work, r_free))

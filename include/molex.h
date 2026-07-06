@@ -348,6 +348,12 @@ typedef struct molex_EditList molex_EditList;
 typedef struct molex_Entity molex_Entity;
 
 /**
+ * Owned handle to resident experimental crystallographic data. Free with
+ * [`molex_experimental_data_free`].
+ */
+typedef struct molex_ExperimentalData molex_ExperimentalData;
+
+/**
  * Non-owning view of a single polymer residue within an entity.
  */
 typedef struct molex_Residue molex_Residue;
@@ -1147,6 +1153,139 @@ float molex_atom_b_factor(molex_Atom atom)
  */
 
 int8_t molex_atom_formal_charge(molex_Atom atom)
+;
+
+/**
+ * Free a float buffer previously returned via `out_data` / `out_b`.
+ *
+ * Safe to call with a null pointer (no-op). `len` must match the element
+ * count the producing call reported (grid `nu*nv*nw` for density, atom count
+ * for refined B-factors).
+ */
+
+void molex_free_floats(float *ptr,
+                       uintptr_t len)
+;
+
+/**
+ * Parse an sf.cif string into resident experimental data, resolving the space
+ * group from the file's own symmetry tag.
+ *
+ * Returns null on failure (missing symmetry/cell/reflections or unsupported
+ * space group) with the message available via `molex_last_error_message`. The
+ * caller owns the returned handle and must free it with
+ * [`molex_experimental_data_free`].
+ */
+
+molex_ExperimentalData *molex_experimental_data_from_sf_cif(const char *sf_ptr,
+                                                            uintptr_t len,
+                                                            double free_fraction,
+                                                            uint64_t seed)
+;
+
+/**
+ * Parse an sf.cif string with an externally supplied International Tables
+ * space-group number, for the common case where the sf.cif omits symmetry.
+ *
+ * Returns null on failure (missing cell/reflections or unsupported space
+ * group) with the message available via `molex_last_error_message`. The caller
+ * owns the returned handle and must free it with
+ * [`molex_experimental_data_free`].
+ */
+
+molex_ExperimentalData *molex_experimental_data_from_sf_cif_with_spacegroup(const char *sf_ptr,
+                                                                            uintptr_t len,
+                                                                            uint16_t sg_number,
+                                                                            double free_fraction,
+                                                                            uint64_t seed)
+;
+
+/**
+ * Free a resident experimental-data handle.
+ *
+ * Safe to call with a null pointer (no-op).
+ */
+
+void molex_experimental_data_free(molex_ExperimentalData *data)
+;
+
+/**
+ * Minimum Bragg spacing (Å) over the reflection set. Returns 0 for a null
+ * handle.
+ */
+
+double molex_experimental_data_d_min(const molex_ExperimentalData *data)
+;
+
+/**
+ * The space-group International Tables number. Returns 0 for a null handle.
+ */
+
+int32_t molex_experimental_data_space_group_number(const molex_ExperimentalData *data)
+;
+
+/**
+ * Number of reflections in the resident set. Returns 0 for a null handle.
+ */
+
+uintptr_t molex_experimental_data_num_reflections(const molex_ExperimentalData *data)
+;
+
+/**
+ * Write the density-map grid dimensions `(nu, nv, nw)` into the 3-element
+ * output array. No-op if `out_dims` is null or the handle is invalid.
+ */
+
+void molex_experimental_data_grid_dims(const molex_ExperimentalData *data,
+                                       uintptr_t *out_dims)
+;
+
+/**
+ * Compute the 2mFo-DFc electron density map from the assembly's atoms and the
+ * resident data.
+ *
+ * On success returns [`MOLEX_OK`], writes the grid dimensions `(nu, nv, nw)`
+ * into `out_dims`, and writes the heap-allocated row-major `(u, v, w)` float32
+ * grid pointer into `out_data`; the caller frees it with
+ * [`molex_free_floats`] passing `nu*nv*nw` as the length. Hydrogens are
+ * excluded from the splat.
+ *
+ * Returns [`MOLEX_ERR_NULL`] on a null handle or output pointer, or
+ * [`MOLEX_ERR`] if density computation fails (unsupported space group or empty
+ * data); the message is available via `molex_last_error_message`.
+ */
+
+int32_t molex_experimental_data_compute_density(const molex_ExperimentalData *data,
+                                                const molex_Assembly *assembly,
+                                                float **out_data,
+                                                uintptr_t *out_dims)
+;
+
+/**
+ * Refine per-atom isotropic B-factors against the resident data.
+ *
+ * On success returns [`MOLEX_OK`], writes the full-length refined B-factor
+ * buffer pointer + count into `out_b` / `out_n`, and writes the R-factors into
+ * `out_r_work` / `out_r_free`. The buffer is aligned 1:1 to the
+ * `AtomTable::from_entities` flat atom order and is freed with
+ * [`molex_free_floats`] passing `out_n` as the length.
+ *
+ * Hydrogens are excluded from the refinement; hydrogen atoms keep their input
+ * B-factor in the returned array while non-hydrogen atoms carry the refined
+ * value.
+ *
+ * Returns [`MOLEX_ERR_NULL`] on a null handle or output pointer, or
+ * [`MOLEX_ERR`] if the refinement pipeline fails; the message is available via
+ * `molex_last_error_message`.
+ */
+
+int32_t molex_experimental_data_refine_b_factors(const molex_ExperimentalData *data,
+                                                 const molex_Assembly *assembly,
+                                                 uintptr_t n_macro_cycles,
+                                                 float **out_b,
+                                                 uintptr_t *out_n,
+                                                 double *out_r_work,
+                                                 double *out_r_free)
 ;
 
 #ifdef __cplusplus

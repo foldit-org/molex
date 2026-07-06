@@ -56,6 +56,8 @@
 
 pub mod edit;
 pub mod walk;
+#[cfg(all(feature = "c-api", feature = "xtal"))]
+pub mod xtal;
 
 use std::cell::RefCell;
 use std::ffi::c_char;

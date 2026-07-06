@@ -214,6 +214,75 @@ pub fn mrc_to_density(bytes: &[u8]) -> Result<Density, DensityError> {
     })
 }
 
+/// Serialize a [`Density`] to MRC/CCP4 bytes (MODE 2, little-endian).
+///
+/// The inverse of [`mrc_to_density`]: writes a 1024-byte header in canonical
+/// axis order (MAPC/MAPR/MAPS = 1/2/3) followed by the f32 grid in X-fastest
+/// layout, so feeding the result back through [`mrc_to_density`] reconstructs
+/// an identical [`Density`]. The layout also satisfies Rosetta's
+/// `readMRCandResize`.
+#[must_use]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    reason = "grid dims and space group fit the header's i32 fields"
+)]
+pub fn density_to_mrc_bytes(density: &Density) -> Vec<u8> {
+    let g = &density.grid;
+    let mut buf = vec![0u8; HEADER_SIZE];
+
+    let put_i32 = |buf: &mut [u8], off: usize, v: i32| {
+        buf[off..off + 4].copy_from_slice(&v.to_le_bytes());
+    };
+    let put_f32 = |buf: &mut [u8], off: usize, v: f32| {
+        buf[off..off + 4].copy_from_slice(&v.to_le_bytes());
+    };
+
+    put_i32(&mut buf, 0, g.nx as i32);
+    put_i32(&mut buf, 4, g.ny as i32);
+    put_i32(&mut buf, 8, g.nz as i32);
+    put_i32(&mut buf, 12, 2); // MODE = 2 (f32)
+    put_i32(&mut buf, 16, g.nxstart);
+    put_i32(&mut buf, 20, g.nystart);
+    put_i32(&mut buf, 24, g.nzstart);
+    put_i32(&mut buf, 28, g.mx as i32);
+    put_i32(&mut buf, 32, g.my as i32);
+    put_i32(&mut buf, 36, g.mz as i32);
+    put_f32(&mut buf, 40, g.cell_dims[0]);
+    put_f32(&mut buf, 44, g.cell_dims[1]);
+    put_f32(&mut buf, 48, g.cell_dims[2]);
+    put_f32(&mut buf, 52, g.cell_angles[0]);
+    put_f32(&mut buf, 56, g.cell_angles[1]);
+    put_f32(&mut buf, 60, g.cell_angles[2]);
+    put_i32(&mut buf, 64, 1); // MAPC = X
+    put_i32(&mut buf, 68, 2); // MAPR = Y
+    put_i32(&mut buf, 72, 3); // MAPS = Z
+    put_f32(&mut buf, 76, density.dmin);
+    put_f32(&mut buf, 80, density.dmax);
+    put_f32(&mut buf, 84, density.dmean);
+    put_i32(&mut buf, 88, density.space_group as i32);
+    put_i32(&mut buf, 92, 0); // NSYMBT
+    put_f32(&mut buf, 196, g.origin[0]);
+    put_f32(&mut buf, 200, g.origin[1]);
+    put_f32(&mut buf, 204, g.origin[2]);
+    buf[208..212].copy_from_slice(MAP_MAGIC);
+    buf[212..216].copy_from_slice(&[0x44, 0x41, 0x00, 0x00]);
+    put_f32(&mut buf, 216, density.rms);
+
+    // Data block: X fastest, then Y, then Z. This is the inverse of
+    // `reorder_axes` for the identity axis map (flat index = z*ny*nx + y*nx +
+    // x).
+    buf.reserve(g.nx * g.ny * g.nz * 4);
+    for z in 0..g.nz {
+        for y in 0..g.ny {
+            for x in 0..g.nx {
+                buf.extend_from_slice(&g.data[[x, y, z]].to_le_bytes());
+            }
+        }
+    }
+    buf
+}
+
 /// Reorder flat file data into an `[X, Y, Z]` `Array3`.
 #[allow(clippy::cast_sign_loss, reason = "axis values 1-3, validated")]
 fn reorder_axes(

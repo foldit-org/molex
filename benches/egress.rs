@@ -10,7 +10,9 @@
     unused_results,
     clippy::unwrap_used,
     clippy::cast_possible_truncation,
-    clippy::cast_precision_loss
+    clippy::cast_precision_loss,
+    // The no-python `main` just tells the user the bench needs a feature flag.
+    clippy::print_stderr
 )]
 
 #[cfg(feature = "python")]

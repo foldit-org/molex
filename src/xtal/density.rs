@@ -10,17 +10,30 @@ use super::types::{DensityGrid, GroupOps, UnitCell, DEN};
 
 // ── Gaussian precalculation ──────────────────────────────────────────
 
-/// Precalculated Gaussian terms for one atom (5 terms: 4 from IT92 + constant).
+/// Number of radial samples in the per-atom density lookup table. The isotropic
+/// kernel is a function of `r_sq` only and fixed per atom, so it is tabulated
+/// once and then read (with linear interpolation) at every covered voxel.
+const LUT_BINS: usize = 1024;
+
+/// Precalculated radial density lookup table for one atom.
+///
+/// The five-Gaussian kernel (4 IT92 terms + constant) is evaluated once into a
+/// table indexed by squared distance over `[0, r_cut_sq]`; each voxel then
+/// costs a table lookup plus linear interpolation instead of five `exp` calls.
 struct GaussianPrecalc {
-    /// Precalculated amplitudes (4 IT92 terms + 1 constant term).
-    a: [f64; 5],
-    /// Precalculated exponents (4 IT92 terms + 1 constant term).
-    b: [f64; 5],
+    /// Tabulated kernel value at `r_sq_k = k / inv_bin`, before occupancy.
+    lut: [f64; LUT_BINS],
+    /// Bins per unit `r_sq`: `(LUT_BINS - 1) / r_cut_sq`.
+    inv_bin: f64,
+    /// Squared cutoff radius; the table spans `[0, r_cut_sq]`.
+    r_cut_sq: f64,
 }
 
 impl GaussianPrecalc {
-    /// Build from a form factor, the atom's isotropic B-factor, and the blur.
-    fn new(ff: &FormFactor, b_atom: f64, blur: f64) -> Self {
+    /// Build from a form factor, the atom's isotropic B-factor, the blur, and
+    /// the squared cutoff radius (the span the table covers).
+    #[allow(clippy::cast_precision_loss)]
+    fn new(ff: &FormFactor, b_atom: f64, blur: f64, cutoff_sq: f64) -> Self {
         let four_pi = 4.0 * PI;
         let mut a = [0.0_f64; 5];
         let mut b = [0.0_f64; 5];
@@ -36,17 +49,42 @@ impl GaussianPrecalc {
         a[4] = ff.c * t_c.powf(1.5);
         b[4] = -t_c * PI;
 
-        Self { a, b }
+        // Tabulate the kernel over [0, cutoff_sq] once per atom; this is the
+        // only place `exp` runs.
+        let step = cutoff_sq / (LUT_BINS - 1) as f64;
+        let mut lut = [0.0_f64; LUT_BINS];
+        for (k, slot) in lut.iter_mut().enumerate() {
+            let r_sq_k = k as f64 * step;
+            let mut sum = 0.0;
+            for i in 0..5 {
+                sum = a[i].mul_add((b[i] * r_sq_k).exp(), sum);
+            }
+            *slot = sum;
+        }
+
+        Self {
+            lut,
+            inv_bin: (LUT_BINS - 1) as f64 / cutoff_sq,
+            r_cut_sq: cutoff_sq,
+        }
     }
 
     /// Evaluate the Gaussian density at squared distance `r_sq`, scaled by
-    /// occupancy.
+    /// occupancy, via table lookup with linear interpolation.
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss
+    )]
     fn density_at(&self, r_sq: f64, occupancy: f64) -> f64 {
-        let mut sum = 0.0;
-        for i in 0..5 {
-            sum = self.a[i].mul_add((self.b[i] * r_sq).exp(), sum);
+        if r_sq >= self.r_cut_sq {
+            return 0.0;
         }
-        occupancy * sum
+        let f = r_sq * self.inv_bin;
+        let k = (f as usize).min(LUT_BINS - 2);
+        let frac = f - k as f64;
+        let v = self.lut[k] + frac * (self.lut[k + 1] - self.lut[k]);
+        occupancy * v
     }
 }
 
@@ -70,7 +108,6 @@ pub fn compute_blur(d_min: f64, rate: f64, b_min: f64) -> f64 {
 /// The formula balances accuracy against speed by keeping ~99.9% of the
 /// Gaussian integral within the cutoff sphere.
 #[must_use]
-#[allow(clippy::suboptimal_flops)]
 pub fn cutoff_radius(b_eff: f64) -> f64 {
     (0.075f64.mul_add(b_eff, 8.5)) / (0.0045f64.mul_add(b_eff, 2.4))
 }
@@ -93,16 +130,30 @@ pub struct SplatParams<'a> {
     pub blur: f64,
 }
 
-/// Splat atomic electron density onto a 3D grid.
+/// Walk every grid voxel covered by one atom copy centered at fractional
+/// position `frac_pos`, invoking `visit(idx, kernel_value)` for each.
 ///
-/// Each atom is represented as a sum of five Gaussians (four IT92 terms plus
-/// the constant). For every atom the contribution is added to all grid points
-/// within a per-atom cutoff radius, using periodic boundary conditions.
-#[allow(clippy::cast_precision_loss, clippy::excessive_nesting)]
-pub fn splat_density(grid: &mut DensityGrid, params: &SplatParams<'_>) {
-    let nu = grid.nu;
-    let nv = grid.nv;
-    let nw = grid.nw;
+/// This is the single box/cutoff/wrap traversal shared by the density splat
+/// (which writes the kernel into a grid) and the gradient gather (which reads a
+/// map at each covered voxel). `kernel_value` already carries the atom's
+/// occupancy and Debye-Waller factor via [`GaussianPrecalc`].
+#[allow(
+    clippy::too_many_arguments,
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation
+)]
+fn for_each_covered_voxel(
+    frac_pos: [f64; 3],
+    ff: &FormFactor,
+    b_atom: f64,
+    occupancy: f64,
+    unit_cell: &UnitCell,
+    nu: usize,
+    nv: usize,
+    nw: usize,
+    blur: f64,
+    mut visit: impl FnMut(usize, f64),
+) {
     let dims = [nu as f64, nv as f64, nw as f64];
 
     // Precompute orth_n: the matrix that converts grid-index deltas to
@@ -110,9 +161,71 @@ pub fn splat_density(grid: &mut DensityGrid, params: &SplatParams<'_>) {
     let mut orth_n = [[0.0_f64; 3]; 3];
     for (i, orth_row) in orth_n.iter_mut().enumerate() {
         for j in 0..3 {
-            orth_row[j] = params.unit_cell.orth[i][j] / dims[j];
+            orth_row[j] = unit_cell.orth[i][j] / dims[j];
         }
     }
+
+    let cutoff = cutoff_radius(b_atom + blur);
+    let cutoff_sq = cutoff * cutoff;
+    let precalc = GaussianPrecalc::new(ff, b_atom, blur, cutoff_sq);
+
+    // Nearest grid point (fractional -> grid index, rounded).
+    let u0f = frac_pos[0] * dims[0];
+    let v0f = frac_pos[1] * dims[1];
+    let w0f = frac_pos[2] * dims[2];
+
+    let u0 = u0f.round() as i64;
+    let v0 = v0f.round() as i64;
+    let w0 = w0f.round() as i64;
+
+    // Fractional offsets of the atom from the nearest grid point (in grid
+    // units) -- needed for sub-grid-point accuracy.
+    let frac_offset = [u0f - u0 as f64, v0f - v0 as f64, w0f - w0 as f64];
+
+    // Bounding box in grid units.
+    let max_radius_u = estimate_grid_radius(&orth_n, cutoff, 0);
+    let max_radius_v = estimate_grid_radius(&orth_n, cutoff, 1);
+    let max_radius_w = estimate_grid_radius(&orth_n, cutoff, 2);
+
+    for du in -max_radius_u..=max_radius_u {
+        for dv in -max_radius_v..=max_radius_v {
+            for dw in -max_radius_w..=max_radius_w {
+                // Exact delta in grid units, accounting for sub-grid offset.
+                let delta = [
+                    f64::from(du) - frac_offset[0],
+                    f64::from(dv) - frac_offset[1],
+                    f64::from(dw) - frac_offset[2],
+                ];
+
+                // Cartesian distance via orth_n.
+                let r_sq = cart_dist_sq(&orth_n, &delta);
+
+                if r_sq > cutoff_sq {
+                    continue;
+                }
+
+                let val = precalc.density_at(r_sq, occupancy);
+
+                let iu = wrap(u0 + i64::from(du), nu);
+                let iv = wrap(v0 + i64::from(dv), nv);
+                let iw = wrap(w0 + i64::from(dw), nw);
+
+                let idx = (iu * nv + iv) * nw + iw;
+                visit(idx, val);
+            }
+        }
+    }
+}
+
+/// Splat atomic electron density onto a 3D grid.
+///
+/// Each atom is represented as a sum of five Gaussians (four IT92 terms plus
+/// the constant). For every atom the contribution is added to all grid points
+/// within a per-atom cutoff radius, using periodic boundary conditions.
+pub fn splat_density(grid: &mut DensityGrid, params: &SplatParams<'_>) {
+    let nu = grid.nu;
+    let nv = grid.nv;
+    let nw = grid.nw;
 
     let n_atoms = params.positions.len();
     for atom in 0..n_atoms {
@@ -121,66 +234,65 @@ pub fn splat_density(grid: &mut DensityGrid, params: &SplatParams<'_>) {
         let occ = params.occupancies[atom];
         let frac_pos = params.positions[atom];
 
-        let precalc = GaussianPrecalc::new(ff, b_atom, params.blur);
-        let cutoff = cutoff_radius(b_atom + params.blur);
-        let cutoff_sq = cutoff * cutoff;
-
-        // Nearest grid point (fractional -> grid index, rounded).
-        let u0f = frac_pos[0] * dims[0];
-        let v0f = frac_pos[1] * dims[1];
-        let w0f = frac_pos[2] * dims[2];
-
-        #[allow(clippy::cast_possible_truncation)]
-        let u0 = u0f.round() as i64;
-        #[allow(clippy::cast_possible_truncation)]
-        let v0 = v0f.round() as i64;
-        #[allow(clippy::cast_possible_truncation)]
-        let w0 = w0f.round() as i64;
-
-        // Fractional offsets of the atom from the nearest grid point (in grid
-        // units) -- needed for sub-grid-point accuracy.
-        #[allow(clippy::cast_precision_loss)]
-        let frac_offset = [u0f - u0 as f64, v0f - v0 as f64, w0f - w0 as f64];
-
-        // Bounding box in grid units.
-        let max_radius_u = estimate_grid_radius(&orth_n, cutoff, 0);
-        let max_radius_v = estimate_grid_radius(&orth_n, cutoff, 1);
-        let max_radius_w = estimate_grid_radius(&orth_n, cutoff, 2);
-
-        for du in -max_radius_u..=max_radius_u {
-            for dv in -max_radius_v..=max_radius_v {
-                for dw in -max_radius_w..=max_radius_w {
-                    // Exact delta in grid units, accounting for sub-grid
-                    // offset.
-                    let delta = [
-                        f64::from(du) - frac_offset[0],
-                        f64::from(dv) - frac_offset[1],
-                        f64::from(dw) - frac_offset[2],
-                    ];
-
-                    // Cartesian distance via orth_n.
-                    let r_sq = cart_dist_sq(&orth_n, &delta);
-
-                    if r_sq > cutoff_sq {
-                        continue;
-                    }
-
-                    let val = precalc.density_at(r_sq, occ);
-
-                    // Periodic wrapping.
-                    let iu = wrap(u0 + i64::from(du), nu);
-                    let iv = wrap(v0 + i64::from(dv), nv);
-                    let iw = wrap(w0 + i64::from(dw), nw);
-
-                    let idx = (iu * nv + iv) * nw + iw;
-                    #[allow(clippy::cast_possible_truncation)]
-                    {
-                        grid.data[idx] += val as f32;
-                    }
+        for_each_covered_voxel(
+            frac_pos,
+            ff,
+            b_atom,
+            occ,
+            params.unit_cell,
+            nu,
+            nv,
+            nw,
+            params.blur,
+            |idx, val| {
+                #[allow(clippy::cast_possible_truncation)]
+                {
+                    grid.data[idx] += val as f32;
                 }
-            }
-        }
+            },
+        );
     }
+}
+
+/// Accumulate the real-space gradient gather for one atom copy centered at
+/// fractional position `frac_pos`.
+///
+/// Mirrors one atom's box/cutoff/wrap iteration in [`splat_density`], but
+/// instead of writing the Gaussian kernel into a grid it reads `g_map` at each
+/// covered voxel and accumulates `g_map[voxel] * kernel(voxel) * occupancy`.
+/// The kernel carries the atom's Debye-Waller factor (`b_atom + blur`) and
+/// element form factor via [`GaussianPrecalc`], so a per-reflection
+/// `exp(+blur * s²/4)` deblur factor on the map coefficients nets against the
+/// blur baked in here to leave `exp(-b_atom * s²/4)`.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn gather_gradient(
+    g_map: &[f32],
+    frac_pos: [f64; 3],
+    ff: &FormFactor,
+    b_atom: f64,
+    occupancy: f64,
+    unit_cell: &UnitCell,
+    nu: usize,
+    nv: usize,
+    nw: usize,
+    blur: f64,
+) -> f64 {
+    let mut sum = 0.0_f64;
+    for_each_covered_voxel(
+        frac_pos,
+        ff,
+        b_atom,
+        occupancy,
+        unit_cell,
+        nu,
+        nv,
+        nw,
+        blur,
+        |idx, val| {
+            sum += f64::from(g_map[idx]) * val;
+        },
+    );
+    sum
 }
 
 /// Compute the squared Cartesian distance for a grid-delta vector `d` via the
@@ -288,7 +400,6 @@ pub fn symmetrize_sum(grid: &mut DensityGrid, group: &GroupOps) {
                             sym_frac[2] + f64::from(cen[2]) / den_f,
                         ];
 
-                        // Map back to grid indices.
                         let gu = frac_to_grid(cf[0], nu);
                         let gv = frac_to_grid(cf[1], nv);
                         let gw = frac_to_grid(cf[2], nw);
@@ -327,11 +438,10 @@ fn frac_to_grid(f: f64, n: usize) -> usize {
 /// the complex Fc by `exp(blur * d*^2 / 4)`.
 ///
 /// `fc` is a flat array of `[re, im]` pairs in row-major `(u, v, w)` order
-/// with w being the half-complex axis (length `nw/2 + 1`).
+/// over the full complex spectrum (length `nu * nv * nw`).
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
-    clippy::cast_precision_loss,
     clippy::too_many_arguments
 )]
 pub fn deblur_fc(
@@ -342,8 +452,6 @@ pub fn deblur_fc(
     nw: usize,
     blur: f64,
 ) {
-    let nw_half = nw / 2 + 1;
-
     for u in 0..nu {
         let h = if u <= nu / 2 {
             u as i32
@@ -358,8 +466,12 @@ pub fn deblur_fc(
                 v as i32 - nv as i32
             };
 
-            for w in 0..nw_half {
-                let l = w as i32;
+            for w in 0..nw {
+                let l = if w <= nw / 2 {
+                    w as i32
+                } else {
+                    w as i32 - nw as i32
+                };
 
                 let d_star_sq = unit_cell.d_star_sq(h, k, l);
                 // Clamp exponent to avoid f32 overflow (f32::MAX ≈ 3.4e38,
@@ -369,7 +481,7 @@ pub fn deblur_fc(
                 let exponent = (blur * d_star_sq / 4.0).min(80.0);
                 let scale = exponent.exp() as f32;
 
-                let idx = (u * nv + v) * nw_half + w;
+                let idx = (u * nv + v) * nw + w;
                 fc[idx][0] *= scale;
                 fc[idx][1] *= scale;
             }
@@ -381,6 +493,8 @@ pub fn deblur_fc(
 
 #[cfg(test)]
 mod tests {
+    use std::f64::consts::PI;
+
     use super::*;
     use crate::xtal::form_factors::FormFactor;
     use crate::xtal::types::UnitCell;
@@ -392,6 +506,48 @@ mod tests {
             b: [20.8439, 10.2075, 0.5687, 51.6512],
             c: 0.2156,
         }
+    }
+
+    /// The precomputed density LUT reproduces a direct 5-Gaussian `exp`
+    /// evaluation to within a small relative error across the tabulated range.
+    #[test]
+    fn lut_density_matches_exact_exp() {
+        let ff = carbon_ff();
+        let b_atom = 20.0;
+        let blur = 5.0;
+        let cutoff = cutoff_radius(b_atom + blur);
+        let cutoff_sq = cutoff * cutoff;
+        let precalc = GaussianPrecalc::new(&ff, b_atom, blur, cutoff_sq);
+
+        // Direct reference: the same 5-Gaussian kernel evaluated with `exp`,
+        // recomputing the coefficients GaussianPrecalc::new tabulates.
+        let four_pi = 4.0 * PI;
+        let mut amp = [0.0_f64; 5];
+        let mut rate = [0.0_f64; 5];
+        for i in 0..4 {
+            let t = four_pi / (ff.b[i] + b_atom + blur);
+            amp[i] = ff.a[i] * t.powf(1.5);
+            rate[i] = -t * PI;
+        }
+        let t_c = four_pi / (b_atom + blur);
+        amp[4] = ff.c * t_c.powf(1.5);
+        rate[4] = -t_c * PI;
+        let exact = |r_sq: f64| -> f64 {
+            (0..5).map(|i| amp[i] * (rate[i] * r_sq).exp()).sum()
+        };
+
+        let mut max_rel = 0.0_f64;
+        for n in 0..=256 {
+            let r_sq = cutoff_sq * (f64::from(n) / 256.0) * 0.999;
+            let approx = precalc.density_at(r_sq, 1.0);
+            let ex = exact(r_sq);
+            let rel = (approx - ex).abs() / ex.abs().max(1e-30);
+            max_rel = max_rel.max(rel);
+        }
+        assert!(
+            max_rel < 1e-3,
+            "LUT vs exact max relative error {max_rel} exceeds 1e-3"
+        );
     }
 
     #[test]
@@ -518,8 +674,7 @@ mod tests {
         let nu = 8;
         let nv = 8;
         let nw = 8;
-        let nw_half = nw / 2 + 1;
-        let n = nu * nv * nw_half;
+        let n = nu * nv * nw;
         let mut fc: Vec<[f32; 2]> = vec![[1.0, 0.5]; n];
 
         // Large blur * high-res reflections would overflow without clamping.

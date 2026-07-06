@@ -130,7 +130,7 @@ fn constraint_basis_dimensions() {
 #[test]
 fn solve_spd_2x2() {
     // [4 2; 2 3] x = [8; 7] → x = [1; 1]... nope.
-    // 4*1 + 2*1 = 6 ≠ 8 — let's just use a correct RHS.
+    // 4*1 + 2*1 = 6 ≠ 8; let's just use a correct RHS.
     // [4 2; 2 3] x = [1; 2] → x = [−1/8; 6/8] = [−0.125; 0.75]
     let a = [4.0, 2.0, 2.0, 3.0];
     let b = [1.0, 2.0];

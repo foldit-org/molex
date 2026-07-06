@@ -391,6 +391,61 @@ fn extended_header_skip() {
 }
 
 #[test]
+fn round_trip_density_to_mrc() {
+    let (nx, ny, nz) = (4usize, 5usize, 6usize);
+    let mut data = Array3::<f32>::zeros((nx, ny, nz));
+    data[[0, 0, 0]] = 1.5;
+    data[[3, 4, 5]] = -2.25;
+    data[[1, 2, 3]] = 7.125;
+    data[[2, 0, 4]] = 0.5;
+
+    let original = Density {
+        grid: VoxelGrid {
+            nx,
+            ny,
+            nz,
+            nxstart: 1,
+            nystart: -2,
+            nzstart: 3,
+            mx: 8,
+            my: 10,
+            mz: 12,
+            cell_dims: [30.0, 40.0, 50.0],
+            cell_angles: [90.0, 90.0, 90.0],
+            origin: [5.0, -3.0, 2.0],
+            data: data.clone(),
+        },
+        dmin: -2.25,
+        dmax: 7.125,
+        dmean: 0.375,
+        rms: 1.25,
+        space_group: 19,
+    };
+
+    let bytes = density_to_mrc_bytes(&original);
+    let rt = mrc_to_density(&bytes).unwrap();
+
+    assert_eq!(rt.nx, nx);
+    assert_eq!(rt.ny, ny);
+    assert_eq!(rt.nz, nz);
+    assert_eq!(rt.nxstart, 1);
+    assert_eq!(rt.nystart, -2);
+    assert_eq!(rt.nzstart, 3);
+    assert_eq!(rt.mx, 8);
+    assert_eq!(rt.my, 10);
+    assert_eq!(rt.mz, 12);
+    assert_eq!(rt.cell_dims, [30.0, 40.0, 50.0]);
+    assert_eq!(rt.cell_angles, [90.0, 90.0, 90.0]);
+    assert_eq!(rt.origin, [5.0, -3.0, 2.0]);
+    assert_eq!(rt.space_group, 19);
+    assert_eq!(rt.dmin, -2.25);
+    assert_eq!(rt.dmax, 7.125);
+    assert_eq!(rt.dmean, 0.375);
+    assert_eq!(rt.rms, 1.25);
+    assert_eq!(rt.data, data);
+}
+
+#[test]
 fn origin_and_start_indices() {
     let nc = 2;
     let nr = 2;

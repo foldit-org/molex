@@ -160,35 +160,31 @@ pub fn is_systematically_absent(hkl: [i32; 3], group: &GroupOps) -> bool {
 /// Compact representation of a symmetry operation for const data tables.
 pub type SymopData = ([[i32; 3]; 3], [i32; 3]);
 
-/// P 1 (SG 1) — centering translations.
+/// P 1 (SG 1): centering translations.
 pub const SG1_CEN: &[[i32; 3]] = &[[0, 0, 0]];
-/// P 1 (SG 1) — symmetry operations.
-#[allow(clippy::unreadable_literal)]
+/// P 1 (SG 1): symmetry operations.
 pub const SG1_OPS: &[SymopData] =
     &[([[24, 0, 0], [0, 24, 0], [0, 0, 24]], [0, 0, 0])];
 
-/// P 1 21 1 (SG 4) — centering translations.
+/// P 1 21 1 (SG 4): centering translations.
 pub const SG4_CEN: &[[i32; 3]] = &[[0, 0, 0]];
-/// P 1 21 1 (SG 4) — symmetry operations.
-#[allow(clippy::unreadable_literal)]
+/// P 1 21 1 (SG 4): symmetry operations.
 pub const SG4_OPS: &[SymopData] = &[
     ([[24, 0, 0], [0, 24, 0], [0, 0, 24]], [0, 0, 0]),
     ([[-24, 0, 0], [0, 24, 0], [0, 0, -24]], [0, 12, 0]),
 ];
 
-/// C 1 2 1 (SG 5) — centering translations.
+/// C 1 2 1 (SG 5): centering translations.
 pub const SG5_CEN: &[[i32; 3]] = &[[0, 0, 0], [12, 12, 0]];
-/// C 1 2 1 (SG 5) — symmetry operations.
-#[allow(clippy::unreadable_literal)]
+/// C 1 2 1 (SG 5): symmetry operations.
 pub const SG5_OPS: &[SymopData] = &[
     ([[24, 0, 0], [0, 24, 0], [0, 0, 24]], [0, 0, 0]),
     ([[-24, 0, 0], [0, 24, 0], [0, 0, -24]], [0, 0, 0]),
 ];
 
-/// P 21 21 21 (SG 19) — centering translations.
+/// P 21 21 21 (SG 19): centering translations.
 pub const SG19_CEN: &[[i32; 3]] = &[[0, 0, 0]];
-/// P 21 21 21 (SG 19) — symmetry operations.
-#[allow(clippy::unreadable_literal)]
+/// P 21 21 21 (SG 19): symmetry operations.
 pub const SG19_OPS: &[SymopData] = &[
     ([[24, 0, 0], [0, 24, 0], [0, 0, 24]], [0, 0, 0]),
     ([[-24, 0, 0], [0, -24, 0], [0, 0, 24]], [12, 0, 12]),
@@ -196,10 +192,9 @@ pub const SG19_OPS: &[SymopData] = &[
     ([[-24, 0, 0], [0, 24, 0], [0, 0, -24]], [0, 12, 12]),
 ];
 
-/// I 2 2 2 (SG 23) — centering translations.
+/// I 2 2 2 (SG 23): centering translations.
 pub const SG23_CEN: &[[i32; 3]] = &[[0, 0, 0], [12, 12, 12]];
-/// I 2 2 2 (SG 23) — symmetry operations.
-#[allow(clippy::unreadable_literal)]
+/// I 2 2 2 (SG 23): symmetry operations.
 pub const SG23_OPS: &[SymopData] = &[
     ([[24, 0, 0], [0, 24, 0], [0, 0, 24]], [0, 0, 0]),
     ([[-24, 0, 0], [0, -24, 0], [0, 0, 24]], [0, 0, 0]),
@@ -207,10 +202,9 @@ pub const SG23_OPS: &[SymopData] = &[
     ([[-24, 0, 0], [0, 24, 0], [0, 0, -24]], [0, 0, 0]),
 ];
 
-/// P 41 21 2 (SG 92) — centering translations.
+/// P 41 21 2 (SG 92): centering translations.
 pub const SG92_CEN: &[[i32; 3]] = &[[0, 0, 0]];
-/// P 41 21 2 (SG 92) — symmetry operations.
-#[allow(clippy::unreadable_literal)]
+/// P 41 21 2 (SG 92): symmetry operations.
 pub const SG92_OPS: &[SymopData] = &[
     ([[24, 0, 0], [0, 24, 0], [0, 0, 24]], [0, 0, 0]),
     ([[0, -24, 0], [24, 0, 0], [0, 0, 24]], [12, 12, 6]),
@@ -222,10 +216,9 @@ pub const SG92_OPS: &[SymopData] = &[
     ([[0, -24, 0], [-24, 0, 0], [0, 0, -24]], [0, 0, 12]),
 ];
 
-/// P 43 21 2 (SG 96) — centering translations.
+/// P 43 21 2 (SG 96): centering translations.
 pub const SG96_CEN: &[[i32; 3]] = &[[0, 0, 0]];
-/// P 43 21 2 (SG 96) — symmetry operations.
-#[allow(clippy::unreadable_literal)]
+/// P 43 21 2 (SG 96): symmetry operations.
 pub const SG96_OPS: &[SymopData] = &[
     ([[24, 0, 0], [0, 24, 0], [0, 0, 24]], [0, 0, 0]),
     ([[0, -24, 0], [24, 0, 0], [0, 0, 24]], [12, 12, 18]),
@@ -237,10 +230,9 @@ pub const SG96_OPS: &[SymopData] = &[
     ([[0, -24, 0], [-24, 0, 0], [0, 0, -24]], [0, 0, 12]),
 ];
 
-/// P 31 2 1 (SG 152) — centering translations.
+/// P 31 2 1 (SG 152): centering translations.
 pub const SG152_CEN: &[[i32; 3]] = &[[0, 0, 0]];
-/// P 31 2 1 (SG 152) — symmetry operations.
-#[allow(clippy::unreadable_literal)]
+/// P 31 2 1 (SG 152): symmetry operations.
 pub const SG152_OPS: &[SymopData] = &[
     ([[24, 0, 0], [0, 24, 0], [0, 0, 24]], [0, 0, 0]),
     ([[0, -24, 0], [24, -24, 0], [0, 0, 24]], [0, 0, 8]),
@@ -250,10 +242,9 @@ pub const SG152_OPS: &[SymopData] = &[
     ([[24, -24, 0], [0, -24, 0], [0, 0, -24]], [0, 0, 16]),
 ];
 
-/// P 32 2 1 (SG 154) — centering translations.
+/// P 32 2 1 (SG 154): centering translations.
 pub const SG154_CEN: &[[i32; 3]] = &[[0, 0, 0]];
-/// P 32 2 1 (SG 154) — symmetry operations.
-#[allow(clippy::unreadable_literal)]
+/// P 32 2 1 (SG 154): symmetry operations.
 pub const SG154_OPS: &[SymopData] = &[
     ([[24, 0, 0], [0, 24, 0], [0, 0, 24]], [0, 0, 0]),
     ([[0, -24, 0], [24, -24, 0], [0, 0, 24]], [0, 0, 16]),
@@ -263,10 +254,9 @@ pub const SG154_OPS: &[SymopData] = &[
     ([[24, -24, 0], [0, -24, 0], [0, 0, -24]], [0, 0, 8]),
 ];
 
-/// P 61 2 2 (SG 178) — centering translations.
+/// P 61 2 2 (SG 178): centering translations.
 pub const SG178_CEN: &[[i32; 3]] = &[[0, 0, 0]];
-/// P 61 2 2 (SG 178) — symmetry operations.
-#[allow(clippy::unreadable_literal)]
+/// P 61 2 2 (SG 178): symmetry operations.
 pub const SG178_OPS: &[SymopData] = &[
     ([[24, 0, 0], [0, 24, 0], [0, 0, 24]], [0, 0, 0]),
     ([[24, -24, 0], [24, 0, 0], [0, 0, 24]], [0, 0, 4]),
@@ -419,7 +409,6 @@ pub fn has_small_factorization(n: i32) -> bool {
 #[must_use]
 #[allow(clippy::cast_possible_truncation)]
 pub fn round_up_to_smooth(exact: f64) -> usize {
-    #[allow(clippy::cast_sign_loss)]
     let mut n = exact.ceil() as i32;
     if n < 1 {
         n = 1;
@@ -597,7 +586,6 @@ impl UnitCell {
 
     /// Compute 1/d² for reflection `(h, k, l)`.
     #[must_use]
-    #[allow(clippy::suboptimal_flops)]
     pub fn d_star_sq(&self, h: i32, k: i32, l: i32) -> f64 {
         let hf = f64::from(h);
         let kf = f64::from(k);

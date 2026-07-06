@@ -46,7 +46,7 @@ impl FormFactor {
 ///
 /// Indexed by the internal element order; use [`form_factor`] for lookups.
 #[allow(clippy::excessive_precision, clippy::unreadable_literal)]
-static FORM_FACTORS: [FormFactor; 18] = [
+static FORM_FACTORS: [FormFactor; 21] = [
     // H
     FormFactor {
         a: [0.493002, 0.322912, 0.140191, 0.04081],
@@ -155,12 +155,29 @@ static FORM_FACTORS: [FormFactor; 18] = [
         b: [3.5828, 0.247, 11.3966, 64.8126],
         c: 1.191,
     },
+    // F
+    FormFactor {
+        a: [3.5392, 2.6412, 1.517, 1.0243],
+        b: [10.2825, 4.2944, 0.2615, 26.1476],
+        c: 0.2776,
+    },
+    // Br
+    FormFactor {
+        a: [17.1789, 5.2358, 5.6377, 3.9851],
+        b: [2.1723, 16.5796, 0.2609, 41.4328],
+        c: 2.9557,
+    },
+    // I
+    FormFactor {
+        a: [20.1472, 18.9949, 7.5138, 2.2735],
+        b: [4.347, 0.3814, 27.766, 66.8776],
+        c: 4.0712,
+    },
 ];
 
 /// Look up the IT92 scattering form factor for an element.
 ///
-/// Returns `None` for elements without tabulated data (`Unknown`, `Br`, `I`,
-/// `F`).
+/// Returns `None` only for `Unknown`.
 #[must_use]
 pub fn form_factor(element: Element) -> Option<&'static FormFactor> {
     let index = match element {
@@ -182,16 +199,17 @@ pub fn form_factor(element: Element) -> Option<&'static FormFactor> {
         Element::Co => 15,
         Element::Ni => 16,
         Element::Cu => 17,
-        Element::Br | Element::I | Element::F | Element::Unknown => {
-            return None
-        }
+        Element::F => 18,
+        Element::Br => 19,
+        Element::I => 20,
+        Element::Unknown => return None,
     };
     Some(&FORM_FACTORS[index])
 }
 
 /// Bondi/Mantina van der Waals radii in Angstroms.
 #[allow(clippy::excessive_precision, clippy::unreadable_literal)]
-static VDW_RADII: [f64; 18] = [
+static VDW_RADII: [f64; 21] = [
     1.20, // H
     1.70, // C
     1.55, // N
@@ -210,12 +228,14 @@ static VDW_RADII: [f64; 18] = [
     1.13, // Co
     1.63, // Ni
     1.40, // Cu
+    1.47, // F
+    1.85, // Br
+    1.98, // I
 ];
 
 /// Look up the van der Waals radius for an element (Angstroms).
 ///
-/// Returns `None` for elements without tabulated data (`Unknown`, `Br`, `I`,
-/// `F`).
+/// Returns `None` only for `Unknown`.
 #[must_use]
 pub fn vdw_radius(element: Element) -> Option<f64> {
     let index = match element {
@@ -237,9 +257,10 @@ pub fn vdw_radius(element: Element) -> Option<f64> {
         Element::Co => 15,
         Element::Ni => 16,
         Element::Cu => 17,
-        Element::Br | Element::I | Element::F | Element::Unknown => {
-            return None
-        }
+        Element::F => 18,
+        Element::Br => 19,
+        Element::I => 20,
+        Element::Unknown => return None,
     };
     Some(VDW_RADII[index])
 }

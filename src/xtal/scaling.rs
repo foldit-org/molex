@@ -198,12 +198,12 @@ const REL_TOL: f64 = 1e-5;
 ///
 /// # Arguments
 ///
-/// * `reflections` — observed reflection data
-/// * `fc` — complex calculated structure factors `[re, im]` per reflection
-/// * `f_mask` — complex bulk-solvent mask structure factors `[re, im]` per
+/// * `reflections` - observed reflection data
+/// * `fc` - complex calculated structure factors `[re, im]` per reflection
+/// * `f_mask` - complex bulk-solvent mask structure factors `[re, im]` per
 ///   reflection
-/// * `unit_cell` — crystallographic unit cell
-/// * `system` — crystal system for anisotropic constraint
+/// * `unit_cell` - crystallographic unit cell
+/// * `system` - crystal system for anisotropic constraint
 ///
 /// Only working-set reflections (where `free_flag == false`) contribute to the
 /// fit.
@@ -243,7 +243,9 @@ pub fn fit_scaling(
         .iter()
         .map(|c| f64::from(c[0]).hypot(f64::from(c[1])))
         .collect();
-    let (k_init, b_iso_init) =
+    // Only k_init is used; the anisotropic B* is seeded at zero below, so the
+    // Wilson B_iso is intentionally discarded.
+    let (k_init, _b_iso_init) =
         wilson_estimate(reflections, &fc_amps, unit_cell);
 
     // Build initial parameter vector.
@@ -252,15 +254,15 @@ pub fn fit_scaling(
     params[1] = 0.35; // k_sol
     params[2] = 46.0; // B_sol
 
-    // Project isotropic B onto constraint basis.
-    // Isotropic: B11=B22=B33=B_iso/3, off-diag=0.
-    let b_iso_diag = b_iso_init / 3.0;
-    let b_iso_vec = [b_iso_diag, b_iso_diag, b_iso_diag, 0.0, 0.0, 0.0];
-    for (j, bv) in basis.iter().enumerate() {
-        // d_j = dot(basis[j], b_iso_vec) / dot(basis[j], basis[j])
-        let num = dot6(bv, &b_iso_vec);
-        let den = dot6(bv, bv);
-        params[3 + j] = if den > 0.0 { num / den } else { 0.0 };
+    // Start the anisotropic B* at zero. `kaniso` uses raw Miller
+    // indices, so each B* component carries the reciprocal-cell metric and is
+    // tiny; projecting a raw isotropic B_iso/3 onto the basis is
+    // dimensionally wrong (off by the a*² metric factor) and drives kaniso to
+    // ~0 at init, annihilating the mid/high-resolution Fc before the LM even
+    // starts. Seed aniso at zero (kaniso ≈ 1) and let the LM refine it last,
+    // matching gemmi/phenix.
+    for j in 0..n_basis {
+        params[3 + j] = 0.0;
     }
 
     // LM loop.
@@ -290,6 +292,9 @@ pub fn fit_scaling(
         );
 
         // Apply damping: (J^T W J + lambda * diag) delta = J^T W r.
+        // Damp each parameter relative to its own diagonal (standard Marquardt
+        // scaling) with only a tiny absolute floor so a zero diagonal still
+        // gets a regularizer.
         let mut jtj_damped = jtj.clone();
         for i in 0..n_params {
             let diag = jtj[i * n_params + i];
@@ -307,7 +312,9 @@ pub fn fit_scaling(
         for i in 0..n_params {
             trial[i] += delta[i];
         }
-        // Clamp k_overall > 0 and B_sol > 0.
+        // Keep k_overall and B_sol physical before scoring; a step that pushes
+        // either non-physical is only accepted if the floored point lowers
+        // WSSR.
         if trial[0] < 1e-6 {
             trial[0] = 1e-6;
         }
@@ -415,12 +422,17 @@ fn reconstruct_b(params: &[f64], basis: &[[f64; 6]]) -> [f64; 6] {
 }
 
 /// Compute model amplitude for one reflection given parameters.
+///
+/// This is the full scaled model the fit optimizes:
+/// `k_overall * kaniso(h) * |Fc + k_sol * exp(-B_sol * s2) * Fmask|`. The
+/// R-factor metrics reuse it so they score the same model rather than a
+/// bare `k_overall * |Fc|`.
 #[allow(
     clippy::similar_names,
     clippy::too_many_arguments,
     clippy::suboptimal_flops
 )]
-fn model_amplitude(
+pub(crate) fn model_amplitude(
     k_overall: f64,
     k_sol: f64,
     b_sol: f64,
@@ -587,10 +599,6 @@ fn build_normal_equations(
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::many_single_char_names,
-    clippy::excessive_nesting,
-    clippy::suboptimal_flops
-)]
+#[allow(clippy::many_single_char_names, clippy::suboptimal_flops)]
 #[path = "scaling_tests.rs"]
 mod tests;

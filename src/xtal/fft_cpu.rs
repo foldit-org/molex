@@ -138,7 +138,7 @@ pub fn fft_3d_inverse(
 
     let mut planner = FftPlanner::<f64>::new();
 
-    // Inverse passes in reverse axis order (u, v, w) — order does not
+    // Inverse passes in reverse axis order (u, v, w); order does not
     // mathematically matter, but we mirror the forward convention.
     let stride_u = nv * nw;
     pass_inverse(&mut planner, &mut buf, nv * nw, nu, stride_u);

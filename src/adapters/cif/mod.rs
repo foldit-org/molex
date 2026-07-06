@@ -6,6 +6,7 @@
 
 pub mod dom;
 mod dom_build;
+pub mod extract;
 mod hint;
 pub mod parse;
 mod refuse;
@@ -16,6 +17,10 @@ mod write;
 use std::path::Path;
 
 pub use dom::{Block, ColumnIter, Columns, Document, Loop, RowIter, Value};
+pub use extract::{
+    AtomSite, CifContent, CoordinateData, ExtractionError, ObsDataType,
+    Reflection, ReflectionData, UnitCell,
+};
 pub use parse::{parse, CifParseError};
 pub(crate) use write::assembly_to_mmcif;
 

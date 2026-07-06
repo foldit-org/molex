@@ -1,4 +1,5 @@
-//! Modified Bessel function approximations for ML crystallographic targets.
+//! Modified Bessel function approximations for maximum-likelihood
+//! crystallographic targets.
 //!
 //! Implements the Abramowitz & Stegun piecewise polynomial approximations for
 //! the modified Bessel functions I₀ and I₁, along with derived quantities
@@ -37,8 +38,8 @@ pub fn bessel_i0(x: f64) -> f64 {
     }
 }
 
-/// Ratio I₁(x) / I₀(x), the `sim` figure-of-merit function in ML
-/// crystallographic refinement.
+/// Ratio I₁(x) / I₀(x), the `sim` figure-of-merit function in
+/// maximum-likelihood crystallographic refinement.
 ///
 /// For small `x` the Taylor expansion I₁/I₀ ≈ x/2 is used to avoid
 /// cancellation; for very large `x` the asymptotic form 1 − 1/(2x) is
@@ -66,8 +67,8 @@ pub fn bessel_i1_over_i0(x: f64) -> f64 {
     sign * i1 / i0
 }
 
-/// Natural logarithm of I₀(x), the `sim_integ` function used in ML
-/// crystallographic log-likelihood targets.
+/// Natural logarithm of I₀(x), the `sim_integ` function used in
+/// maximum-likelihood crystallographic log-likelihood targets.
 ///
 /// Uses a Taylor approximation for small arguments and an asymptotic
 /// expansion for large arguments to avoid overflow.
@@ -153,7 +154,7 @@ mod tests {
 
     #[test]
     fn i0_at_boundary() {
-        // I0(3.75) — exactly at the branch point; test from the small-x side
+        // I0(3.75), exactly at the branch point; test from the small-x side
         let val = bessel_i0(3.75);
         // Known value: I0(3.75) ≈ 9.11895
         assert_rel(val, 9.11895, 1e-4, "I0(3.75)");

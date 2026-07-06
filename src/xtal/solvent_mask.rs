@@ -110,7 +110,7 @@ fn column_length(m: &[[f64; 3]; 3], j: usize) -> f64 {
 ///
 /// Grid spacings `hu`, `hv`, `hw` are the real-space step sizes along
 /// each axis, derived from the orthogonalization matrix columns.
-#[allow(clippy::too_many_arguments, clippy::similar_names)]
+#[allow(clippy::too_many_arguments)]
 pub fn edt_3d(
     grid: &mut [f64],
     nu: usize,
@@ -190,12 +190,12 @@ pub const DEFAULT_R_SHRINK: f64 = 1.1;
 ///
 /// # Arguments
 ///
-/// * `positions` — fractional coordinates of each atom.
-/// * `elements`  — element type of each atom.
-/// * `unit_cell` — the crystallographic unit cell.
-/// * `nu`, `nv`, `nw` — grid dimensions along a, b, c.
-/// * `r_probe`  — probe radius in Angstroms (typically 1.0).
-/// * `r_shrink` — shrink radius in Angstroms (typically 1.1).
+/// * `positions` - fractional coordinates of each atom.
+/// * `elements`  - element type of each atom.
+/// * `unit_cell` - the crystallographic unit cell.
+/// * `nu`, `nv`, `nw` - grid dimensions along a, b, c.
+/// * `r_probe`  - probe radius in Angstroms (typically 1.0).
+/// * `r_shrink` - shrink radius in Angstroms (typically 1.1).
 #[must_use]
 #[allow(clippy::too_many_arguments)]
 pub fn solvent_mask(
@@ -305,7 +305,6 @@ fn orth_per_grid(
     clippy::similar_names,
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
-    clippy::cast_sign_loss,
     clippy::cast_possible_wrap
 )]
 fn mark_atom_vicinity(

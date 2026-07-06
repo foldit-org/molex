@@ -30,6 +30,16 @@ pub mod element;
 pub mod entity;
 pub mod ops;
 
+#[cfg(feature = "xtal")]
+pub mod xtal;
+
+/// Shared crystallographic-refinement fixtures.
+///
+/// Present for in-crate `#[cfg(test)]` code and, behind the `testutil` feature,
+/// for the external bench and integration-test crates.
+#[cfg(all(feature = "xtal", any(test, feature = "testutil")))]
+pub mod testutil;
+
 #[cfg(feature = "c-api")]
 pub mod c_api;
 

@@ -31,6 +31,21 @@
 #define DELTA_VERSION 1
 
 /**
+ * Default probe radius (Angstroms) for bulk solvent mask.
+ */
+#define DEFAULT_R_PROBE 1.0
+
+/**
+ * Default shrink radius (Angstroms) for removing thin protein bridges.
+ */
+#define DEFAULT_R_SHRINK 1.1
+
+/**
+ * Common denominator for integer-encoded symmetry operations.
+ */
+#define DEN 24
+
+/**
  * Success status returned by writer-style entry points.
  */
 #define MOLEX_OK 0

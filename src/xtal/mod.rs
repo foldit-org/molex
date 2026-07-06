@@ -1,8 +1,10 @@
-//! Crystallographic refinement: electron density maps and ML target functions.
+//! Crystallographic refinement: electron density maps and maximum-likelihood
+//! target functions.
 //!
-//! This module implements the full ML crystallographic refinement pipeline:
-//! atomic density splatting, bulk solvent mask, anisotropic scaling, sigma-A
-//! estimation, weighted map coefficient computation, and B-factor refinement.
+//! This module implements the full maximum-likelihood crystallographic
+//! refinement pipeline: atomic density splatting, bulk solvent mask,
+//! anisotropic scaling, sigma-A estimation, weighted map coefficient
+//! computation, and B-factor refinement.
 //!
 //! Enable with the `xtal` Cargo feature.
 //!
@@ -15,7 +17,13 @@
 //! let density = refinement.compute_map(&atoms, &elements, &b_factors, &occupancies);
 //! ```
 
+// The refinement kernels accumulate products in explicit multiply-add loops;
+// keeping them as written preserves the numerical intent over clippy's
+// `mul_add` rewrite, whose fused rounding would perturb R-factor outputs.
+#![allow(clippy::suboptimal_flops)]
+
 mod bessel;
+mod bfactor_refine;
 mod density;
 mod fft_cpu;
 mod form_factors;
@@ -32,10 +40,11 @@ mod types;
 pub use bessel::log_bessel_i0;
 pub use form_factors::FormFactor;
 pub use map_coefficients::MapCoefficients;
+use ndarray::Array3;
 pub use refinement::XtalRefinement;
 pub use scaling::ScalingResult;
-pub use sigma_a::{r_free, SigmaAResult};
-pub use targets::ml_target_value;
+pub use sigma_a::SigmaAResult;
+pub use targets::maximum_likelihood_target;
 pub use types::{
     epsilon_factor, grid_factors, has_small_factorization, is_centric,
     is_systematically_absent, requires_equal_uv, round_up_to_smooth,
@@ -44,11 +53,9 @@ pub use types::{
 };
 
 use crate::adapters::cif::extract as cif;
+use crate::entity::surface::density::{Density, VoxelGrid};
 
 // ── SF-CIF → xtal reflection conversion ─────────────────────────────
-
-/// Default R-free fraction when the SF-CIF file does not specify free flags.
-const DEFAULT_FREE_FRACTION: f64 = 0.05;
 
 /// Convert CIF reflection data into xtal [`Reflection`] values.
 ///
@@ -59,9 +66,10 @@ const DEFAULT_FREE_FRACTION: f64 = 0.05;
 /// 2. Converts `f64` → `f32` for Fobs and sigma.
 /// 3. If the file did not provide R-free flags (`free_flags_from_file ==
 ///    false`), randomly assigns approximately `free_fraction` of reflections as
-///    the test set using a deterministic PRNG seeded by `seed`. The assignment
-///    is stratified by resolution (20 thin shells) so the free set has even
-///    coverage.
+///    the test set using a deterministic PRNG seeded by `seed`. Each reflection
+///    is assigned independently by comparing a per-reflection xorshift draw
+///    against a single global threshold; the partition is not stratified by
+///    resolution.
 ///
 /// The `seed` should be fixed per dataset (e.g. hash of the PDB code) so the
 /// free set is reproducible across refinement runs.
@@ -77,12 +85,7 @@ const DEFAULT_FREE_FRACTION: f64 = 0.05;
 /// unmerged anomalous data, reflections will appear to have missing Fobs and
 /// will be silently dropped.
 #[must_use]
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_precision_loss,
-    clippy::cast_sign_loss,
-    clippy::too_many_lines
-)]
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 pub fn reflections_from_cif(
     data: &cif::ReflectionData,
     free_fraction: f64,
@@ -90,22 +93,11 @@ pub fn reflections_from_cif(
 ) -> Vec<Reflection> {
     let frac = free_fraction.clamp(0.01, 0.50);
 
-    // Build the xtal unit cell so we can use d_star_sq for resolution binning.
-    let uc = UnitCell::new(
-        data.cell.a,
-        data.cell.b,
-        data.cell.c,
-        data.cell.alpha,
-        data.cell.beta,
-        data.cell.gamma,
-    );
-
-    // First pass: collect indices of reflections with valid Fobs, and their s².
-    let mut valid: Vec<(usize, f64)> = Vec::new();
+    // First pass: collect indices of reflections with valid Fobs.
+    let mut valid: Vec<usize> = Vec::new();
     for (i, r) in data.reflections.iter().enumerate() {
         if r.f_meas.is_some() {
-            let s2 = uc.d_star_sq(r.h, r.k, r.l);
-            valid.push((i, s2));
+            valid.push(i);
         }
     }
 
@@ -117,7 +109,7 @@ pub fn reflections_from_cif(
     if data.free_flags_from_file {
         return valid
             .iter()
-            .map(|&(i, _)| {
+            .map(|&i| {
                 let r = &data.reflections[i];
                 Reflection {
                     h: r.h,
@@ -131,18 +123,12 @@ pub fn reflections_from_cif(
             .collect();
     }
 
-    // No flags from file — assign free set with deterministic PRNG.
-    // Resolution range for stratification.
-    let s2_min = valid.iter().map(|v| v.1).fold(f64::MAX, f64::min);
-    let s2_max = valid.iter().map(|v| v.1).fold(f64::MIN, f64::max);
-    let range = s2_max - s2_min;
-    let _bin_width = if range < 1e-12 { 1.0 } else { range / 20.0 };
-
+    // No flags from file: assign free set with deterministic PRNG.
     let mut rng_state: u64 = seed | 1; // ensure nonzero
 
     valid
         .iter()
-        .map(|&(i, _s2)| {
+        .map(|&i| {
             let r = &data.reflections[i];
 
             // Advance xorshift64.
@@ -165,21 +151,103 @@ pub fn reflections_from_cif(
         .collect()
 }
 
-/// Convert CIF reflection data using the default free fraction (5%).
+// ── DensityGrid → Density promotion ─────────────────────────────────
+
+/// Promote a bare [`DensityGrid`] (values plus grid dimensions) into a full
+/// [`Density`] by attaching the metadata a whole-unit-cell map implies.
 ///
-/// Convenience wrapper around [`reflections_from_cif`].
+/// A crystallographic map samples the entire fractional cell, so the grid
+/// dimensions equal the sampling intervals, the start indices are zero, and
+/// the origin sits at the cell corner. Min/max/mean/RMS are computed from the
+/// data; the space group is passed through.
 #[must_use]
-pub fn reflections_from_cif_default(
-    data: &cif::ReflectionData,
-    seed: u64,
-) -> Vec<Reflection> {
-    reflections_from_cif(data, DEFAULT_FREE_FRACTION, seed)
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "cell params narrow f64->f32; sg number is non-negative"
+)]
+pub fn density_from_grid(
+    grid: &DensityGrid,
+    unit_cell: &UnitCell,
+    space_group: i32,
+) -> Density {
+    let dims = (grid.nu, grid.nv, grid.nw);
+    // Normalize length to nu*nv*nw so the reshape is infallible; the
+    // DensityGrid contract already guarantees this, and pad/truncate degrades
+    // gracefully rather than panicking if a caller violates it.
+    let mut values = grid.data.clone();
+    values.resize(grid.nu * grid.nv * grid.nw, 0.0);
+    let data = Array3::from_shape_vec(dims, values)
+        .unwrap_or_else(|_| Array3::zeros(dims));
+
+    let (dmin, dmax, dmean, rms) = grid_statistics(&grid.data);
+
+    Density {
+        grid: VoxelGrid {
+            nx: grid.nu,
+            ny: grid.nv,
+            nz: grid.nw,
+            nxstart: 0,
+            nystart: 0,
+            nzstart: 0,
+            mx: grid.nu,
+            my: grid.nv,
+            mz: grid.nw,
+            cell_dims: [
+                unit_cell.a as f32,
+                unit_cell.b as f32,
+                unit_cell.c as f32,
+            ],
+            cell_angles: [
+                unit_cell.alpha as f32,
+                unit_cell.beta as f32,
+                unit_cell.gamma as f32,
+            ],
+            origin: [0.0, 0.0, 0.0],
+            data,
+        },
+        dmin,
+        dmax,
+        dmean,
+        rms,
+        space_group: space_group as u32,
+    }
+}
+
+/// Compute `(dmin, dmax, dmean, rms)` over a density grid.
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    reason = "voxel count to f64 for averaging; mean/rms narrow back to f32"
+)]
+fn grid_statistics(data: &[f32]) -> (f32, f32, f32, f32) {
+    if data.is_empty() {
+        return (0.0, 0.0, 0.0, 0.0);
+    }
+    let mut dmin = f32::INFINITY;
+    let mut dmax = f32::NEG_INFINITY;
+    let mut sum = 0.0f64;
+    for &v in data {
+        dmin = dmin.min(v);
+        dmax = dmax.max(v);
+        sum += f64::from(v);
+    }
+    let n = data.len() as f64;
+    let mean = sum / n;
+    let var = data
+        .iter()
+        .map(|&v| {
+            let d = f64::from(v) - mean;
+            d * d
+        })
+        .sum::<f64>()
+        / n;
+    (dmin, dmax, mean as f32, var.sqrt() as f32)
 }
 
 // ── Tests ────────────────────────────────────────────────────────────
 
 #[cfg(test)]
-#[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::*;
 
@@ -196,8 +264,6 @@ mod tests {
                         l,
                         f_meas: Some(100.0 / f64::from(h)),
                         sigma_f_meas: Some(1.0),
-                        f_calc: None,
-                        phase_calc: None,
                         free_flag: with_flags && (h + k + l) % 7 == 0,
                     });
                 }
@@ -217,6 +283,47 @@ mod tests {
             obs_data_type: cif::ObsDataType::Amplitude,
             free_flags_from_file: with_flags,
         }
+    }
+
+    #[test]
+    fn density_from_grid_populates_metadata() {
+        let grid = DensityGrid {
+            data: (0..24u16).map(f32::from).collect(),
+            nu: 2,
+            nv: 3,
+            nw: 4,
+        };
+        let cell = UnitCell::new(30.0, 40.0, 50.0, 90.0, 90.0, 90.0);
+        let density = density_from_grid(&grid, &cell, 19);
+
+        assert_eq!(density.nx, 2);
+        assert_eq!(density.ny, 3);
+        assert_eq!(density.nz, 4);
+        assert_eq!(density.nxstart, 0);
+        assert_eq!(density.nystart, 0);
+        assert_eq!(density.nzstart, 0);
+        assert_eq!(density.mx, 2);
+        assert_eq!(density.my, 3);
+        assert_eq!(density.mz, 4);
+        assert!((density.cell_dims[0] - 30.0).abs() < 1e-4);
+        assert!((density.cell_dims[1] - 40.0).abs() < 1e-4);
+        assert!((density.cell_dims[2] - 50.0).abs() < 1e-4);
+        assert!((density.cell_angles[0] - 90.0).abs() < 1e-4);
+        assert!((density.cell_angles[1] - 90.0).abs() < 1e-4);
+        assert!((density.cell_angles[2] - 90.0).abs() < 1e-4);
+        assert!(density.origin.iter().all(|&o| o.abs() < 1e-9));
+        assert_eq!(density.space_group, 19);
+
+        // Stats over the values 0..=23.
+        assert!((density.dmin - 0.0).abs() < 1e-6);
+        assert!((density.dmax - 23.0).abs() < 1e-6);
+        assert!((density.dmean - 11.5).abs() < 1e-4);
+        assert!(density.rms > 0.0);
+
+        // Row-major (u, v, w) maps directly onto data[[u, v, w]].
+        assert!((density.data[[0, 0, 0]] - 0.0).abs() < 1e-6);
+        assert!((density.data[[0, 0, 1]] - 1.0).abs() < 1e-6);
+        assert!((density.data[[1, 2, 3]] - 23.0).abs() < 1e-6);
     }
 
     #[test]

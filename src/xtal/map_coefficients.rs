@@ -23,7 +23,7 @@ const NEAR_ZERO: f64 = 1e-30;
 /// ```
 ///
 /// where σ² is the model error variance and ε is the multiplicity factor
-/// (set to 1.0 in v1). If σ² or ε is near zero the perfect-model limit
+/// (set to 1.0). If σ² or ε is near zero the perfect-model limit
 /// *m* = 1 is returned. The argument is clamped at 700 to avoid overflow.
 #[must_use]
 pub fn figure_of_merit(
@@ -60,7 +60,7 @@ pub struct MapCoefficients {
     pub fo_fc: Vec<[f32; 2]>,
 }
 
-/// Compute ML-weighted map coefficients for every reflection.
+/// Compute maximum-likelihood-weighted map coefficients for every reflection.
 ///
 /// For each reflection the sigma-A parameters D and σ² are interpolated at the
 /// reflection's resolution, the figure of merit *m* is computed, and the

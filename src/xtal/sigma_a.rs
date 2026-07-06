@@ -1,4 +1,4 @@
-//! Binned sigma-A estimation for ML map coefficient weighting.
+//! Binned sigma-A estimation for maximum-likelihood map coefficient weighting.
 //!
 //! Implements the Read (1986) sigma-A scheme: observed and calculated
 //! amplitudes are binned by resolution, and per-bin D (figure of merit proxy)
@@ -304,36 +304,6 @@ pub fn estimate_sigma_a(
     }
 }
 
-/// Compute the free-set R factor.
-///
-/// R-free = Σ|Fobs − k·Fc| / Σ|Fobs| over reflections with `free_flag == true`.
-/// Returns 0.0 if there are no free-set reflections.
-#[must_use]
-pub fn r_free(
-    reflections: &[Reflection],
-    fc_amplitudes: &[f64],
-    k_overall: f64,
-) -> f64 {
-    let mut num = 0.0_f64;
-    let mut den = 0.0_f64;
-
-    for (i, refl) in reflections.iter().enumerate() {
-        if !refl.free_flag {
-            continue;
-        }
-        let fo = f64::from(refl.f_obs).abs();
-        let fc = fc_amplitudes[i];
-        num += k_overall.mul_add(-fc, fo).abs();
-        den += fo;
-    }
-
-    if den < f64::EPSILON {
-        0.0
-    } else {
-        num / den
-    }
-}
-
 #[cfg(test)]
 #[allow(
     clippy::excessive_nesting,
@@ -444,31 +414,6 @@ mod tests {
                 "bin {i}: sigma_sq = {s}, expected >= {SIGMA_SQ_FLOOR}"
             );
         }
-    }
-
-    #[test]
-    fn r_free_perfect_model() {
-        let cell = test_cell();
-        let refls = make_reflections(&cell);
-        let fc: Vec<f64> = refls.iter().map(|r| f64::from(r.f_obs)).collect();
-
-        let rf = r_free(&refls, &fc, 1.0);
-        assert!(rf < 1e-6, "R-free of perfect model should be ~0, got {rf}");
-    }
-
-    #[test]
-    fn r_free_no_free_reflections() {
-        let refls = vec![Reflection {
-            h: 1,
-            k: 0,
-            l: 0,
-            f_obs: 10.0,
-            sigma_f: 1.0,
-            free_flag: false,
-        }];
-        let fc = vec![10.0];
-        let rf = r_free(&refls, &fc, 1.0);
-        assert!((rf - 0.0).abs() < f64::EPSILON);
     }
 
     #[test]

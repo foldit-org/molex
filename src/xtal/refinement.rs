@@ -171,6 +171,18 @@ impl XtalRefinement {
         }
     }
 
+    /// Build a refinement bound to resident experimental data, cloning its
+    /// reflections and deriving the density-map grid from its resolution.
+    #[must_use]
+    pub fn from_experimental_data(data: &super::ExperimentalData) -> Self {
+        Self::new(
+            data.unit_cell.clone(),
+            data.space_group.clone(),
+            data.reflections.clone(),
+            data.derive_grid(),
+        )
+    }
+
     /// Run the full map computation pipeline.
     ///
     /// 1. Splat atomic density onto the grid

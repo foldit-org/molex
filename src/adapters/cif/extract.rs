@@ -5,6 +5,7 @@
 //! are missing.
 
 use super::dom::{Block, Value};
+use crate::element::Element;
 
 /// Unit cell parameters.
 #[derive(Debug, Clone)]
@@ -48,6 +49,19 @@ pub struct AtomSite {
     pub occupancy: f64,
     /// Isotropic B-factor (temperature factor).
     pub b_factor: f64,
+}
+
+impl AtomSite {
+    /// Resolve this atom's [`Element`], falling back to the atom name when the
+    /// CIF omits an explicit element symbol.
+    #[must_use]
+    pub fn element(&self) -> Element {
+        if self.element.is_empty() {
+            Element::from_atom_name(&self.label)
+        } else {
+            Element::from_symbol(&self.element)
+        }
+    }
 }
 
 /// Coordinate data extracted from an mmCIF block.

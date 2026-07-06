@@ -31,13 +31,11 @@
 use crate::adapters::cif::{parse, AtomSite, CoordinateData, ReflectionData};
 use crate::element::Element;
 use crate::xtal::{
-    grid_factors, reflections_from_cif, requires_equal_uv, round_up_to_pow2,
-    round_up_to_smooth, space_group, ForwardSymmetry, Reflection,
-    StencilBackend, UnitCell, XtalRefinement,
+    derive_grid, deterministic_free_flag_seed, requires_equal_uv,
+    round_up_to_pow2, space_group, space_group_number_from_name,
+    ExperimentalData, ForwardSymmetry, Reflection, StencilBackend, UnitCell,
+    XtalRefinement,
 };
-
-/// The space groups the xtal module supports, for name-to-number lookup.
-const SUPPORTED_SG: &[u16] = &[1, 4, 5, 19, 23, 92, 96, 152, 154, 178];
 
 /// A refinement built from a deposited structure and its structure factors.
 pub struct RealCase {
@@ -90,74 +88,14 @@ pub struct PreparedCase {
     pub grid_dims: [usize; 3],
 }
 
-/// Map a Hermann-Mauguin space-group name (as it appears in a coordinate CIF)
-/// to its International Tables number, over the supported groups.
-fn sg_number_from_name(name: &str) -> Option<u16> {
-    let normalized: Vec<&str> = name.split_whitespace().collect();
-    SUPPORTED_SG.iter().copied().find(|&n| {
-        space_group(n).is_some_and(|sg| {
-            sg.hm.split_whitespace().collect::<Vec<_>>() == normalized
-        })
-    })
-}
-
-/// FNV-1a hash of a PDB code, used to seed the free-flag partition
-/// deterministically per structure.
-fn seed_for(pdb: &str) -> u64 {
-    let mut h = 0xcbf2_9ce4_8422_2325_u64;
-    for b in pdb.bytes() {
-        h ^= u64::from(b);
-        h = h.wrapping_mul(0x0100_0000_01b3);
-    }
-    h
-}
-
-/// Raise both axes to `max(nu, nv)` when the space group requires
-/// `nu == nv`; otherwise return them unchanged.
-fn enforce_equal_uv(nu: usize, nv: usize, sg_number: u16) -> (usize, usize) {
-    if requires_equal_uv(sg_number) {
-        let m = nu.max(nv);
-        (m, m)
-    } else {
-        (nu, nv)
-    }
-}
-
-/// Derive grid dimensions `[nu, nv, nw]` from cell edges and a target
-/// real-space sampling interval, enforcing the space group's divisibility
-/// factors and any equal-`nu`-`nv` constraint.
-fn derive_grid(
-    a: f64,
-    b: f64,
-    c: f64,
-    spacing: f64,
-    sg_number: u16,
-) -> [usize; 3] {
-    let gf = grid_factors(sg_number).expect("supported space group");
-    let mut nu = round_up_to_smooth((a / spacing).ceil());
-    let mut nv = round_up_to_smooth((b / spacing).ceil());
-    let mut nw = round_up_to_smooth((c / spacing).ceil());
-    while nu % gf[0] != 0 {
-        nu = round_up_to_smooth((nu + 1) as f64);
-    }
-    while nv % gf[1] != 0 {
-        nv = round_up_to_smooth((nv + 1) as f64);
-    }
-    while nw % gf[2] != 0 {
-        nw = round_up_to_smooth((nw + 1) as f64);
-    }
-    let (nu, nv) = enforce_equal_uv(nu, nv, sg_number);
-    [nu, nv, nw]
-}
-
 /// Derive power-of-two grid dimensions `[nu, nv, nw]` from cell edges and a
 /// target real-space sampling interval.
 ///
 /// Each axis keeps `spacing <= a/n` by rounding `a/spacing` UP to a power of
 /// two, so every reflection resolved at the target spacing stays inside
-/// Nyquist. Unlike [`derive_grid`] this imposes no space-group grid-factor
-/// divisibility (the orbit-splat forward path needs none); it still honors any
-/// equal-`nu`-`nv` constraint.
+/// Nyquist. Unlike [`crate::xtal::derive_grid`] this imposes no space-group
+/// grid-factor divisibility (the orbit-splat forward path needs none); it still
+/// honors any equal-`nu`-`nv` constraint.
 #[must_use]
 pub fn derive_grid_pow2(
     a: f64,
@@ -169,7 +107,12 @@ pub fn derive_grid_pow2(
     let nu = round_up_to_pow2((a / spacing).ceil());
     let nv = round_up_to_pow2((b / spacing).ceil());
     let nw = round_up_to_pow2((c / spacing).ceil());
-    let (nu, nv) = enforce_equal_uv(nu, nv, sg_number);
+    let (nu, nv) = if requires_equal_uv(sg_number) {
+        let m = nu.max(nv);
+        (m, m)
+    } else {
+        (nu, nv)
+    };
     [nu, nv, nw]
 }
 
@@ -193,13 +136,13 @@ pub fn refinement_from_cif_pair(pdb: &str) -> Option<RealCase> {
     let coord_doc = parse(&coord_str).ok()?;
     let coord_block = coord_doc.blocks.first()?;
     let coord_data = CoordinateData::try_from(coord_block).ok()?;
-    let cell = coord_data.cell.as_ref()?;
-    let sg_number = sg_number_from_name(coord_data.spacegroup.as_deref()?)?;
+    let sg_number =
+        space_group_number_from_name(coord_data.spacegroup.as_deref()?)?;
 
     let atoms: Vec<&AtomSite> = coord_data
         .atoms
         .iter()
-        .filter(|&a| element_of(a) != Element::H)
+        .filter(|&a| a.element() != Element::H)
         .collect();
 
     // ── Reflections ─────────────────────────────────────────────────────
@@ -207,36 +150,28 @@ pub fn refinement_from_cif_pair(pdb: &str) -> Option<RealCase> {
     let sf_doc = parse(&sf_str).ok()?;
     let sf_block = sf_doc.blocks.first()?;
     let mut refl_data = ReflectionData::try_from(sf_block).ok()?;
+    // Test-only convenience the production constructor deliberately omits: when
+    // the deposited data flags nothing free, seed-derive a partition instead of
+    // refining against an empty free set.
     if !refl_data.reflections.iter().any(|r| r.free_flag) {
         refl_data.free_flags_from_file = false;
     }
-    let reflections = reflections_from_cif(&refl_data, 0.05, seed_for(pdb));
-    if reflections.is_empty() {
-        return None;
-    }
 
-    // ── Grid ────────────────────────────────────────────────────────────
-    let sg = space_group(sg_number)?;
-    let unit_cell = UnitCell::new(
-        cell.a, cell.b, cell.c, cell.alpha, cell.beta, cell.gamma,
-    );
-
-    let mut d_min = f64::MAX;
-    for r in &reflections {
-        let s2 = unit_cell.d_star_sq(r.h, r.k, r.l);
-        if s2 > 0.0 {
-            d_min = d_min.min(1.0 / s2.sqrt());
-        }
-    }
-    let grid = derive_grid(cell.a, cell.b, cell.c, d_min / 3.0, sg_number);
-
-    let refinement = XtalRefinement::new(unit_cell, sg, reflections, grid);
+    // Build the refinement through the resident-data public API, so the
+    // committed oracle/recovery tests exercise the promoted surface.
+    let data = ExperimentalData::from_reflection_data(
+        &refl_data,
+        sg_number,
+        0.05,
+        deterministic_free_flag_seed(pdb),
+    )?;
+    let refinement = XtalRefinement::from_experimental_data(&data);
 
     let positions = atoms
         .iter()
         .map(|a| refinement.unit_cell.fractionalize([a.x, a.y, a.z]))
         .collect();
-    let elements = atoms.iter().map(|&a| element_of(a)).collect();
+    let elements = atoms.iter().map(|&a| a.element()).collect();
     let b_factors = atoms.iter().map(|a| a.b_factor).collect();
     let occupancies = atoms.iter().map(|a| a.occupancy).collect();
 
@@ -248,16 +183,6 @@ pub fn refinement_from_cif_pair(pdb: &str) -> Option<RealCase> {
         b_factors,
         occupancies,
     })
-}
-
-/// Resolve an atom's element, falling back to the atom name when the CIF omits
-/// an explicit element symbol.
-fn element_of(a: &AtomSite) -> Element {
-    if a.element.is_empty() {
-        Element::from_atom_name(&a.label)
-    } else {
-        Element::from_symbol(&a.element)
-    }
 }
 
 /// Build a self-consistent synthetic refinement with no file I/O and no RNG.

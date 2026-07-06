@@ -1,3 +1,4 @@
+// foldit:allow-long-file: cohesive xtal primitives — unit cell, symmetry ops, space-group tables, grid helpers.
 //! Core crystallographic types: unit cell, symmetry operations, space groups.
 
 use std::f64::consts::PI;
@@ -359,6 +360,37 @@ pub fn space_group(number: u16) -> Option<SpaceGroup> {
     })
 }
 
+/// The International Tables numbers of every space group the xtal module
+/// supports, for name-to-number lookup and support checks.
+const SUPPORTED_SG: &[u16] = &[1, 4, 5, 19, 23, 92, 96, 152, 154, 178];
+
+/// The supported space-group International Tables numbers.
+#[must_use]
+pub fn supported_space_groups() -> &'static [u16] {
+    SUPPORTED_SG
+}
+
+/// Whether International Tables number `n` is one the xtal module supports.
+#[must_use]
+pub fn is_space_group_supported(n: u16) -> bool {
+    SUPPORTED_SG.contains(&n)
+}
+
+/// Map a Hermann-Mauguin space-group name (as it appears in a CIF) to its
+/// International Tables number, over the supported groups.
+///
+/// The name is compared token-wise after whitespace normalization, so
+/// `"P 21 21 21"` matches regardless of internal spacing.
+#[must_use]
+pub fn space_group_number_from_name(name: &str) -> Option<u16> {
+    let normalized: Vec<&str> = name.split_whitespace().collect();
+    SUPPORTED_SG.iter().copied().find(|&n| {
+        space_group(n).is_some_and(|sg| {
+            sg.hm.split_whitespace().collect::<Vec<_>>() == normalized
+        })
+    })
+}
+
 // ── Grid helper functions ─────────────────────────────────────────────
 
 /// Return the grid divisibility factors `[nu_factor, nv_factor, nw_factor]` for
@@ -430,6 +462,56 @@ pub fn round_up_to_pow2(exact: f64) -> usize {
         return 1;
     }
     (n as u64).next_power_of_two() as usize
+}
+
+/// Raise both axes to `max(nu, nv)` when the space group requires `nu == nv`;
+/// otherwise return them unchanged.
+fn enforce_equal_uv(nu: usize, nv: usize, sg_number: u16) -> (usize, usize) {
+    if requires_equal_uv(sg_number) {
+        let m = nu.max(nv);
+        (m, m)
+    } else {
+        (nu, nv)
+    }
+}
+
+/// Derive grid dimensions `[nu, nv, nw]` from cell edges and a target
+/// real-space sampling interval, enforcing the space group's divisibility
+/// factors and any equal-`nu`-`nv` constraint.
+///
+/// # Panics
+///
+/// Panics if `sg_number` is not one of the supported space groups (no
+/// grid-factor table exists for it).
+#[must_use]
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::expect_used,
+    clippy::manual_is_multiple_of
+)]
+pub fn derive_grid(
+    a: f64,
+    b: f64,
+    c: f64,
+    spacing: f64,
+    sg_number: u16,
+) -> [usize; 3] {
+    let gf = grid_factors(sg_number).expect("supported space group");
+    let mut nu = round_up_to_smooth((a / spacing).ceil());
+    let mut nv = round_up_to_smooth((b / spacing).ceil());
+    let mut nw = round_up_to_smooth((c / spacing).ceil());
+    while nu % gf[0] != 0 {
+        nu = round_up_to_smooth((nu + 1) as f64);
+    }
+    while nv % gf[1] != 0 {
+        nv = round_up_to_smooth((nv + 1) as f64);
+    }
+    while nw % gf[2] != 0 {
+        nw = round_up_to_smooth((nw + 1) as f64);
+    }
+    let (nu, nv) = enforce_equal_uv(nu, nv, sg_number);
+    [nu, nv, nw]
 }
 
 // ── UnitCell ──────────────────────────────────────────────────────────

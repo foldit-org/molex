@@ -26,6 +26,7 @@ mod bessel;
 #[cfg(feature = "minimization")]
 mod bfactor_refine;
 mod density;
+mod experimental;
 mod fft_cpu;
 mod form_factors;
 #[cfg(all(feature = "xtal", feature = "gpu"))]
@@ -44,6 +45,7 @@ pub use bessel::log_bessel_i0;
 pub use density::{
     compute_blur, cutoff_radius, kernel_eval, splat_density, SplatParams,
 };
+pub use experimental::{ExperimentalData, RefinementInputs};
 pub use fft_cpu::FftPrecision;
 pub use form_factors::{form_factor, FormFactor};
 pub use map_coefficients::MapCoefficients;
@@ -55,16 +57,29 @@ pub use scaling::ScalingResult;
 pub use sigma_a::SigmaAResult;
 pub use targets::maximum_likelihood_target;
 pub use types::{
-    epsilon_factor, grid_factors, has_small_factorization, is_centric,
-    is_systematically_absent, requires_equal_uv, round_up_to_pow2,
-    round_up_to_smooth, space_group, CrystalSystem, DensityGrid, GroupOps,
-    Reflection, SpaceGroup, Symop, UnitCell, DEN,
+    derive_grid, epsilon_factor, grid_factors, has_small_factorization,
+    is_centric, is_space_group_supported, is_systematically_absent,
+    requires_equal_uv, round_up_to_pow2, round_up_to_smooth, space_group,
+    space_group_number_from_name, supported_space_groups, CrystalSystem,
+    DensityGrid, GroupOps, Reflection, SpaceGroup, Symop, UnitCell, DEN,
 };
 
 use crate::adapters::cif::extract as cif;
 use crate::entity::surface::density::{Density, VoxelGrid};
 
 // ── SF-CIF → xtal reflection conversion ─────────────────────────────
+
+/// FNV-1a hash of a key (e.g. a PDB code), used to seed the free-flag
+/// partition deterministically per dataset.
+#[must_use]
+pub fn deterministic_free_flag_seed(key: &str) -> u64 {
+    let mut h = 0xcbf2_9ce4_8422_2325_u64;
+    for b in key.bytes() {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    h
+}
 
 /// Convert CIF reflection data into xtal [`Reflection`] values.
 ///

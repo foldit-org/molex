@@ -68,6 +68,8 @@ pub use entity::molecule::{
 pub use ops::error::AdapterError;
 #[cfg(feature = "python")]
 use pyo3::prelude::*;
+#[cfg(feature = "xtal")]
+pub use xtal::ExperimentalData;
 
 #[cfg(feature = "python")]
 #[pymodule(name = "molex", gil_used = true)]

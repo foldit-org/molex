@@ -68,8 +68,6 @@ minimization = ["dep:argmin", "dep:argmin-math"]
 # Orthogonal to `xtal` so it can back non-xtal kernels later. Default off;
 # selectable per refinement through `XtalRefinement::stencil_backend`.
 gpu = ["dep:cubecl"]
-# Convenience alias for the crystallographic GPU path.
-xtal-gpu = ["xtal", "gpu"]
 # Exposes the shared xtal test/bench fixtures (`crate::testutil`) as `pub`, so
 # the external bench and integration-test crates can build refinements. Implies
 # `xtal`, which owns the types the fixtures construct.

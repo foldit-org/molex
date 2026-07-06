@@ -31,8 +31,9 @@
 use crate::adapters::cif::{parse, AtomSite, CoordinateData, ReflectionData};
 use crate::element::Element;
 use crate::xtal::{
-    grid_factors, reflections_from_cif, requires_equal_uv, round_up_to_smooth,
-    space_group, Reflection, UnitCell, XtalRefinement,
+    grid_factors, reflections_from_cif, requires_equal_uv, round_up_to_pow2,
+    round_up_to_smooth, space_group, ForwardSymmetry, Reflection,
+    StencilBackend, UnitCell, XtalRefinement,
 };
 
 /// The space groups the xtal module supports, for name-to-number lookup.
@@ -42,6 +43,8 @@ const SUPPORTED_SG: &[u16] = &[1, 4, 5, 19, 23, 92, 96, 152, 154, 178];
 pub struct RealCase {
     /// The refinement pipeline, grid and reflections already set up.
     pub refinement: XtalRefinement,
+    /// International Tables number of the structure's space group.
+    pub sg_number: u16,
     /// Fractional coordinates of the non-hydrogen atoms.
     pub positions: Vec<[f64; 3]>,
     /// Element per atom, parallel to `positions`.
@@ -109,6 +112,17 @@ fn seed_for(pdb: &str) -> u64 {
     h
 }
 
+/// Raise both axes to `max(nu, nv)` when the space group requires
+/// `nu == nv`; otherwise return them unchanged.
+fn enforce_equal_uv(nu: usize, nv: usize, sg_number: u16) -> (usize, usize) {
+    if requires_equal_uv(sg_number) {
+        let m = nu.max(nv);
+        (m, m)
+    } else {
+        (nu, nv)
+    }
+}
+
 /// Derive grid dimensions `[nu, nv, nw]` from cell edges and a target
 /// real-space sampling interval, enforcing the space group's divisibility
 /// factors and any equal-`nu`-`nv` constraint.
@@ -132,11 +146,30 @@ fn derive_grid(
     while nw % gf[2] != 0 {
         nw = round_up_to_smooth((nw + 1) as f64);
     }
-    if requires_equal_uv(sg_number) {
-        let m = nu.max(nv);
-        nu = m;
-        nv = m;
-    }
+    let (nu, nv) = enforce_equal_uv(nu, nv, sg_number);
+    [nu, nv, nw]
+}
+
+/// Derive power-of-two grid dimensions `[nu, nv, nw]` from cell edges and a
+/// target real-space sampling interval.
+///
+/// Each axis keeps `spacing <= a/n` by rounding `a/spacing` UP to a power of
+/// two, so every reflection resolved at the target spacing stays inside
+/// Nyquist. Unlike [`derive_grid`] this imposes no space-group grid-factor
+/// divisibility (the orbit-splat forward path needs none); it still honors any
+/// equal-`nu`-`nv` constraint.
+#[must_use]
+pub fn derive_grid_pow2(
+    a: f64,
+    b: f64,
+    c: f64,
+    spacing: f64,
+    sg_number: u16,
+) -> [usize; 3] {
+    let nu = round_up_to_pow2((a / spacing).ceil());
+    let nv = round_up_to_pow2((b / spacing).ceil());
+    let nw = round_up_to_pow2((c / spacing).ceil());
+    let (nu, nv) = enforce_equal_uv(nu, nv, sg_number);
     [nu, nv, nw]
 }
 
@@ -209,6 +242,7 @@ pub fn refinement_from_cif_pair(pdb: &str) -> Option<RealCase> {
 
     Some(RealCase {
         refinement,
+        sg_number,
         positions,
         elements,
         b_factors,
@@ -246,12 +280,43 @@ pub fn synthetic_refinement(
     grid_spacing_target: f64,
     b_true: f64,
 ) -> SyntheticCase {
+    let grid = derive_grid(
+        cell[0],
+        cell[1],
+        cell[2],
+        grid_spacing_target,
+        sg_number as u16,
+    );
+    build_synthetic(
+        n_atoms,
+        sg_number,
+        cell,
+        grid_spacing_target,
+        b_true,
+        grid,
+        ForwardSymmetry::SymmetrizeGrid,
+    )
+}
+
+/// Build a synthetic refinement on an explicit `grid` under `symmetry`, sizing
+/// the reflection set from `grid_spacing_target` and setting each `f_obs` from
+/// the forward model at `b_true` so the working set fits at truth. Shared by
+/// the smooth-grid [`synthetic_refinement`] and the power-of-two orbit builder.
+#[must_use]
+#[allow(clippy::too_many_arguments)]
+fn build_synthetic(
+    n_atoms: usize,
+    sg_number: i32,
+    cell: [f64; 6],
+    grid_spacing_target: f64,
+    b_true: f64,
+    grid: [usize; 3],
+    symmetry: ForwardSymmetry,
+) -> SyntheticCase {
     let sg_u16 = sg_number as u16;
     let unit_cell =
         UnitCell::new(cell[0], cell[1], cell[2], cell[3], cell[4], cell[5]);
     let sg = space_group(sg_u16).expect("supported space group");
-    let grid =
-        derive_grid(cell[0], cell[1], cell[2], grid_spacing_target, sg_u16);
 
     // Grid is ~3x finer than the resolution it must represent, mirroring the
     // deposited-data pipeline's `grid_spacing = d_min / 3` relation.
@@ -293,6 +358,7 @@ pub fn synthetic_refinement(
     let occupancies = vec![1.0; n_atoms];
 
     let mut refinement = XtalRefinement::new(unit_cell, sg, reflections, grid);
+    refinement.forward_symmetry = symmetry;
 
     // Self-consistency: set each f_obs to the forward-model amplitude at
     // b_true, so R -> 0 at the generating parameters.
@@ -339,11 +405,57 @@ pub fn prepared_synthetic(
         grid_spacing_target,
         b_true,
     );
+    prepare_case(case, b_start)
+}
+
+/// Build a synthetic refinement on the native five-smooth grid (the same
+/// [`derive_grid`] sampling as [`prepared_synthetic`]) with the full-orbit
+/// forward model ([`ForwardSymmetry::SplatFullOrbit`]) and prepare it for a
+/// single gradient evaluation. Paired with [`StencilBackend::Gpu`] this drives
+/// the full resident GPU pipeline (GPU splat + mixed-radix FFT + resident
+/// forward/inverse + GPU gather) on the pipeline's native grid, so a bench can
+/// time it against the CPU arm on identical grid dimensions.
+#[must_use]
+#[allow(clippy::too_many_arguments)]
+pub fn prepared_synthetic_native_orbit(
+    n_atoms: usize,
+    sg_number: i32,
+    cell: [f64; 6],
+    grid_spacing_target: f64,
+    b_true: f64,
+    b_start: f64,
+) -> PreparedCase {
+    let grid = derive_grid(
+        cell[0],
+        cell[1],
+        cell[2],
+        grid_spacing_target,
+        sg_number as u16,
+    );
+    let case = build_synthetic(
+        n_atoms,
+        sg_number,
+        cell,
+        grid_spacing_target,
+        b_true,
+        grid,
+        ForwardSymmetry::SplatFullOrbit,
+    );
+    prepare_case(case, b_start)
+}
+
+/// Run `compute_map` at a flat `b_start` to populate sigma-A, then package the
+/// case for a single gradient evaluation. Shared tail of the smooth-grid and
+/// power-of-two prepared builders; `compute_map` honors the case's own forward
+/// symmetry, so the sigma-A it fits matches the forward model the gradient
+/// differentiates.
+#[must_use]
+fn prepare_case(case: SyntheticCase, b_start: f64) -> PreparedCase {
     let mut refinement = case.refinement;
     let positions = case.positions;
     let elements = case.elements;
     let occupancies = case.occupancies;
-    let b_factors = vec![b_start; n_atoms];
+    let b_factors = vec![b_start; positions.len()];
 
     let _density = refinement
         .compute_map(&positions, &elements, &b_factors, &occupancies)
@@ -370,6 +482,117 @@ pub fn gradient_once(case: &PreparedCase) -> Option<Vec<f64>> {
         &case.b_factors,
         &case.occupancies,
     )
+}
+
+/// Run [`gradient_once`] with the refinement's real-space stencil backend set
+/// to `backend`, so a bench can time the CPU and GPU splat/gather at one
+/// prepared case. Both the forward splat and the adjoint gather gate on this
+/// backend.
+#[must_use]
+pub fn gradient_once_with(
+    case: &mut PreparedCase,
+    backend: StencilBackend,
+) -> Option<Vec<f64>> {
+    case.refinement.stencil_backend = backend;
+    gradient_once(case)
+}
+
+/// Outcome of a full-GPU-pipeline B-factor recovery run on a deposited
+/// structure.
+#[cfg(feature = "xtal-gpu")]
+pub struct GpuRecovery {
+    /// Pearson correlation of refined vs deposited B-factors.
+    pub b_corr: f64,
+    /// R-work at the flattened start, before refinement.
+    pub r_work_before: f64,
+    /// R-work after refinement.
+    pub r_work_after: f64,
+    /// Non-hydrogen atom count (recovery-vector length).
+    pub n_atoms: usize,
+    /// Power-of-two FFT grid the recovery ran on, `[nu, nv, nw]`.
+    pub grid: [usize; 3],
+}
+
+/// Run B-factor recovery for a deposited structure through the full GPU
+/// pipeline: a power-of-two grid with the splat-full-orbit forward model and
+/// the GPU stencil backend, so the map, the forward Fc, and the gradient all
+/// run GPU splat + GPU FFT + GPU gather.
+///
+/// Flattens every deposited B to their common mean, refines up from that start,
+/// and reports the Pearson correlation of the refined B-factors against the
+/// deposited ones (the recovery quality). Returns `None` if the fixture is
+/// absent.
+#[cfg(feature = "xtal-gpu")]
+#[must_use]
+pub fn recover_b_factors_full_gpu(pdb: &str) -> Option<GpuRecovery> {
+    let case = refinement_from_cif_pair(pdb)?;
+    let mut refinement = case.refinement;
+    let positions = case.positions;
+    let elements = case.elements;
+    let deposited_b = case.b_factors;
+    let occupancies = case.occupancies;
+
+    // Power-of-two orbit grid at the deposited d_min/3 sampling target, run on
+    // the GPU backend so the whole refinement is on-device.
+    let mut d_min = f64::MAX;
+    for r in &refinement.reflections {
+        let s2 = refinement.unit_cell.d_star_sq(r.h, r.k, r.l);
+        if s2 > 0.0 {
+            d_min = d_min.min(1.0 / s2.sqrt());
+        }
+    }
+    let cell = &refinement.unit_cell;
+    let pow2 =
+        derive_grid_pow2(cell.a, cell.b, cell.c, d_min / 3.0, case.sg_number);
+    refinement.grid_dims = pow2;
+    refinement.forward_symmetry = ForwardSymmetry::SplatFullOrbit;
+    refinement.stencil_backend = StencilBackend::Gpu;
+
+    // Flatten B to the common mean and refit scaling to that start, so the
+    // "before" R-work is scaling-consistent with the flattened model.
+    let mean_b = deposited_b.iter().sum::<f64>() / deposited_b.len() as f64;
+    let mut refined_b = vec![mean_b; deposited_b.len()];
+    let _ = refinement
+        .compute_map(&positions, &elements, &refined_b, &occupancies)
+        .expect("compute_map (flattened, full-GPU orbit)");
+    let (r_work_before, _) = refinement
+        .r_factors(&positions, &elements, &refined_b, &occupancies)
+        .expect("r_factors (flattened)");
+
+    let (r_work_after, _) = refinement
+        .refine(&positions, &elements, &mut refined_b, &occupancies, 50)
+        .expect("refine (full-GPU orbit)");
+
+    Some(GpuRecovery {
+        b_corr: pearson_pair(&deposited_b, &refined_b),
+        r_work_before,
+        r_work_after,
+        n_atoms: deposited_b.len(),
+        grid: pow2,
+    })
+}
+
+/// Pearson correlation between two equal-length samples; `0.0` when either has
+/// no variance.
+#[cfg(feature = "xtal-gpu")]
+fn pearson_pair(x: &[f64], y: &[f64]) -> f64 {
+    let n = x.len() as f64;
+    let mean_x = x.iter().sum::<f64>() / n;
+    let mean_y = y.iter().sum::<f64>() / n;
+    let (mut cov, mut var_x, mut var_y) = (0.0, 0.0, 0.0);
+    for (&xi, &yi) in x.iter().zip(y.iter()) {
+        let dx = xi - mean_x;
+        let dy = yi - mean_y;
+        cov = dx.mul_add(dy, cov);
+        var_x = dx.mul_add(dx, var_x);
+        var_y = dy.mul_add(dy, var_y);
+    }
+    let denom = (var_x * var_y).sqrt();
+    if denom < 1e-30 {
+        0.0
+    } else {
+        cov / denom
+    }
 }
 
 /// Deterministic fractional position for atom `i`, spread across the cell by a

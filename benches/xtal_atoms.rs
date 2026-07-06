@@ -20,8 +20,16 @@
 
 #[cfg(all(feature = "xtal", feature = "testutil"))]
 mod xtal_atoms_bench {
-    use criterion::{black_box, BenchmarkId, Criterion, Throughput};
-    use molex::testutil::prepared_synthetic;
+    use criterion::measurement::WallTime;
+    use criterion::{
+        black_box, BenchmarkGroup, BenchmarkId, Criterion, Throughput,
+    };
+    #[cfg(feature = "xtal-gpu")]
+    use molex::testutil::prepared_synthetic_native_orbit;
+    use molex::testutil::{
+        gradient_once_with, prepared_synthetic, PreparedCase,
+    };
+    use molex::xtal::StencilBackend;
 
     /// Fixed cubic P1 cell, real-space grid spacing, and space group.
     const CELL: [f64; 6] = [60.0, 60.0, 60.0, 90.0, 90.0, 90.0];
@@ -33,24 +41,50 @@ mod xtal_atoms_bench {
     /// the gradient is non-trivial.
     const B_START: f64 = 40.0;
 
+    /// Time one `gradient_once` arm under `backend`, labeled `label` at the
+    /// current parameter point. Extracted so the per-point `#[cfg]` GPU arm
+    /// stays flat rather than nesting another closure past the lint threshold.
+    fn bench_arm(
+        group: &mut BenchmarkGroup<'_, WallTime>,
+        label: &str,
+        n: usize,
+        case: &mut PreparedCase,
+        backend: StencilBackend,
+    ) {
+        group.bench_with_input(BenchmarkId::new(label, n), &n, |b, _| {
+            b.iter(|| {
+                black_box(gradient_once_with(&mut *case, backend));
+            });
+        });
+    }
+
     pub fn bench(c: &mut Criterion) {
         let mut group = c.benchmark_group("xtal_atoms");
         for &n in &[50_usize, 200, 800, 3200] {
-            let case =
+            let mut case =
                 prepared_synthetic(n, SG, CELL, SPACING, B_TRUE, B_START);
 
             group.throughput(Throughput::Elements(n as u64));
-            group.bench_with_input(
-                BenchmarkId::from_parameter(n),
-                &n,
-                |b, _| {
-                    b.iter(|| {
-                        black_box(molex::testutil::gradient_once(black_box(
-                            &case,
-                        )));
-                    });
-                },
-            );
+            bench_arm(&mut group, "cpu", n, &mut case, StencilBackend::Cpu);
+
+            #[cfg(feature = "xtal-gpu")]
+            {
+                // Full resident GPU pipeline (GPU splat + mixed-radix FFT +
+                // resident forward/inverse + GPU gather) on the same native
+                // five-smooth grid as the cpu arm.
+                let mut gpu = prepared_synthetic_native_orbit(
+                    n, SG, CELL, SPACING, B_TRUE, B_START,
+                );
+                assert_eq!(
+                    gpu.grid_dims, case.grid_dims,
+                    "gpu arm must run the native five-smooth grid, not pow2",
+                );
+                // Warm up device init and shader compilation outside the timed
+                // region so the arm reflects steady-state splat/FFT/gather, not
+                // the one-time wgpu setup.
+                let _ = gradient_once_with(&mut gpu, StencilBackend::Gpu);
+                bench_arm(&mut group, "gpu", n, &mut gpu, StencilBackend::Gpu);
+            }
         }
         group.finish();
     }

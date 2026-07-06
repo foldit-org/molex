@@ -15,6 +15,46 @@ use super::types::{DensityGrid, GroupOps, UnitCell, DEN};
 /// once and then read (with linear interpolation) at every covered voxel.
 const LUT_BINS: usize = 1024;
 
+/// Build the five-Gaussian real-space kernel coefficients `(a, b)` for one atom
+/// with effective B-factor `b_atom + blur`: four IT92 terms plus the constant
+/// term. The kernel value at squared distance `r_sq` is `Σ
+/// a[i]*exp(b[i]*r_sq)`.
+#[allow(clippy::cast_precision_loss)]
+pub(crate) fn kernel_coeffs(
+    ff: &FormFactor,
+    b_atom: f64,
+    blur: f64,
+) -> ([f64; 5], [f64; 5]) {
+    let four_pi = 4.0 * PI;
+    let mut a = [0.0_f64; 5];
+    let mut b = [0.0_f64; 5];
+
+    for i in 0..4 {
+        let t = four_pi / (ff.b[i] + b_atom + blur);
+        a[i] = ff.a[i] * t.powf(1.5);
+        b[i] = -t * PI;
+    }
+
+    // Constant term (i = 4).
+    let t_c = four_pi / (b_atom + blur);
+    a[4] = ff.c * t_c.powf(1.5);
+    b[4] = -t_c * PI;
+
+    (a, b)
+}
+
+/// Exact (non-LUT) five-Gaussian kernel value at squared distance `r_sq`,
+/// before occupancy: `Σ a[i]*exp(b[i]*r_sq)`. Callers multiply by occupancy.
+#[must_use]
+pub fn kernel_eval(ff: &FormFactor, b_atom: f64, blur: f64, r_sq: f64) -> f64 {
+    let (a, b) = kernel_coeffs(ff, b_atom, blur);
+    let mut sum = 0.0;
+    for i in 0..5 {
+        sum = a[i].mul_add((b[i] * r_sq).exp(), sum);
+    }
+    sum
+}
+
 /// Precalculated radial density lookup table for one atom.
 ///
 /// The five-Gaussian kernel (4 IT92 terms + constant) is evaluated once into a
@@ -34,20 +74,7 @@ impl GaussianPrecalc {
     /// the squared cutoff radius (the span the table covers).
     #[allow(clippy::cast_precision_loss)]
     fn new(ff: &FormFactor, b_atom: f64, blur: f64, cutoff_sq: f64) -> Self {
-        let four_pi = 4.0 * PI;
-        let mut a = [0.0_f64; 5];
-        let mut b = [0.0_f64; 5];
-
-        for i in 0..4 {
-            let t = four_pi / (ff.b[i] + b_atom + blur);
-            a[i] = ff.a[i] * t.powf(1.5);
-            b[i] = -t * PI;
-        }
-
-        // Constant term (i = 4).
-        let t_c = four_pi / (b_atom + blur);
-        a[4] = ff.c * t_c.powf(1.5);
-        b[4] = -t_c * PI;
+        let (a, b) = kernel_coeffs(ff, b_atom, blur);
 
         // Tabulate the kernel over [0, cutoff_sq] once per atom; this is the
         // only place `exp` runs.
@@ -154,16 +181,8 @@ fn for_each_covered_voxel(
     blur: f64,
     mut visit: impl FnMut(usize, f64),
 ) {
+    let orth_n = build_orth_n(unit_cell, [nu, nv, nw]);
     let dims = [nu as f64, nv as f64, nw as f64];
-
-    // Precompute orth_n: the matrix that converts grid-index deltas to
-    // Cartesian distances. orth_n[i][j] = orth[i][j] / dim[j].
-    let mut orth_n = [[0.0_f64; 3]; 3];
-    for (i, orth_row) in orth_n.iter_mut().enumerate() {
-        for j in 0..3 {
-            orth_row[j] = unit_cell.orth[i][j] / dims[j];
-        }
-    }
 
     let cutoff = cutoff_radius(b_atom + blur);
     let cutoff_sq = cutoff * cutoff;
@@ -295,6 +314,20 @@ pub(super) fn gather_gradient(
     sum
 }
 
+/// Build the grid-step-to-Cartesian matrix that converts grid-index deltas to
+/// Cartesian distances: `orth_n[i][j] = orth[i][j] / dim[j]`.
+#[allow(clippy::cast_precision_loss)]
+pub(super) fn build_orth_n(cell: &UnitCell, dims: [usize; 3]) -> [[f64; 3]; 3] {
+    let dim = [dims[0] as f64, dims[1] as f64, dims[2] as f64];
+    let mut orth_n = [[0.0_f64; 3]; 3];
+    for (i, orth_row) in orth_n.iter_mut().enumerate() {
+        for j in 0..3 {
+            orth_row[j] = cell.orth[i][j] / dim[j];
+        }
+    }
+    orth_n
+}
+
 /// Compute the squared Cartesian distance for a grid-delta vector `d` via the
 /// orthogonalization-per-grid-step matrix `orth_n`.
 #[inline]
@@ -314,7 +347,7 @@ fn cart_dist_sq(orth_n: &[[f64; 3]; 3], d: &[f64; 3]) -> f64 {
 ///
 /// Uses the inverse of the column length as an upper bound on the grid
 /// spacing in that direction.
-fn estimate_grid_radius(
+pub(super) fn estimate_grid_radius(
     orth_n: &[[f64; 3]; 3],
     cutoff: f64,
     axis: usize,
@@ -493,8 +526,6 @@ pub fn deblur_fc(
 
 #[cfg(test)]
 mod tests {
-    use std::f64::consts::PI;
-
     use super::*;
     use crate::xtal::form_factors::FormFactor;
     use crate::xtal::types::UnitCell;
@@ -519,28 +550,11 @@ mod tests {
         let cutoff_sq = cutoff * cutoff;
         let precalc = GaussianPrecalc::new(&ff, b_atom, blur, cutoff_sq);
 
-        // Direct reference: the same 5-Gaussian kernel evaluated with `exp`,
-        // recomputing the coefficients GaussianPrecalc::new tabulates.
-        let four_pi = 4.0 * PI;
-        let mut amp = [0.0_f64; 5];
-        let mut rate = [0.0_f64; 5];
-        for i in 0..4 {
-            let t = four_pi / (ff.b[i] + b_atom + blur);
-            amp[i] = ff.a[i] * t.powf(1.5);
-            rate[i] = -t * PI;
-        }
-        let t_c = four_pi / (b_atom + blur);
-        amp[4] = ff.c * t_c.powf(1.5);
-        rate[4] = -t_c * PI;
-        let exact = |r_sq: f64| -> f64 {
-            (0..5).map(|i| amp[i] * (rate[i] * r_sq).exp()).sum()
-        };
-
         let mut max_rel = 0.0_f64;
         for n in 0..=256 {
             let r_sq = cutoff_sq * (f64::from(n) / 256.0) * 0.999;
             let approx = precalc.density_at(r_sq, 1.0);
-            let ex = exact(r_sq);
+            let ex = kernel_eval(&ff, b_atom, blur, r_sq);
             let rel = (approx - ex).abs() / ex.abs().max(1e-30);
             max_rel = max_rel.max(rel);
         }

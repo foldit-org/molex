@@ -27,6 +27,8 @@ mod bfactor_refine;
 mod density;
 mod fft_cpu;
 mod form_factors;
+#[cfg(feature = "xtal-gpu")]
+mod gpu;
 mod map_coefficients;
 mod refinement;
 mod scaling;
@@ -38,19 +40,23 @@ mod types;
 // ── Public re-exports ───────────────────────────────────────────────
 
 pub use bessel::log_bessel_i0;
+pub use density::{
+    compute_blur, cutoff_radius, kernel_eval, splat_density, SplatParams,
+};
 pub use fft_cpu::FftPrecision;
-pub use form_factors::FormFactor;
+pub use form_factors::{form_factor, FormFactor};
 pub use map_coefficients::MapCoefficients;
 use ndarray::Array3;
-pub use refinement::XtalRefinement;
+pub(crate) use refinement::ForwardSymmetry;
+pub use refinement::{StencilBackend, XtalRefinement};
 pub use scaling::ScalingResult;
 pub use sigma_a::SigmaAResult;
 pub use targets::maximum_likelihood_target;
 pub use types::{
     epsilon_factor, grid_factors, has_small_factorization, is_centric,
-    is_systematically_absent, requires_equal_uv, round_up_to_smooth,
-    space_group, CrystalSystem, DensityGrid, GroupOps, Reflection, SpaceGroup,
-    Symop, UnitCell, DEN,
+    is_systematically_absent, requires_equal_uv, round_up_to_pow2,
+    round_up_to_smooth, space_group, CrystalSystem, DensityGrid, GroupOps,
+    Reflection, SpaceGroup, Symop, UnitCell, DEN,
 };
 
 use crate::adapters::cif::extract as cif;

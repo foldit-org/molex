@@ -25,6 +25,48 @@ pub(crate) const B_MAX: f64 = 300.0;
 /// mask: `(refl_fc, refl_fmask)`. Each `[f32; 2]` is a `(real, imag)` pair.
 type ReflStructureFactors = (Vec<[f32; 2]>, Vec<[f32; 2]>);
 
+/// Per-copy splat inputs for one atom set expanded over its full symmetry
+/// orbit: fractional positions, form factors, B-factors, and occupancies, each
+/// `n_atoms * n_sym * n_cen` long.
+type OrbitSplatInputs<'f> =
+    (Vec<[f64; 3]>, Vec<&'f FormFactor>, Vec<f64>, Vec<f64>);
+
+/// How the forward model realizes the crystal's space-group symmetry on the
+/// real-space density grid before the FFT.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ForwardSymmetry {
+    /// Splat only the asymmetric-unit atoms, then sum the density grid over
+    /// the full symmetry orbit ([`density::symmetrize_sum`]). Requires
+    /// grid axes divisible by the space group's grid factors.
+    SymmetrizeGrid,
+    /// Splat every atom's full symmetry-plus-centering orbit directly onto the
+    /// grid; no grid symmetrization. Imposes no grid-factor divisibility, so
+    /// it admits arbitrary (e.g. power-of-two) grids.
+    // Constructed only through the `forward_symmetry` opt-in (default
+    // `SymmetrizeGrid`), so a plain build never selects it.
+    #[allow(dead_code)]
+    SplatFullOrbit,
+}
+
+/// Backend for the real-space grid stencils.
+///
+/// Gates both the forward density splat and its adjoint, the B-factor gradient
+/// gather. Both walk the same covered-voxel boxes, so they share one device
+/// decision.
+///
+/// Defaults to [`StencilBackend::Cpu`]; the GPU variant exists only when the
+/// `xtal-gpu` feature is enabled and produces results within `f32` tolerance
+/// of the CPU path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StencilBackend {
+    /// Run the stencils on the CPU (default).
+    #[default]
+    Cpu,
+    /// Run the stencils on the GPU via CubeCL on the wgpu backend.
+    #[cfg(feature = "xtal-gpu")]
+    Gpu,
+}
+
 /// Wrap a signed Miller index into the range `[0, size)` using modular
 /// arithmetic.  Safe for any index magnitude (unlike the bare
 /// `(idx + size) as usize` pattern which overflows when `|idx| > size`).
@@ -59,10 +101,21 @@ pub struct XtalRefinement {
     pub scaling: ScalingResult,
     /// Current sigma-A estimates.
     pub sigma_a: Option<SigmaAResult>,
-    /// Internal working precision for the forward/inverse 3-D FFTs. Defaults to
-    /// [`fft_cpu::FftPrecision::F64`]; set to `F32` to measure the GPU path's
-    /// precision without changing the default numerical behavior.
+    /// Internal working precision for the forward/inverse 3-D FFTs. Defaults
+    /// to [`fft_cpu::FftPrecision::F64`]; set to `F32` to measure the GPU
+    /// path's precision without changing the default numerical behavior.
     pub fft_precision: fft_cpu::FftPrecision,
+    /// Backend for the real-space grid stencils (density splat and gradient
+    /// gather). Defaults to [`StencilBackend::Cpu`]; set to `Gpu` (requires
+    /// the `xtal-gpu` feature) to run both on the GPU without changing the
+    /// default behavior.
+    pub stencil_backend: StencilBackend,
+    /// How the forward model realizes space-group symmetry before the FFT.
+    /// Defaults to [`ForwardSymmetry::SymmetrizeGrid`] (the grid-factor
+    /// pipeline); set to `SplatFullOrbit` to run the forward Fc and the map
+    /// computation on an arbitrary (e.g. power-of-two) grid, the form the GPU
+    /// FFT accepts.
+    pub(crate) forward_symmetry: ForwardSymmetry,
 }
 
 impl XtalRefinement {
@@ -111,6 +164,8 @@ impl XtalRefinement {
             },
             sigma_a: None,
             fft_precision: fft_cpu::FftPrecision::F64,
+            stencil_backend: StencilBackend::default(),
+            forward_symmetry: ForwardSymmetry::SymmetrizeGrid,
         }
     }
 
@@ -151,6 +206,7 @@ impl XtalRefinement {
             b_factors,
             occupancies,
             true,
+            self.forward_symmetry,
         )?;
 
         // Fc amplitudes for scaling/sigma-A.
@@ -238,7 +294,11 @@ impl XtalRefinement {
     /// The Fc-dependent half of [`Self::b_factor_gradients`]: packs the
     /// per-reflection likelihood weights into reciprocal-space coefficients,
     /// runs one inverse FFT, and gathers each atom's real-space gradient.
-    #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_lines,
+        clippy::too_many_arguments,
+        clippy::excessive_nesting
+    )]
     pub(crate) fn b_factor_gradients_from_fc(
         &self,
         refl_fc: &[[f32; 2]],
@@ -264,6 +324,68 @@ impl XtalRefinement {
         let b_min = b_factors.iter().copied().fold(f64::MAX, f64::min);
         let d_min = self.estimate_d_min();
         let blur = density::compute_blur(d_min, 1.5, b_min);
+
+        // Device-resident inverse chain: on a device-transformable grid the GPU
+        // backend packs the coefficients, inverse-FFTs, and gathers with the
+        // coefficient grid and gradient map kept on the GPU. Only the small
+        // per-reflection scatter data is uploaded; the CPU pack/FFT below never
+        // runs. Every other configuration keeps the host path unchanged.
+        #[cfg(feature = "xtal-gpu")]
+        if self.stencil_backend == StencilBackend::Gpu
+            && super::gpu::gpu_cfft_grid_supported([nu, nv, nw])
+        {
+            let mut idx = Vec::new();
+            let mut idxn = Vec::new();
+            let mut dre = Vec::new();
+            let mut dim = Vec::new();
+            for (i, refl) in self.reflections.iter().enumerate() {
+                if refl.free_flag {
+                    continue;
+                }
+                let Some((re, im, fc, s2, w_h)) =
+                    self.reflection_ml_weight(refl, refl_fc[i], sa)
+                else {
+                    continue;
+                };
+                let deblur = (blur * s2 / 4.0).min(80.0).exp();
+                let coeff = w_h * -(s2 / 4.0) * deblur;
+                let u = wrap_miller_index(refl.h, nu);
+                let v = wrap_miller_index(refl.k, nv);
+                let w = wrap_miller_index(refl.l, nw);
+                let un = wrap_miller_index(-refl.h, nu);
+                let vn = wrap_miller_index(-refl.k, nv);
+                let wn = wrap_miller_index(-refl.l, nw);
+                #[allow(clippy::cast_possible_truncation)]
+                {
+                    dre.push((coeff * re / fc) as f32);
+                    dim.push((coeff * im / fc) as f32);
+                    idx.push(((u * nv + v) * nw + w) as u32);
+                    idxn.push(((un * nv + vn) * nw + wn) as u32);
+                }
+            }
+
+            let scale = self.unit_cell.volume / 2.0;
+            let (copy_pos, copy_ff, copy_b, copy_occ) =
+                self.expand_orbit(positions, &ffs, b_factors, occupancies);
+            let gather_params = density::SplatParams {
+                positions: &copy_pos,
+                form_factors: &copy_ff,
+                b_factors: &copy_b,
+                occupancies: &copy_occ,
+                unit_cell: &self.unit_cell,
+                blur,
+            };
+            return Some(super::gpu::gpu_inverse_gradient_resident(
+                &idx,
+                &idxn,
+                &dre,
+                &dim,
+                &gather_params,
+                [nu, nv, nw],
+                positions.len(),
+                scale,
+            ));
+        }
 
         // Reciprocal-space gradient coefficients. For each working reflection
         // place `coeff · e^{+iφ}` at its wrapped grid index and the conjugate
@@ -317,7 +439,9 @@ impl XtalRefinement {
 
         // The inverse FFT's built-in 1/N cancels the N/V of the real-space
         // sum-to-integral discretization; only V/2 (Friedel doubling over the
-        // stored hemisphere) remains as the overall scale.
+        // stored hemisphere) remains as the overall scale. The device-resident
+        // GPU inverse returned above; this CPU FFT serves the CPU backend and
+        // any GPU grid the device transform does not support.
         let g_map = fft_cpu::fft_3d_inverse_prec(
             &d_grid_f32,
             nu,
@@ -329,36 +453,59 @@ impl XtalRefinement {
 
         // Per-atom reverse splat over the full symmetry/centering orbit, the
         // same orbit expansion the forward model and the direct sum use.
-        let den = f64::from(DEN);
         let scale = self.unit_cell.volume / 2.0;
 
-        let mut grad = vec![0.0_f64; positions.len()];
-        for (j, &pos) in positions.iter().enumerate() {
-            let mut sum = 0.0_f64;
-            for sym in &self.group_ops.sym_ops {
-                let sp = sym.apply_to_frac(pos);
-                for cen in &self.group_ops.cen_ops {
-                    let p = [
-                        sp[0] + f64::from(cen[0]) / den,
-                        sp[1] + f64::from(cen[1]) / den,
-                        sp[2] + f64::from(cen[2]) / den,
-                    ];
-                    sum += density::gather_gradient(
-                        &g_map,
-                        p,
-                        ffs[j],
-                        b_factors[j],
-                        occupancies[j],
-                        &self.unit_cell,
-                        nu,
-                        nv,
-                        nw,
-                        blur,
-                    );
+        let grad = match self.stencil_backend {
+            StencilBackend::Cpu => {
+                let (copy_pos, copy_ff, copy_b, copy_occ) =
+                    self.expand_orbit(positions, &ffs, b_factors, occupancies);
+                let mult =
+                    self.group_ops.sym_ops.len() * self.group_ops.cen_ops.len();
+                let mut grad = vec![0.0_f64; positions.len()];
+                for (j, chunk) in copy_pos.chunks(mult).enumerate() {
+                    let mut sum = 0.0_f64;
+                    for (k, &p) in chunk.iter().enumerate() {
+                        let idx = j * mult + k;
+                        sum += density::gather_gradient(
+                            &g_map,
+                            p,
+                            copy_ff[idx],
+                            copy_b[idx],
+                            copy_occ[idx],
+                            &self.unit_cell,
+                            nu,
+                            nv,
+                            nw,
+                            blur,
+                        );
+                    }
+                    grad[j] = sum * scale;
                 }
+                grad
             }
-            grad[j] = sum * scale;
-        }
+            #[cfg(feature = "xtal-gpu")]
+            StencilBackend::Gpu => {
+                // Per-copy inputs are atom-major so the GPU wrapper reduces
+                // each atom's copies as a contiguous chunk.
+                let (copy_pos, copy_ff, copy_b, copy_occ) =
+                    self.expand_orbit(positions, &ffs, b_factors, occupancies);
+                let gather_params = density::SplatParams {
+                    positions: &copy_pos,
+                    form_factors: &copy_ff,
+                    b_factors: &copy_b,
+                    occupancies: &copy_occ,
+                    unit_cell: &self.unit_cell,
+                    blur,
+                };
+                super::gpu::gpu_gather_gradient(
+                    &g_map,
+                    &gather_params,
+                    [nu, nv, nw],
+                    positions.len(),
+                    scale,
+                )
+            }
+        };
 
         Some(grad)
     }
@@ -395,6 +542,7 @@ impl XtalRefinement {
             b_factors,
             occupancies,
             false,
+            ForwardSymmetry::SymmetrizeGrid,
         )?;
 
         let ffs: Vec<&FormFactor> = elements
@@ -564,6 +712,31 @@ impl XtalRefinement {
             b_factors,
             occupancies,
             false,
+            self.forward_symmetry,
+        )?;
+        Some(refl_fc)
+    }
+
+    /// Mask-free complex model structure factors computed by splatting every
+    /// atom's full symmetry orbit directly onto the grid, with no grid
+    /// symmetrization. Numerically equivalent to [`Self::forward_fc`] up to
+    /// grid sampling, but imposes no grid-factor divisibility, so it runs on an
+    /// arbitrary (e.g. power-of-two) grid.
+    #[allow(dead_code)] // exercised only by the orbit/pow2 comparison tests
+    pub(crate) fn forward_fc_orbit(
+        &self,
+        positions: &[[f64; 3]],
+        elements: &[Element],
+        b_factors: &[f64],
+        occupancies: &[f64],
+    ) -> Option<Vec<[f32; 2]>> {
+        let (refl_fc, _) = self.model_structure_factors(
+            positions,
+            elements,
+            b_factors,
+            occupancies,
+            false,
+            ForwardSymmetry::SplatFullOrbit,
         )?;
         Some(refl_fc)
     }
@@ -609,6 +782,7 @@ impl XtalRefinement {
             b_factors,
             occupancies,
             false,
+            ForwardSymmetry::SymmetrizeGrid,
         )?;
 
         let rw = targets::r_work(
@@ -647,6 +821,7 @@ impl XtalRefinement {
         b_factors: &[f64],
         occupancies: &[f64],
         with_mask: bool,
+        symmetry: ForwardSymmetry,
     ) -> Option<ReflStructureFactors> {
         let [nu, nv, nw] = self.grid_dims;
 
@@ -662,23 +837,101 @@ impl XtalRefinement {
         let d_min = self.estimate_d_min();
         let blur = density::compute_blur(d_min, 1.5, b_min);
 
+        // The default path splats the ASU and symmetrizes the grid; the orbit
+        // path splats every atom's full orbit and skips symmetrization. The
+        // orbit copies live here so the `SplatParams` borrow outlives the
+        // splat.
+        let orbit_pos: Vec<[f64; 3]>;
+        let orbit_ffs: Vec<&FormFactor>;
+        let orbit_b: Vec<f64>;
+        let orbit_occ: Vec<f64>;
+        let splat_params = match symmetry {
+            ForwardSymmetry::SymmetrizeGrid => density::SplatParams {
+                positions,
+                form_factors: &ffs,
+                b_factors,
+                occupancies,
+                unit_cell: &self.unit_cell,
+                blur,
+            },
+            ForwardSymmetry::SplatFullOrbit => {
+                (orbit_pos, orbit_ffs, orbit_b, orbit_occ) =
+                    self.expand_orbit(positions, &ffs, b_factors, occupancies);
+                density::SplatParams {
+                    positions: &orbit_pos,
+                    form_factors: &orbit_ffs,
+                    b_factors: &orbit_b,
+                    occupancies: &orbit_occ,
+                    unit_cell: &self.unit_cell,
+                    blur,
+                }
+            }
+        };
+
+        // Fully device-resident forward chain: the density grid and complex
+        // spectrum stay on the GPU through splat, FFT, deblur, and extract, and
+        // only the per-reflection Fc vector returns to host. A bulk-solvent
+        // mask needs its own host FFT, so it takes the staged path below.
+        #[cfg(feature = "xtal-gpu")]
+        if self.stencil_backend == StencilBackend::Gpu
+            && symmetry == ForwardSymmetry::SplatFullOrbit
+            && !with_mask
+            && super::gpu::gpu_cfft_grid_supported([nu, nv, nw])
+        {
+            let refl_fc = self.gpu_forward_fc_resident(&splat_params, blur);
+            return Some((refl_fc.clone(), refl_fc));
+        }
+
         let mut grid = DensityGrid {
             data: vec![0.0; nu * nv * nw],
             nu,
             nv,
             nw,
         };
-        let splat_params = density::SplatParams {
-            positions,
-            form_factors: &ffs,
-            b_factors,
-            occupancies,
-            unit_cell: &self.unit_cell,
-            blur,
-        };
-        density::splat_density(&mut grid, &splat_params);
-        density::symmetrize_sum(&mut grid, &self.group_ops);
+        match self.stencil_backend {
+            StencilBackend::Cpu => {
+                density::splat_density(&mut grid, &splat_params);
+            }
+            #[cfg(feature = "xtal-gpu")]
+            StencilBackend::Gpu => {
+                grid =
+                    super::gpu::gpu_splat_density(&splat_params, [nu, nv, nw]);
+            }
+        }
+        if symmetry == ForwardSymmetry::SymmetrizeGrid {
+            density::symmetrize_sum(&mut grid, &self.group_ops);
+        }
 
+        // Mask-carrying GPU orbit path (the mask-free case took the resident
+        // chain above): run the forward FFT on device but read the spectrum
+        // back so the host deblur/extract can share the map's solvent grid.
+        // Every other configuration keeps the CPU FFT so the default pipeline
+        // stays byte-identical. The GPU transform is f32 throughout, so it
+        // ignores `fft_precision`.
+        #[cfg(feature = "xtal-gpu")]
+        let fc_complex = if self.stencil_backend == StencilBackend::Gpu
+            && symmetry == ForwardSymmetry::SplatFullOrbit
+            && super::gpu::gpu_cfft_grid_supported([nu, nv, nw])
+        {
+            let im0 = vec![0.0_f32; grid.data.len()];
+            let (re, im) = super::gpu::gpu_cfft_3d(
+                &grid.data,
+                &im0,
+                [nu, nv, nw],
+                super::gpu::FftMode::Forward,
+            );
+            re.into_iter().zip(im).map(<[f32; 2]>::from).collect()
+        } else {
+            fft_cpu::fft_3d_forward_prec(
+                &grid.data,
+                nu,
+                nv,
+                nw,
+                self.fft_precision,
+            )
+            .ok()?
+        };
+        #[cfg(not(feature = "xtal-gpu"))]
         let fc_complex = fft_cpu::fft_3d_forward_prec(
             &grid.data,
             nu,
@@ -734,6 +987,89 @@ impl XtalRefinement {
                 nw,
             ))
         }
+    }
+
+    /// Drive the device-resident forward chain and return the per-reflection
+    /// complex Fc. Builds the reciprocal-cell constants and the wrapped-Miller
+    /// flat indices the deblur and extract kernels need, then hands the splat
+    /// inputs to [`gpu::gpu_forward_fc_resident`]. Every reflection's Miller
+    /// bin wraps into `[0, nu*nv*nw)`, so each index is in range.
+    #[cfg(feature = "xtal-gpu")]
+    #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+    fn gpu_forward_fc_resident(
+        &self,
+        params: &density::SplatParams<'_>,
+        blur: f64,
+    ) -> Vec<[f32; 2]> {
+        let [nu, nv, nw] = self.grid_dims;
+        let cell = &self.unit_cell;
+        let recip = [
+            cell.ar as f32,
+            cell.br as f32,
+            cell.cr as f32,
+            cell.cos_alphar as f32,
+            cell.cos_betar as f32,
+            cell.cos_gammar as f32,
+        ];
+        let refl_idx: Vec<u32> = self
+            .reflections
+            .iter()
+            .map(|r| {
+                let u = wrap_miller_index(r.h, nu);
+                let v = wrap_miller_index(r.k, nv);
+                let w = wrap_miller_index(r.l, nw);
+                ((u * nv + v) * nw + w) as u32
+            })
+            .collect();
+        let voxel_volume = cell.volume / (nu * nv * nw) as f64;
+        super::gpu::gpu_forward_fc_resident(
+            params,
+            [nu, nv, nw],
+            blur,
+            recip,
+            &refl_idx,
+            voxel_volume,
+        )
+    }
+
+    /// Expand asymmetric-unit atoms to their full symmetry-plus-centering
+    /// orbit, applying the same per-copy transform the reciprocal-space
+    /// gradient gather uses (`sym.apply_to_frac` then centering translation).
+    ///
+    /// Returns per-copy fractional positions, form factors, B-factors, and
+    /// occupancies, each `n_atoms * n_sym * n_cen` long and grouped by source
+    /// atom. Positions may fall outside the unit cell; the splat wraps them.
+    fn expand_orbit<'f>(
+        &self,
+        positions: &[[f64; 3]],
+        form_factors: &[&'f FormFactor],
+        b_factors: &[f64],
+        occupancies: &[f64],
+    ) -> OrbitSplatInputs<'f> {
+        let den = f64::from(DEN);
+        let mult = self.group_ops.sym_ops.len() * self.group_ops.cen_ops.len();
+        let cap = positions.len() * mult;
+        let mut pos = Vec::with_capacity(cap);
+        let mut ffs = Vec::with_capacity(cap);
+        let mut bs = Vec::with_capacity(cap);
+        let mut occs = Vec::with_capacity(cap);
+
+        for j in 0..positions.len() {
+            for sym in &self.group_ops.sym_ops {
+                let sp = sym.apply_to_frac(positions[j]);
+                for cen in &self.group_ops.cen_ops {
+                    pos.push([
+                        sp[0] + f64::from(cen[0]) / den,
+                        sp[1] + f64::from(cen[1]) / den,
+                        sp[2] + f64::from(cen[2]) / den,
+                    ]);
+                    ffs.push(form_factors[j]);
+                    bs.push(b_factors[j]);
+                    occs.push(occupancies[j]);
+                }
+            }
+        }
+        (pos, ffs, bs, occs)
     }
 
     /// Estimate the minimum d-spacing from the reflection data.
@@ -817,6 +1153,140 @@ mod tests {
     use super::super::{space_group, SpaceGroup};
     use super::*;
     use crate::element::Element;
+
+    /// Pearson correlation between two equal-length samples.
+    fn pearson(x: &[f64], y: &[f64]) -> f64 {
+        #[allow(clippy::cast_precision_loss)]
+        let n = x.len() as f64;
+        let mean_x = x.iter().sum::<f64>() / n;
+        let mean_y = y.iter().sum::<f64>() / n;
+        let (mut cov, mut vx, mut vy) = (0.0, 0.0, 0.0);
+        for (&xi, &yi) in x.iter().zip(y.iter()) {
+            let (dx, dy) = (xi - mean_x, yi - mean_y);
+            cov += dx * dy;
+            vx += dx * dx;
+            vy += dy * dy;
+        }
+        let denom = (vx * vy).sqrt();
+        if denom < 1e-30 {
+            0.0
+        } else {
+            cov / denom
+        }
+    }
+
+    /// Splat-full-orbit on a power-of-two grid must reproduce the reference
+    /// ASU-splat + symmetrize-sum structure factors (on the smooth grid) to
+    /// grid-sampling tolerance, for one real structure of the given space
+    /// group. This validates dropping `symmetrize_sum` in favor of splatting
+    /// the full orbit directly, and the power-of-two grid it enables.
+    #[allow(
+        clippy::print_stdout,
+        clippy::print_stderr,
+        clippy::cast_precision_loss,
+        clippy::too_many_lines
+    )]
+    fn assert_orbit_matches_reference(pdb: &str, sg_number: u16) {
+        let Some(case) = crate::testutil::refinement_from_cif_pair(pdb) else {
+            // Fixture data absent in this checkout; nothing to validate.
+            eprintln!("skipping {pdb}: fixture data not found");
+            return;
+        };
+        let mut refinement = case.refinement;
+
+        // Reference: ASU splat + symmetrize on the smooth grid the deposited
+        // pipeline derives.
+        let ref_fc = refinement
+            .forward_fc(
+                &case.positions,
+                &case.elements,
+                &case.b_factors,
+                &case.occupancies,
+            )
+            .expect("reference forward Fc");
+
+        // Power-of-two grid at the same d_min/3 sampling target.
+        let mut d_min = f64::MAX;
+        for r in &refinement.reflections {
+            let s2 = refinement.unit_cell.d_star_sq(r.h, r.k, r.l);
+            if s2 > 0.0 {
+                d_min = d_min.min(1.0 / s2.sqrt());
+            }
+        }
+        let cell = &refinement.unit_cell;
+        let pow2 = crate::testutil::derive_grid_pow2(
+            cell.a,
+            cell.b,
+            cell.c,
+            d_min / 3.0,
+            sg_number,
+        );
+        assert!(
+            pow2.iter().all(|n| n.is_power_of_two()),
+            "grid must be power-of-two, got {pow2:?}"
+        );
+        refinement.grid_dims = pow2;
+
+        // New: splat the full orbit directly on the pow2 grid, no symmetrize.
+        let orbit_fc = refinement
+            .forward_fc_orbit(
+                &case.positions,
+                &case.elements,
+                &case.b_factors,
+                &case.occupancies,
+            )
+            .expect("orbit forward Fc");
+
+        let ref_amp: Vec<f64> = ref_fc
+            .iter()
+            .map(|c| f64::from(c[0]).hypot(f64::from(c[1])))
+            .collect();
+        let orbit_amp: Vec<f64> = orbit_fc
+            .iter()
+            .map(|c| f64::from(c[0]).hypot(f64::from(c[1])))
+            .collect();
+
+        let corr = pearson(&ref_amp, &orbit_amp);
+
+        // Max relative error over the structurally significant reflections
+        // (amplitude above the mean); weak reflections have near-zero
+        // denominators where sampling noise dominates the ratio.
+        let mean_ref = ref_amp.iter().sum::<f64>() / ref_amp.len() as f64;
+        let mut max_rel = 0.0_f64;
+        for (&r, &o) in ref_amp.iter().zip(orbit_amp.iter()) {
+            if r > mean_ref {
+                max_rel = max_rel.max((r - o).abs() / r);
+            }
+        }
+
+        println!(
+            "{pdb} (SG{sg_number}): grid {pow2:?}, n_refl={}, \
+             Pearson(|Fc|)={corr:.6}, max_rel(strong)={max_rel:.4}",
+            ref_amp.len()
+        );
+
+        assert!(corr > 0.99, "{pdb}: |Fc| Pearson {corr:.6} below 0.99");
+        assert!(
+            max_rel < 0.20,
+            "{pdb}: max relative |Fc| error {max_rel:.4} exceeds 0.20"
+        );
+    }
+
+    /// Orthorhombic P2₁2₁2₁ (4 symops, no equal-uv constraint).
+    #[test]
+    fn orbit_pow2_matches_reference_p212121() {
+        assert_orbit_matches_reference("1AKI", 19);
+    }
+
+    /// Tetragonal P4₃2₁2 (8 symops, requires nu == nv): exercises the highest
+    /// orbit multiplicity and the equal-uv branch of the pow2 grid derivation.
+    /// Its 256³ pow2 grid makes it too slow for the default run; invoke with
+    /// `--ignored`.
+    #[test]
+    #[ignore = "256^3 grid: ~40s; run with --ignored"]
+    fn orbit_pow2_matches_reference_p43212() {
+        assert_orbit_matches_reference("1G6X", 96);
+    }
 
     /// Smoke test: construct an XtalRefinement and compute a map.
     #[test]
@@ -1144,12 +1614,7 @@ mod tests {
 
         // f64 references, computed while the default f64 FFT is selected.
         let g_oracle = refinement
-            .b_factor_gradients_direct(
-                &positions,
-                &elements,
-                &b,
-                &occupancies,
-            )
+            .b_factor_gradients_direct(&positions, &elements, &b, &occupancies)
             .expect("direct-sum oracle");
 
         let fd_at = |idx: usize, delta: f64| -> f64 {
@@ -1218,11 +1683,9 @@ mod tests {
         let (corr_fd, maxrel_fd) = stats(&g_f32, &g_fd);
 
         println!(
-            "f32-FFT gradient precision (atoms={}):\n  \
-             vs direct-sum oracle: Pearson={corr_oracle:.6}, \
-             max_rel={maxrel_oracle:.6}\n  \
-             vs finite difference: Pearson={corr_fd:.6}, \
-             max_rel={maxrel_fd:.6}",
+            "f32-FFT gradient precision (atoms={}):\n  vs direct-sum oracle: \
+             Pearson={corr_oracle:.6}, max_rel={maxrel_oracle:.6}\n  vs \
+             finite difference: Pearson={corr_fd:.6}, max_rel={maxrel_fd:.6}",
             b.len()
         );
 
@@ -1237,6 +1700,259 @@ mod tests {
         assert!(
             corr_fd > 0.99,
             "f32 vs finite-difference correlation {corr_fd} below 0.99"
+        );
+    }
+
+    /// The GPU real-space gradient gather agrees with the CPU gather and with
+    /// the f64 direct-sum oracle. Runs on-device (Metal on macOS) for a
+    /// P1 synthetic (orbit size 1) and, when the fixtures are present, a real
+    /// structure whose space group exercises the symmetry-orbit reduction.
+    #[cfg(feature = "xtal-gpu")]
+    #[test]
+    #[allow(
+        clippy::print_stdout,
+        clippy::cast_precision_loss,
+        clippy::too_many_lines
+    )]
+    fn gpu_gather_gradient_matches_cpu_and_oracle() {
+        // Pearson correlation and max relative error (normalized by the
+        // reference's largest magnitude) of `x` against reference `y`.
+        fn stats(x: &[f64], y: &[f64]) -> (f64, f64) {
+            let n = x.len() as f64;
+            let mean_x = x.iter().sum::<f64>() / n;
+            let mean_y = y.iter().sum::<f64>() / n;
+            let (mut cov, mut var_x, mut var_y) = (0.0, 0.0, 0.0);
+            for (a, c) in x.iter().zip(y.iter()) {
+                let dx = a - mean_x;
+                let dy = c - mean_y;
+                cov += dx * dy;
+                var_x += dx * dx;
+                var_y += dy * dy;
+            }
+            let corr = cov / (var_x * var_y).sqrt();
+            let denom =
+                y.iter().map(|v| v.abs()).fold(0.0_f64, f64::max).max(1e-30);
+            let max_rel = x
+                .iter()
+                .zip(y.iter())
+                .map(|(a, c)| (a - c).abs() / denom)
+                .fold(0.0_f64, f64::max);
+            (corr, max_rel)
+        }
+
+        let check = |refinement: &mut XtalRefinement,
+                     positions: &[[f64; 3]],
+                     elements: &[Element],
+                     b: &[f64],
+                     occ: &[f64],
+                     label: &str| {
+            let _map = refinement
+                .compute_map(positions, elements, b, occ)
+                .expect("compute_map populates sigma-A");
+            let fc = refinement
+                .forward_fc(positions, elements, b, occ)
+                .expect("forward_fc");
+
+            refinement.stencil_backend = StencilBackend::Cpu;
+            let g_cpu = refinement
+                .b_factor_gradients_from_fc(&fc, positions, elements, b, occ)
+                .expect("cpu gather");
+            let g_oracle = refinement
+                .b_factor_gradients_direct(positions, elements, b, occ)
+                .expect("direct-sum oracle");
+
+            refinement.stencil_backend = StencilBackend::Gpu;
+            let g_gpu = refinement
+                .b_factor_gradients_from_fc(&fc, positions, elements, b, occ)
+                .expect("gpu gather");
+            refinement.stencil_backend = StencilBackend::Cpu;
+
+            assert_eq!(g_gpu.len(), g_cpu.len(), "one gradient per atom");
+            assert!(
+                g_gpu.iter().all(|v| v.is_finite()),
+                "gpu gather produced a non-finite entry"
+            );
+
+            let (corr_cpu, maxrel_cpu) = stats(&g_gpu, &g_cpu);
+            let (corr_oracle, maxrel_oracle) = stats(&g_gpu, &g_oracle);
+            println!(
+                "gpu gather [{label}] (atoms={}):\n  vs cpu gather: \
+                 Pearson={corr_cpu:.6}, max_rel={maxrel_cpu:.6}\n  vs \
+                 direct-sum oracle: Pearson={corr_oracle:.6}, \
+                 max_rel={maxrel_oracle:.6}",
+                g_gpu.len()
+            );
+            assert!(
+                corr_cpu > 0.99,
+                "gpu vs cpu gather correlation {corr_cpu} below 0.99"
+            );
+            assert!(
+                corr_oracle > 0.99,
+                "gpu vs oracle correlation {corr_oracle} below 0.99"
+            );
+        };
+
+        let case = tiny_synthetic();
+        let mut refinement = case.refinement;
+        let b: Vec<f64> = vec![30.0; case.positions.len()];
+        check(
+            &mut refinement,
+            &case.positions,
+            &case.elements,
+            &b,
+            &case.occupancies,
+            "synthetic-P1",
+        );
+
+        if let Some(rc) = crate::testutil::refinement_from_cif_pair("1AKI") {
+            let mut refinement = rc.refinement;
+            check(
+                &mut refinement,
+                &rc.positions,
+                &rc.elements,
+                &rc.b_factors,
+                &rc.occupancies,
+                "1AKI",
+            );
+        } else {
+            println!("1AKI fixtures missing; skipping real-structure case");
+        }
+    }
+
+    /// End-to-end GPU-FFT pipeline on a real structure: the splat-full-orbit
+    /// forward model on a pow2 grid with the device FFT swapped in for the CPU
+    /// FFT, both forward (structure factors) and inverse (B-factor gradient).
+    ///
+    /// The reference is the same splat-full-orbit model with the CPU FFT, which
+    /// isolates the FFT swap from the forward-model change (the orbit/pow2
+    /// model itself is validated against the deposited symmetrized reference
+    /// elsewhere). The gradient additionally clears the f64 direct-sum oracle.
+    /// Runs on-device (Metal on macOS).
+    #[cfg(feature = "xtal-gpu")]
+    #[test]
+    #[allow(
+        clippy::print_stdout,
+        clippy::cast_precision_loss,
+        clippy::too_many_lines
+    )]
+    fn gpu_fft_pipeline_matches_cpu_and_oracle_1aki() {
+        let Some(rc) = crate::testutil::refinement_from_cif_pair("1AKI") else {
+            println!("1AKI fixtures missing; skipping GPU-FFT pipeline test");
+            return;
+        };
+        let mut refinement = rc.refinement;
+        let (pos, el) = (&rc.positions, &rc.elements);
+        let (b, occ) = (&rc.b_factors, &rc.occupancies);
+
+        // Populate sigma-A/scaling on the deposited grid (SymmetrizeGrid needs
+        // its grid-factor divisibility), and take the f64 direct-sum oracle
+        // there — both are grid-robust reciprocal-space quantities.
+        let _map = refinement
+            .compute_map(pos, el, b, occ)
+            .expect("compute_map populates sigma-A");
+        let g_oracle = refinement
+            .b_factor_gradients_direct(pos, el, b, occ)
+            .expect("direct-sum oracle");
+
+        // Switch to the pow2 orbit grid the GPU FFT accepts.
+        let cell = &refinement.unit_cell;
+        let mut d_min = f64::MAX;
+        for r in &refinement.reflections {
+            let s2 = cell.d_star_sq(r.h, r.k, r.l);
+            if s2 > 0.0 {
+                d_min = d_min.min(1.0 / s2.sqrt());
+            }
+        }
+        let pow2 = crate::testutil::derive_grid_pow2(
+            cell.a,
+            cell.b,
+            cell.c,
+            d_min / 3.0,
+            19,
+        );
+        assert!(
+            pow2.iter().all(|n| n.is_power_of_two()),
+            "grid must be power-of-two, got {pow2:?}"
+        );
+        refinement.grid_dims = pow2;
+
+        // Reference: CPU splat + CPU FFT on the orbit/pow2 model.
+        refinement.stencil_backend = StencilBackend::Cpu;
+        let ref_fc = refinement
+            .forward_fc_orbit(pos, el, b, occ)
+            .expect("cpu-fft orbit forward");
+        let g_ref = refinement
+            .b_factor_gradients_from_fc(&ref_fc, pos, el, b, occ)
+            .expect("cpu-fft inverse gradient");
+
+        // GPU-FFT path: GPU splat + GPU FFT, forward and inverse.
+        refinement.stencil_backend = StencilBackend::Gpu;
+        let gpu_fc = refinement
+            .forward_fc_orbit(pos, el, b, occ)
+            .expect("gpu-fft orbit forward");
+        let g_gpu = refinement
+            .b_factor_gradients_from_fc(&gpu_fc, pos, el, b, occ)
+            .expect("gpu-fft inverse gradient");
+        refinement.stencil_backend = StencilBackend::Cpu;
+
+        assert!(
+            gpu_fc.iter().all(|c| c[0].is_finite() && c[1].is_finite()),
+            "gpu-fft Fc produced a non-finite entry"
+        );
+        assert!(
+            g_gpu.iter().all(|v| v.is_finite()),
+            "gpu-fft gradient produced a non-finite entry"
+        );
+
+        // Structure-factor agreement (GPU FFT vs CPU FFT, same model).
+        let amp = |fc: &[[f32; 2]]| -> Vec<f64> {
+            fc.iter()
+                .map(|c| f64::from(c[0]).hypot(f64::from(c[1])))
+                .collect()
+        };
+        let (ref_amp, gpu_amp) = (amp(&ref_fc), amp(&gpu_fc));
+        let corr_fc = pearson(&gpu_amp, &ref_amp);
+        let mean_ref = ref_amp.iter().sum::<f64>() / ref_amp.len() as f64;
+        let mut maxrel_fc = 0.0_f64;
+        for (&g, &r) in gpu_amp.iter().zip(&ref_amp) {
+            if r > mean_ref {
+                maxrel_fc = maxrel_fc.max((g - r).abs() / r);
+            }
+        }
+
+        // Gradient agreement: max relative error normalized by the reference's
+        // largest magnitude, the same convention the gather test uses.
+        let corr = |x: &[f64], y: &[f64]| pearson(x, y);
+        let corr_grad_ref = corr(&g_gpu, &g_ref);
+        let corr_grad_oracle = corr(&g_gpu, &g_oracle);
+        let denom = g_oracle
+            .iter()
+            .map(|v| v.abs())
+            .fold(0.0_f64, f64::max)
+            .max(1e-30);
+        let maxrel_grad = g_gpu
+            .iter()
+            .zip(&g_oracle)
+            .map(|(a, c)| (a - c).abs() / denom)
+            .fold(0.0_f64, f64::max);
+
+        println!(
+            "gpu-fft pipeline [1AKI]: grid {pow2:?}, n_refl={}\n  |Fc| \
+             GPU-FFT vs CPU-FFT: Pearson={corr_fc:.6}, \
+             max_rel(strong)={maxrel_fc:.3e}\n  gradient GPU-FFT vs CPU-FFT: \
+             Pearson={corr_grad_ref:.6}\n  gradient GPU-FFT vs direct-sum \
+             oracle: Pearson={corr_grad_oracle:.6}, max_rel={maxrel_grad:.3e}",
+            ref_amp.len()
+        );
+
+        assert!(
+            corr_fc > 0.999,
+            "|Fc| GPU-FFT vs CPU-FFT Pearson {corr_fc:.6} below 0.999"
+        );
+        assert!(
+            corr_grad_oracle > 0.99,
+            "gradient GPU-FFT vs oracle Pearson {corr_grad_oracle:.6} below \
+             0.99"
         );
     }
 

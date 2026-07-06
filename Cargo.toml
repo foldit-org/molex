@@ -44,6 +44,7 @@ argmin = { version = "0.11", optional = true }
 argmin-math = { version = "0.5", optional = true, default-features = false, features = ["vec"] }
 serde = { version = "1", features = ["derive"], optional = true }
 specta = { version = "=2.0.0-rc.25", features = ["derive"], optional = true }
+cubecl = { version = "0.10", features = ["wgpu"], optional = true }
 
 [build-dependencies]
 cbindgen = { version = "0.29", optional = true }
@@ -59,6 +60,9 @@ serde = ["dep:serde"]
 specta = ["dep:specta"]
 c-api = ["dep:cbindgen"]
 xtal = ["dep:rustfft", "dep:argmin", "dep:argmin-math"]
+# Real-space density splat on the GPU via CubeCL/wgpu (Metal on macOS). Default
+# off; selectable per refinement through `XtalRefinement::splat_backend`.
+xtal-gpu = ["xtal", "dep:cubecl"]
 # Exposes the shared xtal test/bench fixtures (`crate::testutil`) as `pub`, so
 # the external bench and integration-test crates can build refinements. Implies
 # `xtal`, which owns the types the fixtures construct.

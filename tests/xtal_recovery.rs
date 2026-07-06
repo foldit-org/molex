@@ -136,8 +136,8 @@ fn compare_precision(pdb: &str, min_b_corr: f64) {
     let [nu, nv, nw] = f32_run.grid;
     let delta = f32_run.b_corr - f64_run.b_corr;
     println!(
-        "RECOVERY {pdb}: atoms={} grid={nu}x{nv}x{nw} \
-         F64_pearson={:.4} F32_pearson={:.4} delta={delta:+.4}",
+        "RECOVERY {pdb}: atoms={} grid={nu}x{nv}x{nw} F64_pearson={:.4} \
+         F32_pearson={:.4} delta={delta:+.4}",
         f32_run.n_atoms, f64_run.b_corr, f32_run.b_corr,
     );
 }
@@ -173,31 +173,36 @@ fn recovers_2oxy() {
 }
 
 #[test]
-#[ignore = "real-structure recovery, f32 FFT (~16s: F64+F32); run with --ignored"]
+#[ignore = "real-structure recovery, f32 FFT (~16s: F64+F32); run with \
+            --ignored"]
 fn recovers_1aki_f32() {
     compare_precision("1AKI", 0.3);
 }
 
 #[test]
-#[ignore = "real-structure recovery, f32 FFT (~16s: F64+F32); run with --ignored"]
+#[ignore = "real-structure recovery, f32 FFT (~16s: F64+F32); run with \
+            --ignored"]
 fn recovers_4xdx_f32() {
     compare_precision("4XDX", 0.3);
 }
 
 #[test]
-#[ignore = "real-structure recovery, f32 FFT (~16s: F64+F32); run with --ignored"]
+#[ignore = "real-structure recovery, f32 FFT (~16s: F64+F32); run with \
+            --ignored"]
 fn recovers_6e6o_f32() {
     compare_precision("6E6O", 0.3);
 }
 
 #[test]
-#[ignore = "real-structure recovery, f32 FFT (~16s: F64+F32); run with --ignored"]
+#[ignore = "real-structure recovery, f32 FFT (~16s: F64+F32); run with \
+            --ignored"]
 fn recovers_7kom_f32() {
     compare_precision("7KOM", 0.3);
 }
 
 #[test]
-#[ignore = "real-structure recovery, f32 FFT (~16s: F64+F32); run with --ignored"]
+#[ignore = "real-structure recovery, f32 FFT (~16s: F64+F32); run with \
+            --ignored"]
 fn recovers_2oxy_f32() {
     compare_precision("2OXY", 0.3);
 }

@@ -202,9 +202,7 @@ fn fft_3d_forward_generic<T: FftNum + FromPrimitive + ToPrimitive>(
 
     Ok(buf
         .iter()
-        .map(|c| {
-            [c.re.to_f32().unwrap_or(0.0), c.im.to_f32().unwrap_or(0.0)]
-        })
+        .map(|c| [c.re.to_f32().unwrap_or(0.0), c.im.to_f32().unwrap_or(0.0)])
         .collect())
 }
 

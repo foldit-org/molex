@@ -421,6 +421,17 @@ pub fn round_up_to_smooth(exact: f64) -> usize {
     result
 }
 
+/// Round a floating-point value up to the nearest power of two (minimum 1).
+#[must_use]
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+pub fn round_up_to_pow2(exact: f64) -> usize {
+    let n = exact.ceil() as i64;
+    if n <= 1 {
+        return 1;
+    }
+    (n as u64).next_power_of_two() as usize
+}
+
 // ── UnitCell ──────────────────────────────────────────────────────────
 
 /// Crystallographic unit cell with precomputed orthogonalization and

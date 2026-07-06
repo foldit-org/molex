@@ -38,6 +38,7 @@ mod types;
 // ── Public re-exports ───────────────────────────────────────────────
 
 pub use bessel::log_bessel_i0;
+pub use fft_cpu::FftPrecision;
 pub use form_factors::FormFactor;
 pub use map_coefficients::MapCoefficients;
 use ndarray::Array3;

@@ -14,10 +14,12 @@
     clippy::expect_used,
     clippy::panic,
     clippy::suboptimal_flops,
-    clippy::cast_precision_loss
+    clippy::cast_precision_loss,
+    clippy::print_stdout
 )]
 
 use molex::testutil::refinement_from_cif_pair;
+use molex::xtal::FftPrecision;
 
 /// Pearson correlation between two equal-length samples.
 fn pearson(x: &[f64], y: &[f64]) -> f64 {
@@ -40,13 +42,28 @@ fn pearson(x: &[f64], y: &[f64]) -> f64 {
     }
 }
 
-/// Flatten all B-factors to their mean, refine up from that start, and assert
-/// recovery: R-work drops and the refined B-factors correlate with the
-/// deposited ones above `min_b_corr`.
-fn assert_recovers(pdb: &str, min_b_corr: f64) {
+/// Outcome of one recovery run, enough to tabulate scale and quality.
+struct Recovery {
+    /// Pearson correlation of refined vs deposited B-factors.
+    b_corr: f64,
+    /// Non-hydrogen atom count (recovery vector length).
+    n_atoms: usize,
+    /// FFT grid dimensions `[nu, nv, nw]`.
+    grid: [usize; 3],
+}
+
+/// Flatten all B-factors to their mean, refine up from that start under the
+/// given FFT precision, and assert recovery: R-work drops and the refined
+/// B-factors correlate with the deposited ones above `min_b_corr`.
+fn assert_recovers_prec(
+    pdb: &str,
+    min_b_corr: f64,
+    precision: FftPrecision,
+) -> Recovery {
     let case = refinement_from_cif_pair(pdb)
         .unwrap_or_else(|| panic!("load {pdb} from tests/data"));
     let mut refinement = case.refinement;
+    refinement.fft_precision = precision;
     let positions = case.positions;
     let elements = case.elements;
     let deposited_b = case.b_factors;
@@ -88,8 +105,40 @@ fn assert_recovers(pdb: &str, min_b_corr: f64) {
 
     let b_corr = pearson(&deposited_b, &refined_b);
     assert!(
+        b_corr.is_finite(),
+        "{pdb}: recovered B-correlation is non-finite ({b_corr}) under \
+         {precision:?}"
+    );
+    assert!(
         b_corr > min_b_corr,
-        "{pdb}: recovered B-correlation {b_corr:.3} below {min_b_corr}"
+        "{pdb}: recovered B-correlation {b_corr:.3} below {min_b_corr} under \
+         {precision:?}"
+    );
+
+    Recovery {
+        b_corr,
+        n_atoms: deposited_b.len(),
+        grid: refinement.grid_dims,
+    }
+}
+
+/// F64 recovery: the default-precision bar the F32 path is measured against.
+fn assert_recovers(pdb: &str, min_b_corr: f64) {
+    let _ = assert_recovers_prec(pdb, min_b_corr, FftPrecision::F64);
+}
+
+/// Run the same recovery under F64 then F32, print a comparison row, and hold
+/// F32 to the same `min_b_corr` bar. The F64 pass is a per-structure reload, so
+/// the two runs are independent.
+fn compare_precision(pdb: &str, min_b_corr: f64) {
+    let f64_run = assert_recovers_prec(pdb, min_b_corr, FftPrecision::F64);
+    let f32_run = assert_recovers_prec(pdb, min_b_corr, FftPrecision::F32);
+    let [nu, nv, nw] = f32_run.grid;
+    let delta = f32_run.b_corr - f64_run.b_corr;
+    println!(
+        "RECOVERY {pdb}: atoms={} grid={nu}x{nv}x{nw} \
+         F64_pearson={:.4} F32_pearson={:.4} delta={delta:+.4}",
+        f32_run.n_atoms, f64_run.b_corr, f32_run.b_corr,
     );
 }
 
@@ -121,4 +170,34 @@ fn recovers_7kom() {
 #[ignore = "real-structure recovery (~8s); run with --ignored"]
 fn recovers_2oxy() {
     assert_recovers("2OXY", 0.3);
+}
+
+#[test]
+#[ignore = "real-structure recovery, f32 FFT (~16s: F64+F32); run with --ignored"]
+fn recovers_1aki_f32() {
+    compare_precision("1AKI", 0.3);
+}
+
+#[test]
+#[ignore = "real-structure recovery, f32 FFT (~16s: F64+F32); run with --ignored"]
+fn recovers_4xdx_f32() {
+    compare_precision("4XDX", 0.3);
+}
+
+#[test]
+#[ignore = "real-structure recovery, f32 FFT (~16s: F64+F32); run with --ignored"]
+fn recovers_6e6o_f32() {
+    compare_precision("6E6O", 0.3);
+}
+
+#[test]
+#[ignore = "real-structure recovery, f32 FFT (~16s: F64+F32); run with --ignored"]
+fn recovers_7kom_f32() {
+    compare_precision("7KOM", 0.3);
+}
+
+#[test]
+#[ignore = "real-structure recovery, f32 FFT (~16s: F64+F32); run with --ignored"]
+fn recovers_2oxy_f32() {
+    compare_precision("2OXY", 0.3);
 }

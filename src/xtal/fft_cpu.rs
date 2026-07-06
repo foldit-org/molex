@@ -47,7 +47,7 @@ impl std::error::Error for FftError {}
 ///
 /// The public grids remain `f32` regardless of this setting; only the complex
 /// working buffer and the `rustfft` planner are affected. `F64` is the default
-/// and matches [`fft_3d_forward`] / [`fft_3d_inverse`] exactly. `F32` mirrors
+/// and matches `fft_3d_forward` / `fft_3d_inverse` exactly. `F32` mirrors
 /// the precision available on the GPU path (WebGPU has no `f64`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FftPrecision {

@@ -24,7 +24,7 @@ mod xtal_atoms_bench {
     use criterion::{
         black_box, BenchmarkGroup, BenchmarkId, Criterion, Throughput,
     };
-    #[cfg(feature = "xtal-gpu")]
+    #[cfg(all(feature = "xtal", feature = "gpu"))]
     use molex::testutil::prepared_synthetic_native_orbit;
     use molex::testutil::{
         gradient_once_with, prepared_synthetic, PreparedCase,
@@ -67,7 +67,7 @@ mod xtal_atoms_bench {
             group.throughput(Throughput::Elements(n as u64));
             bench_arm(&mut group, "cpu", n, &mut case, StencilBackend::Cpu);
 
-            #[cfg(feature = "xtal-gpu")]
+            #[cfg(all(feature = "xtal", feature = "gpu"))]
             {
                 // Full resident GPU pipeline (GPU splat + mixed-radix FFT +
                 // resident forward/inverse + GPU gather) on the same native

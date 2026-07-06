@@ -14,11 +14,13 @@ use super::{
 use crate::element::Element;
 
 /// Minimum allowed B-factor (Ų). The softplus transform in
-/// [`super::bfactor_refine`] maps every optimizer variable to `B >= B_MIN`.
+/// `super::bfactor_refine` maps every optimizer variable to `B >= B_MIN`.
+#[cfg(feature = "minimization")]
 pub(crate) const B_MIN: f64 = 2.0;
 
 /// Maximum allowed B-factor (Ų). Bounds the initial guess handed to the
 /// optimizer; the softplus transform itself is unbounded above.
+#[cfg(feature = "minimization")]
 pub(crate) const B_MAX: f64 = 300.0;
 
 /// Per-reflection complex structure factors for the model and its bulk-solvent
@@ -55,7 +57,7 @@ pub(crate) enum ForwardSymmetry {
 /// decision.
 ///
 /// Defaults to [`StencilBackend::Cpu`]; the GPU variant exists only when the
-/// `xtal-gpu` feature is enabled and produces results within `f32` tolerance
+/// `gpu` feature is enabled and produces results within `f32` tolerance
 /// of the CPU path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum StencilBackend {
@@ -63,7 +65,7 @@ pub enum StencilBackend {
     #[default]
     Cpu,
     /// Run the stencils on the GPU via CubeCL on the wgpu backend.
-    #[cfg(feature = "xtal-gpu")]
+    #[cfg(all(feature = "xtal", feature = "gpu"))]
     Gpu,
 }
 
@@ -107,7 +109,7 @@ pub struct XtalRefinement {
     pub fft_precision: fft_cpu::FftPrecision,
     /// Backend for the real-space grid stencils (density splat and gradient
     /// gather). Defaults to [`StencilBackend::Cpu`]; set to `Gpu` (requires
-    /// the `xtal-gpu` feature) to run both on the GPU without changing the
+    /// the `gpu` feature) to run both on the GPU without changing the
     /// default behavior.
     pub stencil_backend: StencilBackend,
     /// How the forward model realizes space-group symmetry before the FFT.
@@ -330,7 +332,7 @@ impl XtalRefinement {
         // coefficient grid and gradient map kept on the GPU. Only the small
         // per-reflection scatter data is uploaded; the CPU pack/FFT below never
         // runs. Every other configuration keeps the host path unchanged.
-        #[cfg(feature = "xtal-gpu")]
+        #[cfg(all(feature = "xtal", feature = "gpu"))]
         if self.stencil_backend == StencilBackend::Gpu
             && super::gpu::gpu_cfft_grid_supported([nu, nv, nw])
         {
@@ -483,7 +485,7 @@ impl XtalRefinement {
                 }
                 grad
             }
-            #[cfg(feature = "xtal-gpu")]
+            #[cfg(all(feature = "xtal", feature = "gpu"))]
             StencilBackend::Gpu => {
                 // Per-copy inputs are atom-major so the GPU wrapper reduces
                 // each atom's copies as a contiguous chunk.
@@ -872,7 +874,7 @@ impl XtalRefinement {
         // spectrum stay on the GPU through splat, FFT, deblur, and extract, and
         // only the per-reflection Fc vector returns to host. A bulk-solvent
         // mask needs its own host FFT, so it takes the staged path below.
-        #[cfg(feature = "xtal-gpu")]
+        #[cfg(all(feature = "xtal", feature = "gpu"))]
         if self.stencil_backend == StencilBackend::Gpu
             && symmetry == ForwardSymmetry::SplatFullOrbit
             && !with_mask
@@ -892,7 +894,7 @@ impl XtalRefinement {
             StencilBackend::Cpu => {
                 density::splat_density(&mut grid, &splat_params);
             }
-            #[cfg(feature = "xtal-gpu")]
+            #[cfg(all(feature = "xtal", feature = "gpu"))]
             StencilBackend::Gpu => {
                 grid =
                     super::gpu::gpu_splat_density(&splat_params, [nu, nv, nw]);
@@ -908,7 +910,7 @@ impl XtalRefinement {
         // Every other configuration keeps the CPU FFT so the default pipeline
         // stays byte-identical. The GPU transform is f32 throughout, so it
         // ignores `fft_precision`.
-        #[cfg(feature = "xtal-gpu")]
+        #[cfg(all(feature = "xtal", feature = "gpu"))]
         let fc_complex = if self.stencil_backend == StencilBackend::Gpu
             && symmetry == ForwardSymmetry::SplatFullOrbit
             && super::gpu::gpu_cfft_grid_supported([nu, nv, nw])
@@ -931,7 +933,7 @@ impl XtalRefinement {
             )
             .ok()?
         };
-        #[cfg(not(feature = "xtal-gpu"))]
+        #[cfg(not(all(feature = "xtal", feature = "gpu")))]
         let fc_complex = fft_cpu::fft_3d_forward_prec(
             &grid.data,
             nu,
@@ -994,7 +996,7 @@ impl XtalRefinement {
     /// flat indices the deblur and extract kernels need, then hands the splat
     /// inputs to [`gpu::gpu_forward_fc_resident`]. Every reflection's Miller
     /// bin wraps into `[0, nu*nv*nw)`, so each index is in range.
-    #[cfg(feature = "xtal-gpu")]
+    #[cfg(all(feature = "xtal", feature = "gpu"))]
     #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
     fn gpu_forward_fc_resident(
         &self,
@@ -1707,7 +1709,7 @@ mod tests {
     /// the f64 direct-sum oracle. Runs on-device (Metal on macOS) for a
     /// P1 synthetic (orbit size 1) and, when the fixtures are present, a real
     /// structure whose space group exercises the symmetry-orbit reduction.
-    #[cfg(feature = "xtal-gpu")]
+    #[cfg(all(feature = "xtal", feature = "gpu"))]
     #[test]
     #[allow(
         clippy::print_stdout,
@@ -1828,7 +1830,7 @@ mod tests {
     /// model itself is validated against the deposited symmetrized reference
     /// elsewhere). The gradient additionally clears the f64 direct-sum oracle.
     /// Runs on-device (Metal on macOS).
-    #[cfg(feature = "xtal-gpu")]
+    #[cfg(all(feature = "xtal", feature = "gpu"))]
     #[test]
     #[allow(
         clippy::print_stdout,

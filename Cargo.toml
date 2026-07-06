@@ -59,10 +59,17 @@ extension-module = ["pyo3/extension-module"]
 serde = ["dep:serde"]
 specta = ["dep:specta"]
 c-api = ["dep:cbindgen"]
-xtal = ["dep:rustfft", "dep:argmin", "dep:argmin-math"]
-# Real-space density splat on the GPU via CubeCL/wgpu (Metal on macOS). Default
-# off; selectable per refinement through `XtalRefinement::splat_backend`.
-xtal-gpu = ["xtal", "dep:cubecl"]
+xtal = ["dep:rustfft"]
+# B-factor (and future wiggle) minimization via argmin. Orthogonal to `xtal` so
+# the SF-CIF parse + model-density path compiles without pulling a solver; the
+# argmin-math `vec` backend the solver needs is requested at the dep line below.
+minimization = ["dep:argmin", "dep:argmin-math"]
+# Real-space density stencils / FFT on the GPU via CubeCL/wgpu (Metal on macOS).
+# Orthogonal to `xtal` so it can back non-xtal kernels later. Default off;
+# selectable per refinement through `XtalRefinement::stencil_backend`.
+gpu = ["dep:cubecl"]
+# Convenience alias for the crystallographic GPU path.
+xtal-gpu = ["xtal", "gpu"]
 # Exposes the shared xtal test/bench fixtures (`crate::testutil`) as `pub`, so
 # the external bench and integration-test crates can build refinements. Implies
 # `xtal`, which owns the types the fixtures construct.

@@ -7,9 +7,14 @@
 //! recovered B-factors must still correlate with the deposited ones above 0.3.
 //!
 //! On-device (Metal on macOS) and slow, so every case is `#[ignore]`d; run with
-//! `cargo test --features xtal-gpu,testutil -- --ignored`.
+//! `cargo test --features xtal,gpu,minimization,testutil -- --ignored`.
 
-#![cfg(all(feature = "xtal-gpu", feature = "testutil"))]
+#![cfg(all(
+    feature = "xtal",
+    feature = "gpu",
+    feature = "minimization",
+    feature = "testutil"
+))]
 #![allow(clippy::print_stdout, clippy::unwrap_used)]
 
 use molex::testutil::recover_b_factors_full_gpu;

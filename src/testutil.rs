@@ -499,7 +499,7 @@ pub fn gradient_once_with(
 
 /// Outcome of a full-GPU-pipeline B-factor recovery run on a deposited
 /// structure.
-#[cfg(feature = "xtal-gpu")]
+#[cfg(all(feature = "xtal", feature = "gpu", feature = "minimization"))]
 pub struct GpuRecovery {
     /// Pearson correlation of refined vs deposited B-factors.
     pub b_corr: f64,
@@ -522,7 +522,7 @@ pub struct GpuRecovery {
 /// and reports the Pearson correlation of the refined B-factors against the
 /// deposited ones (the recovery quality). Returns `None` if the fixture is
 /// absent.
-#[cfg(feature = "xtal-gpu")]
+#[cfg(all(feature = "xtal", feature = "gpu", feature = "minimization"))]
 #[must_use]
 pub fn recover_b_factors_full_gpu(pdb: &str) -> Option<GpuRecovery> {
     let case = refinement_from_cif_pair(pdb)?;
@@ -574,7 +574,7 @@ pub fn recover_b_factors_full_gpu(pdb: &str) -> Option<GpuRecovery> {
 
 /// Pearson correlation between two equal-length samples; `0.0` when either has
 /// no variance.
-#[cfg(feature = "xtal-gpu")]
+#[cfg(all(feature = "xtal", feature = "gpu", feature = "minimization"))]
 fn pearson_pair(x: &[f64], y: &[f64]) -> f64 {
     let n = x.len() as f64;
     let mean_x = x.iter().sum::<f64>() / n;

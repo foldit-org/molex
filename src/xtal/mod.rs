@@ -23,11 +23,12 @@
 #![allow(clippy::suboptimal_flops)]
 
 mod bessel;
+#[cfg(feature = "minimization")]
 mod bfactor_refine;
 mod density;
 mod fft_cpu;
 mod form_factors;
-#[cfg(feature = "xtal-gpu")]
+#[cfg(all(feature = "xtal", feature = "gpu"))]
 mod gpu;
 mod map_coefficients;
 mod refinement;
@@ -47,6 +48,7 @@ pub use fft_cpu::FftPrecision;
 pub use form_factors::{form_factor, FormFactor};
 pub use map_coefficients::MapCoefficients;
 use ndarray::Array3;
+#[cfg(all(feature = "xtal", any(test, feature = "testutil")))]
 pub(crate) use refinement::ForwardSymmetry;
 pub use refinement::{StencilBackend, XtalRefinement};
 pub use scaling::ScalingResult;

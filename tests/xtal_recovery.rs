@@ -5,10 +5,10 @@
 //! R-work and recovers a positive correlation with the deposited B-factors.
 //!
 //! Even the cheapest real structure takes several seconds, so every case is
-//! `#[ignore]`d; run them with `cargo test --features xtal,testutil --
-//! --ignored`.
+//! `#[ignore]`d; run them with `cargo test --features
+//! xtal,minimization,testutil -- --ignored`.
 
-#![cfg(all(feature = "xtal", feature = "testutil"))]
+#![cfg(all(feature = "xtal", feature = "minimization", feature = "testutil"))]
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,

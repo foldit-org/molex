@@ -59,6 +59,10 @@ pub struct XtalRefinement {
     pub scaling: ScalingResult,
     /// Current sigma-A estimates.
     pub sigma_a: Option<SigmaAResult>,
+    /// Internal working precision for the forward/inverse 3-D FFTs. Defaults to
+    /// [`fft_cpu::FftPrecision::F64`]; set to `F32` to measure the GPU path's
+    /// precision without changing the default numerical behavior.
+    pub fft_precision: fft_cpu::FftPrecision,
 }
 
 impl XtalRefinement {
@@ -106,6 +110,7 @@ impl XtalRefinement {
                 b_sol: 46.0,
             },
             sigma_a: None,
+            fft_precision: fft_cpu::FftPrecision::F64,
         }
     }
 
@@ -313,7 +318,14 @@ impl XtalRefinement {
         // The inverse FFT's built-in 1/N cancels the N/V of the real-space
         // sum-to-integral discretization; only V/2 (Friedel doubling over the
         // stored hemisphere) remains as the overall scale.
-        let g_map = fft_cpu::fft_3d_inverse(&d_grid_f32, nu, nv, nw).ok()?;
+        let g_map = fft_cpu::fft_3d_inverse_prec(
+            &d_grid_f32,
+            nu,
+            nv,
+            nw,
+            self.fft_precision,
+        )
+        .ok()?;
 
         // Per-atom reverse splat over the full symmetry/centering orbit, the
         // same orbit expansion the forward model and the direct sum use.
@@ -667,8 +679,14 @@ impl XtalRefinement {
         density::splat_density(&mut grid, &splat_params);
         density::symmetrize_sum(&mut grid, &self.group_ops);
 
-        let fc_complex =
-            fft_cpu::fft_3d_forward(&grid.data, nu, nv, nw).ok()?;
+        let fc_complex = fft_cpu::fft_3d_forward_prec(
+            &grid.data,
+            nu,
+            nv,
+            nw,
+            self.fft_precision,
+        )
+        .ok()?;
         let mut fc_deblurred = fc_complex;
         density::deblur_fc(
             &mut fc_deblurred,
@@ -690,8 +708,14 @@ impl XtalRefinement {
                 solvent_mask::DEFAULT_R_PROBE,
                 solvent_mask::DEFAULT_R_SHRINK,
             );
-            let fmask_complex =
-                fft_cpu::fft_3d_forward(&mask.data, nu, nv, nw).ok()?;
+            let fmask_complex = fft_cpu::fft_3d_forward_prec(
+                &mask.data,
+                nu,
+                nv,
+                nw,
+                self.fft_precision,
+            )
+            .ok()?;
             Some(self.extract_reflection_values(
                 &fc_deblurred,
                 &fmask_complex,
@@ -1090,6 +1114,129 @@ mod tests {
         assert!(
             max_rel < 0.05,
             "max relative discrepancy {max_rel} exceeds 5%"
+        );
+    }
+
+    /// Measure the B-factor gradient computed through the **f32**-internal FFT
+    /// against the f64 direct-sum oracle and against a central finite
+    /// difference of the (f64) maximum-likelihood target. The GPU path is
+    /// f32-only, so this quantifies whether the refinement gradient survives
+    /// f32 FFT precision. Prints Pearson correlation and max relative error.
+    #[test]
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::print_stdout,
+        clippy::too_many_lines
+    )]
+    fn f32_fft_gradient_precision_report() {
+        let case = tiny_synthetic();
+        let mut refinement = case.refinement;
+        let positions = case.positions;
+        let elements = case.elements;
+        let occupancies = case.occupancies;
+        let b: Vec<f64> = vec![30.0; positions.len()];
+
+        // sigma-A is populated at the default f64 precision and frozen for
+        // every evaluation below.
+        let _map = refinement
+            .compute_map(&positions, &elements, &b, &occupancies)
+            .expect("compute_map");
+
+        // f64 references, computed while the default f64 FFT is selected.
+        let g_oracle = refinement
+            .b_factor_gradients_direct(
+                &positions,
+                &elements,
+                &b,
+                &occupancies,
+            )
+            .expect("direct-sum oracle");
+
+        let fd_at = |idx: usize, delta: f64| -> f64 {
+            let mut b_plus = b.clone();
+            let mut b_minus = b.clone();
+            b_plus[idx] += delta;
+            b_minus[idx] -= delta;
+            let t_plus = refinement
+                .maximum_likelihood_target_for_b(
+                    &positions,
+                    &elements,
+                    &b_plus,
+                    &occupancies,
+                )
+                .expect("target(+delta)");
+            let t_minus = refinement
+                .maximum_likelihood_target_for_b(
+                    &positions,
+                    &elements,
+                    &b_minus,
+                    &occupancies,
+                )
+                .expect("target(-delta)");
+            (t_plus - t_minus) / (2.0 * delta)
+        };
+        let g_fd: Vec<f64> = (0..b.len()).map(|i| fd_at(i, 0.05)).collect();
+
+        // Switch to the GPU-equivalent f32 FFT and recompute the analytic
+        // FFT-map gradient through it.
+        refinement.fft_precision = fft_cpu::FftPrecision::F32;
+        let g_f32 = refinement
+            .b_factor_gradients(&positions, &elements, &b, &occupancies)
+            .expect("f32 gradient");
+        assert_eq!(g_f32.len(), b.len(), "one gradient per atom");
+
+        // Pearson correlation and max relative error of `x` against reference
+        // `y`, the max-rel normalized by the reference's largest magnitude
+        // (same convention as `fft_gradient_matches_direct_sum`).
+        let stats = |x: &[f64], y: &[f64]| -> (f64, f64) {
+            let n = x.len() as f64;
+            let mean_x = x.iter().sum::<f64>() / n;
+            let mean_y = y.iter().sum::<f64>() / n;
+            let mut cov = 0.0;
+            let mut var_x = 0.0;
+            let mut var_y = 0.0;
+            for (a, c) in x.iter().zip(y.iter()) {
+                let dx = a - mean_x;
+                let dy = c - mean_y;
+                cov += dx * dy;
+                var_x += dx * dx;
+                var_y += dy * dy;
+            }
+            let corr = cov / (var_x * var_y).sqrt();
+
+            let denom =
+                y.iter().map(|v| v.abs()).fold(0.0_f64, f64::max).max(1e-30);
+            let max_rel = x
+                .iter()
+                .zip(y.iter())
+                .map(|(a, c)| (a - c).abs() / denom)
+                .fold(0.0_f64, f64::max);
+            (corr, max_rel)
+        };
+
+        let (corr_oracle, maxrel_oracle) = stats(&g_f32, &g_oracle);
+        let (corr_fd, maxrel_fd) = stats(&g_f32, &g_fd);
+
+        println!(
+            "f32-FFT gradient precision (atoms={}):\n  \
+             vs direct-sum oracle: Pearson={corr_oracle:.6}, \
+             max_rel={maxrel_oracle:.6}\n  \
+             vs finite difference: Pearson={corr_fd:.6}, \
+             max_rel={maxrel_fd:.6}",
+            b.len()
+        );
+
+        assert!(
+            g_f32.iter().all(|v| v.is_finite()),
+            "f32 gradient produced a non-finite entry"
+        );
+        assert!(
+            corr_oracle > 0.99,
+            "f32 vs oracle correlation {corr_oracle} below 0.99"
+        );
+        assert!(
+            corr_fd > 0.99,
+            "f32 vs finite-difference correlation {corr_fd} below 0.99"
         );
     }
 

@@ -5,8 +5,11 @@
 //! performs three batched 1-D FFT passes (w, v, u axes) which is
 //! mathematically equivalent to a single 3-D DFT.
 
+use std::sync::Arc;
+
 use rustfft::num_complex::Complex;
-use rustfft::FftPlanner;
+use rustfft::num_traits::{FromPrimitive, ToPrimitive};
+use rustfft::{Fft, FftNum, FftPlanner};
 
 // ---------------------------------------------------------------------------
 // Error type
@@ -40,6 +43,21 @@ impl std::fmt::Display for FftError {
 
 impl std::error::Error for FftError {}
 
+/// Internal working precision for the 3-D FFT passes.
+///
+/// The public grids remain `f32` regardless of this setting; only the complex
+/// working buffer and the `rustfft` planner are affected. `F64` is the default
+/// and matches [`fft_3d_forward`] / [`fft_3d_inverse`] exactly. `F32` mirrors
+/// the precision available on the GPU path (WebGPU has no `f64`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FftPrecision {
+    /// Upcast to `Complex<f64>` internally (default, highest accuracy).
+    #[default]
+    F64,
+    /// Keep the working buffer in `Complex<f32>` (GPU-equivalent precision).
+    F32,
+}
+
 // ---------------------------------------------------------------------------
 // Forward 3-D FFT  (real → complex)
 // ---------------------------------------------------------------------------
@@ -66,33 +84,7 @@ pub fn fft_3d_forward(
     nv: usize,
     nw: usize,
 ) -> Result<Vec<[f32; 2]>, FftError> {
-    let n_total = nu * nv * nw;
-    if grid.len() != n_total {
-        return Err(FftError::DimensionMismatch {
-            expected: n_total,
-            got: grid.len(),
-        });
-    }
-
-    // Working buffer in f64 complex.
-    let mut buf: Vec<Complex<f64>> = grid
-        .iter()
-        .map(|&v| Complex::new(f64::from(v), 0.0))
-        .collect();
-
-    let mut planner = FftPlanner::<f64>::new();
-
-    // Pass 1 – along w (innermost, contiguous).
-    pass_forward(&mut planner, &mut buf, nu * nv, nw, 1);
-
-    // Pass 2 – along v (stride = nw).
-    pass_forward(&mut planner, &mut buf, nu * nw, nv, nw);
-
-    // Pass 3 – along u (stride = nv * nw).
-    let stride_u = nv * nw;
-    pass_forward(&mut planner, &mut buf, nv * nw, nu, stride_u);
-
-    Ok(complex_to_f32_pairs(&buf))
+    fft_3d_forward_generic::<f64>(grid, nu, nv, nw)
 }
 
 // ---------------------------------------------------------------------------
@@ -123,6 +115,109 @@ pub fn fft_3d_inverse(
     nv: usize,
     nw: usize,
 ) -> Result<Vec<f32>, FftError> {
+    fft_3d_inverse_generic::<f64>(data, nu, nv, nw)
+}
+
+// ---------------------------------------------------------------------------
+// Precision-selectable variants
+// ---------------------------------------------------------------------------
+
+/// Forward 3-D FFT at the requested internal [`FftPrecision`].
+///
+/// `FftPrecision::F64` delegates to [`fft_3d_forward`] (byte-for-byte the
+/// default path); `FftPrecision::F32` runs the passes in `Complex<f32>`.
+///
+/// # Errors
+///
+/// Returns [`FftError::DimensionMismatch`] when `grid.len() != nu * nv * nw`.
+pub fn fft_3d_forward_prec(
+    grid: &[f32],
+    nu: usize,
+    nv: usize,
+    nw: usize,
+    precision: FftPrecision,
+) -> Result<Vec<[f32; 2]>, FftError> {
+    match precision {
+        FftPrecision::F64 => fft_3d_forward(grid, nu, nv, nw),
+        FftPrecision::F32 => fft_3d_forward_generic::<f32>(grid, nu, nv, nw),
+    }
+}
+
+/// Inverse 3-D FFT at the requested internal [`FftPrecision`].
+///
+/// `FftPrecision::F64` delegates to [`fft_3d_inverse`] (byte-for-byte the
+/// default path); `FftPrecision::F32` runs the passes in `Complex<f32>`.
+///
+/// # Errors
+///
+/// Returns [`FftError::DimensionMismatch`] when `data.len() != nu * nv * nw`.
+pub fn fft_3d_inverse_prec(
+    data: &[[f32; 2]],
+    nu: usize,
+    nv: usize,
+    nw: usize,
+    precision: FftPrecision,
+) -> Result<Vec<f32>, FftError> {
+    match precision {
+        FftPrecision::F64 => fft_3d_inverse(data, nu, nv, nw),
+        FftPrecision::F32 => fft_3d_inverse_generic::<f32>(data, nu, nv, nw),
+    }
+}
+
+/// Forward 3-D FFT with the working buffer parameterized over the float type.
+///
+/// Mirrors [`fft_3d_forward`] but planned in `Complex<T>`; instantiated at
+/// `T = f32` for the GPU-equivalent path. Input and output stay `f32`.
+fn fft_3d_forward_generic<T: FftNum + FromPrimitive + ToPrimitive>(
+    grid: &[f32],
+    nu: usize,
+    nv: usize,
+    nw: usize,
+) -> Result<Vec<[f32; 2]>, FftError> {
+    let n_total = nu * nv * nw;
+    if grid.len() != n_total {
+        return Err(FftError::DimensionMismatch {
+            expected: n_total,
+            got: grid.len(),
+        });
+    }
+
+    let mut buf: Vec<Complex<T>> = grid
+        .iter()
+        .map(|&v| {
+            Complex::new(T::from_f32(v).unwrap_or_else(T::zero), T::zero())
+        })
+        .collect();
+
+    let mut planner = FftPlanner::<T>::new();
+
+    let fft_w = planner.plan_fft_forward(nw);
+    run_pass(&fft_w, &mut buf, nu * nv, nw, 1);
+
+    let fft_v = planner.plan_fft_forward(nv);
+    run_pass(&fft_v, &mut buf, nu * nw, nv, nw);
+
+    let fft_u = planner.plan_fft_forward(nu);
+    run_pass(&fft_u, &mut buf, nv * nw, nu, nv * nw);
+
+    Ok(buf
+        .iter()
+        .map(|c| {
+            [c.re.to_f32().unwrap_or(0.0), c.im.to_f32().unwrap_or(0.0)]
+        })
+        .collect())
+}
+
+/// Inverse 3-D FFT with the working buffer parameterized over the float type.
+///
+/// Mirrors [`fft_3d_inverse`] but planned in `Complex<T>`; instantiated at
+/// `T = f32` for the GPU-equivalent path. Applies the same `1/N` normalization.
+fn fft_3d_inverse_generic<T: FftNum + FromPrimitive + ToPrimitive>(
+    data: &[[f32; 2]],
+    nu: usize,
+    nv: usize,
+    nw: usize,
+) -> Result<Vec<f32>, FftError> {
     let n_total = nu * nv * nw;
     if data.len() != n_total {
         return Err(FftError::DimensionMismatch {
@@ -131,89 +226,61 @@ pub fn fft_3d_inverse(
         });
     }
 
-    let mut buf: Vec<Complex<f64>> = data
+    let mut buf: Vec<Complex<T>> = data
         .iter()
-        .map(|pair| Complex::new(f64::from(pair[0]), f64::from(pair[1])))
+        .map(|pair| {
+            Complex::new(
+                T::from_f32(pair[0]).unwrap_or_else(T::zero),
+                T::from_f32(pair[1]).unwrap_or_else(T::zero),
+            )
+        })
         .collect();
 
-    let mut planner = FftPlanner::<f64>::new();
+    let mut planner = FftPlanner::<T>::new();
 
-    // Inverse passes in reverse axis order (u, v, w); order does not
-    // mathematically matter, but we mirror the forward convention.
-    let stride_u = nv * nw;
-    pass_inverse(&mut planner, &mut buf, nv * nw, nu, stride_u);
+    let fft_u = planner.plan_fft_inverse(nu);
+    run_pass(&fft_u, &mut buf, nv * nw, nu, nv * nw);
 
-    pass_inverse(&mut planner, &mut buf, nu * nw, nv, nw);
+    let fft_v = planner.plan_fft_inverse(nv);
+    run_pass(&fft_v, &mut buf, nu * nw, nv, nw);
 
-    pass_inverse(&mut planner, &mut buf, nu * nv, nw, 1);
+    let fft_w = planner.plan_fft_inverse(nw);
+    run_pass(&fft_w, &mut buf, nu * nv, nw, 1);
 
-    // Normalize.
     #[allow(clippy::cast_precision_loss)]
-    let inv_n = 1.0 / n_total as f64;
-    #[allow(clippy::cast_possible_truncation)]
-    let result = buf.iter().map(|c| (c.re * inv_n) as f32).collect();
-    Ok(result)
+    let inv_n = T::from_f64(1.0 / n_total as f64).unwrap_or_else(T::zero);
+    Ok(buf
+        .iter()
+        .map(|c| (c.re * inv_n).to_f32().unwrap_or(0.0))
+        .collect())
+}
+
+/// Execute a batched 1-D FFT along one axis for a preplanned `Complex<T>`
+/// transform. Direction is fixed by the plan passed in.
+fn run_pass<T: FftNum>(
+    fft: &Arc<dyn Fft<T>>,
+    buf: &mut [Complex<T>],
+    n_batches: usize,
+    len: usize,
+    stride: usize,
+) {
+    let mut scratch = vec![Complex::new(T::zero(), T::zero()); len];
+
+    for batch in 0..n_batches {
+        let start = batch_start(batch, stride, len);
+        for i in 0..len {
+            scratch[i] = buf[start + i * stride];
+        }
+        fft.process(&mut scratch);
+        for i in 0..len {
+            buf[start + i * stride] = scratch[i];
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/// Execute a batched 1-D forward FFT along one axis.
-///
-/// * `n_batches` – how many independent 1-D transforms to perform.
-/// * `len` – length of each 1-D transform.
-/// * `stride` – element stride between consecutive entries of a single 1-D
-///   slice (1 for contiguous).
-///
-/// The caller is responsible for ensuring that all indices accessed are within
-/// `buf`.
-fn pass_forward(
-    planner: &mut FftPlanner<f64>,
-    buf: &mut [Complex<f64>],
-    n_batches: usize,
-    len: usize,
-    stride: usize,
-) {
-    let fft = planner.plan_fft_forward(len);
-    let mut scratch = vec![Complex::new(0.0, 0.0); len];
-
-    for batch in 0..n_batches {
-        let start = batch_start(batch, stride, len);
-        // Gather.
-        for i in 0..len {
-            scratch[i] = buf[start + i * stride];
-        }
-        fft.process(&mut scratch);
-        // Scatter.
-        for i in 0..len {
-            buf[start + i * stride] = scratch[i];
-        }
-    }
-}
-
-/// Execute a batched 1-D inverse FFT along one axis.
-fn pass_inverse(
-    planner: &mut FftPlanner<f64>,
-    buf: &mut [Complex<f64>],
-    n_batches: usize,
-    len: usize,
-    stride: usize,
-) {
-    let fft = planner.plan_fft_inverse(len);
-    let mut scratch = vec![Complex::new(0.0, 0.0); len];
-
-    for batch in 0..n_batches {
-        let start = batch_start(batch, stride, len);
-        for i in 0..len {
-            scratch[i] = buf[start + i * stride];
-        }
-        fft.process(&mut scratch);
-        for i in 0..len {
-            buf[start + i * stride] = scratch[i];
-        }
-    }
-}
 
 /// Compute the starting linear index for a given batch.
 ///
@@ -237,13 +304,6 @@ const fn batch_start(batch: usize, stride: usize, len: usize) -> usize {
         let inner = batch % stride;
         outer * block + inner
     }
-}
-
-/// Convert a slice of `Complex<f64>` to a `Vec<[f32; 2]>`.
-#[must_use]
-#[allow(clippy::cast_possible_truncation)]
-fn complex_to_f32_pairs(data: &[Complex<f64>]) -> Vec<[f32; 2]> {
-    data.iter().map(|c| [c.re as f32, c.im as f32]).collect()
 }
 
 // ---------------------------------------------------------------------------

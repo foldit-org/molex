@@ -497,6 +497,335 @@ pub fn recover_b_factors_full_gpu(pdb: &str) -> Option<GpuRecovery> {
     })
 }
 
+/// Which grid / forward-model / stencil configuration a [`dump_map`] run uses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MapMode {
+    /// Production CPU path: five-smooth `derive_grid` plus grid
+    /// symmetrization.
+    CpuDefault,
+    /// Power-of-two orbit grid, full-orbit splat, CPU stencil backend. Same
+    /// grid and forward model as [`MapMode::GpuOrbit`], so the two isolate
+    /// the CPU-vs-GPU stencil backend at a fixed grid.
+    CpuOrbit,
+    /// Power-of-two orbit grid, full-orbit splat, GPU stencil backend (the
+    /// blessed full-device map path). Requires the `gpu` feature.
+    GpuOrbit,
+}
+
+/// A 2mFo-DFc map plus its R-factors and cell metadata, produced by
+/// [`dump_map`] from a coordinate CIF and its structure-factor CIF.
+pub struct MapDump {
+    /// Flattened density values in row-major `(u, v, w)` order.
+    pub data: Vec<f32>,
+    /// Grid dimensions `[nu, nv, nw]`.
+    pub dims: [usize; 3],
+    /// Unit cell `[a, b, c, alpha, beta, gamma]`.
+    pub cell: [f64; 6],
+    /// International Tables space-group number.
+    pub sg_number: u16,
+    /// R-work at the deposited coordinates/B-factors.
+    pub r_work: f64,
+    /// R-free at the deposited coordinates/B-factors.
+    pub r_free: f64,
+    /// R-work with the bulk-solvent term switched off (`k_sol = 0`).
+    pub r_work_no_solvent: f64,
+    /// Fitted overall scale, bulk-solvent scale, bulk-solvent B, and isotropic
+    /// B: `(k_overall, k_sol, b_sol, b_iso)`.
+    pub scaling_params: (f64, f64, f64, f64),
+}
+
+/// Build a refinement from a coordinate CIF and structure-factor CIF (both as
+/// strings), compute the 2mFo-DFc map and the R-factors at the deposited model,
+/// and return them under the requested [`MapMode`].
+///
+/// The structure factors go through the resident-data public constructor
+/// [`ExperimentalData::from_sf_cif_with_spacegroup`]; the atoms are the
+/// non-hydrogen `atom_site` records fractionalized through the cell. Returns
+/// `None` if either CIF fails to parse, the space group is unsupported, or the
+/// map pipeline fails. `GpuOrbit` returns `None` when the `gpu` feature is off.
+#[must_use]
+pub fn dump_map(
+    coord_cif: &str,
+    sf_cif: &str,
+    sg_number: u16,
+    free_fraction: f64,
+    seed: u64,
+    mode: MapMode,
+) -> Option<MapDump> {
+    let data = ExperimentalData::from_sf_cif_with_spacegroup(
+        sf_cif,
+        sg_number,
+        free_fraction,
+        seed,
+    )?;
+    let mut refinement = XtalRefinement::from_experimental_data(&data);
+
+    let coord_doc = parse(coord_cif).ok()?;
+    let coord_block = coord_doc.blocks.first()?;
+    let coord_data = CoordinateData::try_from(coord_block).ok()?;
+    let atoms: Vec<&AtomSite> = coord_data
+        .atoms
+        .iter()
+        .filter(|&a| a.element() != Element::H)
+        .collect();
+
+    let positions: Vec<[f64; 3]> = atoms
+        .iter()
+        .map(|a| refinement.unit_cell.fractionalize([a.x, a.y, a.z]))
+        .collect();
+    let elements: Vec<Element> = atoms.iter().map(|&a| a.element()).collect();
+    let b_factors: Vec<f64> = atoms.iter().map(|a| a.b_factor).collect();
+    let occupancies: Vec<f64> = atoms.iter().map(|a| a.occupancy).collect();
+
+    match mode {
+        MapMode::CpuDefault => {
+            refinement.stencil_backend = StencilBackend::Cpu;
+        }
+        MapMode::CpuOrbit | MapMode::GpuOrbit => {
+            let d_min = data.d_min();
+            let cell = &refinement.unit_cell;
+            refinement.grid_dims = derive_grid_pow2(
+                cell.a,
+                cell.b,
+                cell.c,
+                d_min / 3.0,
+                sg_number,
+            );
+            refinement.forward_symmetry = ForwardSymmetry::SplatFullOrbit;
+            refinement.stencil_backend = match mode {
+                MapMode::GpuOrbit => {
+                    #[cfg(feature = "gpu")]
+                    {
+                        StencilBackend::Gpu
+                    }
+                    #[cfg(not(feature = "gpu"))]
+                    {
+                        return None;
+                    }
+                }
+                _ => StencilBackend::Cpu,
+            };
+        }
+    }
+
+    let grid = refinement.compute_map(
+        &positions,
+        &elements,
+        &b_factors,
+        &occupancies,
+    )?;
+    let (r_work, r_free) = refinement.r_factors(
+        &positions,
+        &elements,
+        &b_factors,
+        &occupancies,
+    )?;
+
+    let scaling_params = (
+        refinement.scaling.k_overall,
+        refinement.scaling.k_sol,
+        refinement.scaling.b_sol,
+        refinement.scaling.b_iso,
+    );
+
+    // R-work with the bulk-solvent term switched off: the no-solvent baseline.
+    let saved = refinement.scaling.clone();
+    refinement.scaling.k_sol = 0.0;
+    let (r_work_no_solvent, _) = refinement.r_factors(
+        &positions,
+        &elements,
+        &b_factors,
+        &occupancies,
+    )?;
+
+    // Diagnostic: R with a plain least-squares single scale (no aniso, no
+    // solvent). k_ls = Σ(fo·|fc|)/Σ|fc|² over the working set.
+    let refl_fc = refinement.forward_fc(
+        &positions,
+        &elements,
+        &b_factors,
+        &occupancies,
+    )?;
+    let mut num = 0.0_f64;
+    let mut den = 0.0_f64;
+    for (r, c) in refinement.reflections.iter().zip(refl_fc.iter()) {
+        if r.free_flag {
+            continue;
+        }
+        let fca = f64::from(c[0]).hypot(f64::from(c[1]));
+        num += f64::from(r.f_obs) * fca;
+        den += fca * fca;
+    }
+    let k_ls = if den > 0.0 { num / den } else { 1.0 };
+    refinement.scaling.k_overall = k_ls;
+    refinement.scaling.k_sol = 0.0;
+    refinement.scaling.b_sol = 46.0;
+    refinement.scaling.b_iso = 0.0;
+    let (r_work_naive, _) = refinement.r_factors(
+        &positions,
+        &elements,
+        &b_factors,
+        &occupancies,
+    )?;
+    eprintln!(
+        "diag: k_ls={k_ls:.5}  R(single-scale, no aniso, no \
+         solvent)={r_work_naive:.4}"
+    );
+
+    // Isolate the fitted k_overall alone (fitted scale, B off, solvent off).
+    refinement.scaling = saved.clone();
+    refinement.scaling.k_sol = 0.0;
+    refinement.scaling.b_iso = 0.0;
+    let (r_fitted_k_only, _) = refinement.r_factors(
+        &positions,
+        &elements,
+        &b_factors,
+        &occupancies,
+    )?;
+    // Isolate the fitted isotropic B alone (LS scale, fitted B, solvent off).
+    refinement.scaling = saved.clone();
+    refinement.scaling.k_overall = k_ls;
+    refinement.scaling.k_sol = 0.0;
+    let (r_ls_with_biso, _) = refinement.r_factors(
+        &positions,
+        &elements,
+        &b_factors,
+        &occupancies,
+    )?;
+    eprintln!(
+        "diag: R(fitted k_overall={:.5}, B off, solvent \
+         off)={r_fitted_k_only:.4}",
+        saved.k_overall
+    );
+    eprintln!("diag: R(k_ls, fitted B_iso, solvent off)={r_ls_with_biso:.4}");
+
+    refinement.scaling = saved;
+
+    let cell = &refinement.unit_cell;
+    Some(MapDump {
+        data: grid.data,
+        dims: [grid.nu, grid.nv, grid.nw],
+        cell: [cell.a, cell.b, cell.c, cell.alpha, cell.beta, cell.gamma],
+        sg_number,
+        r_work,
+        r_free,
+        r_work_no_solvent,
+        scaling_params,
+    })
+}
+
+/// Per-reflection forward Fcalc for the gemmi-fidelity diagnostic harness.
+///
+/// Throwaway scaffolding: exposes molex's mask-free protein-only `refl_fc`
+/// (the same quantity `forward_fc` returns, in `refinement.reflections` order)
+/// so an external script can compare it reflection-by-reflection against
+/// gemmi's analytic IT92 Fcalc. Carries the grid dims and d_min the run used so
+/// the report can state the grid Nyquist against the data resolution.
+pub struct FcDump {
+    /// Miller index per reflection, parallel to `fc`.
+    pub hkl: Vec<[i32; 3]>,
+    /// Protein-only, mask-free complex Fc `(re, im)` on the physical amplitude
+    /// scale, parallel to `hkl`.
+    pub fc: Vec<[f32; 2]>,
+    /// Grid dimensions `[nu, nv, nw]` the forward model ran on.
+    pub grid_dims: [usize; 3],
+    /// Unit cell `[a, b, c, alpha, beta, gamma]`.
+    pub cell: [f64; 6],
+    /// The data's minimum d-spacing (highest-resolution reflection).
+    pub d_min: f64,
+}
+
+/// Build a refinement from a coordinate CIF and structure-factor CIF and return
+/// the mask-free protein-only forward Fc at the deposited model, under the
+/// requested [`MapMode`]. Mirrors [`dump_map`]'s construction but emits the
+/// per-reflection Fc instead of a real-space map.
+#[must_use]
+pub fn dump_fc(
+    coord_cif: &str,
+    sf_cif: &str,
+    sg_number: u16,
+    free_fraction: f64,
+    seed: u64,
+    mode: MapMode,
+) -> Option<FcDump> {
+    let data = ExperimentalData::from_sf_cif_with_spacegroup(
+        sf_cif,
+        sg_number,
+        free_fraction,
+        seed,
+    )?;
+    let d_min = data.d_min();
+    let mut refinement = XtalRefinement::from_experimental_data(&data);
+
+    let coord_doc = parse(coord_cif).ok()?;
+    let coord_block = coord_doc.blocks.first()?;
+    let coord_data = CoordinateData::try_from(coord_block).ok()?;
+    let atoms: Vec<&AtomSite> = coord_data
+        .atoms
+        .iter()
+        .filter(|&a| a.element() != Element::H)
+        .collect();
+
+    let positions: Vec<[f64; 3]> = atoms
+        .iter()
+        .map(|a| refinement.unit_cell.fractionalize([a.x, a.y, a.z]))
+        .collect();
+    let elements: Vec<Element> = atoms.iter().map(|&a| a.element()).collect();
+    let b_factors: Vec<f64> = atoms.iter().map(|a| a.b_factor).collect();
+    let occupancies: Vec<f64> = atoms.iter().map(|a| a.occupancy).collect();
+
+    match mode {
+        MapMode::CpuDefault => {
+            refinement.stencil_backend = StencilBackend::Cpu;
+        }
+        MapMode::CpuOrbit | MapMode::GpuOrbit => {
+            let cell = &refinement.unit_cell;
+            refinement.grid_dims = derive_grid_pow2(
+                cell.a,
+                cell.b,
+                cell.c,
+                d_min / 3.0,
+                sg_number,
+            );
+            refinement.forward_symmetry = ForwardSymmetry::SplatFullOrbit;
+            refinement.stencil_backend = match mode {
+                MapMode::GpuOrbit => {
+                    #[cfg(feature = "gpu")]
+                    {
+                        StencilBackend::Gpu
+                    }
+                    #[cfg(not(feature = "gpu"))]
+                    {
+                        return None;
+                    }
+                }
+                _ => StencilBackend::Cpu,
+            };
+        }
+    }
+
+    let fc = refinement.forward_fc(
+        &positions,
+        &elements,
+        &b_factors,
+        &occupancies,
+    )?;
+
+    let hkl: Vec<[i32; 3]> = refinement
+        .reflections
+        .iter()
+        .map(|r| [r.h, r.k, r.l])
+        .collect();
+    let cell = &refinement.unit_cell;
+    Some(FcDump {
+        hkl,
+        fc,
+        grid_dims: refinement.grid_dims,
+        cell: [cell.a, cell.b, cell.c, cell.alpha, cell.beta, cell.gamma],
+        d_min,
+    })
+}
+
 /// Pearson correlation between two equal-length samples; `0.0` when either has
 /// no variance.
 #[cfg(all(feature = "xtal", feature = "gpu", feature = "minimization"))]

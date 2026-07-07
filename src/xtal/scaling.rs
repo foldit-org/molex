@@ -1,71 +1,34 @@
-//! Levenberg-Marquardt scaling of calculated structure factors against
-//! observed.
+//! Staged bounded scaling of calculated structure factors against observed.
 //!
-//! Implements anisotropic scaling with bulk-solvent correction:
+//! Fits four scalars — overall scale, isotropic B, and the bulk-solvent
+//! `(k_sol, b_sol)` — to the model
 //!
 //! ```text
-//! |F_total(h)| = k_overall * kaniso(h) * |Fc(h) + k_sol * exp(-B_sol * s²) * Fmask(h)|
+//! |F_model(h)| = k_overall * exp(-B_iso * s²)
+//!                * |Fc(h) + k_sol * exp(-b_sol * s²) * Fmask(h)|
 //! ```
 //!
-//! where `kaniso(h) = exp(-¼ hᵀ B* h)` and `s² = d*²/4`.
+//! with `s² = d*²/4`. The fit runs in stages: a closed-form Wilson estimate of
+//! `(k_overall, B_iso)` with solvent off, a bounded grid scan plus local refine
+//! of `(k_sol, b_sol)` at fixed scale, and an optional joint polish. Every
+//! stage is box-clamped and only accepted when it lowers the weighted residual,
+//! so the result never scores worse than the Wilson-only solution.
 
-use super::types::{CrystalSystem, Reflection, UnitCell};
+use super::types::{Reflection, UnitCell};
 
 // ── Result type ──────────────────────────────────────────────────────
 
-/// Result of the bulk-solvent + anisotropic scaling fit.
+/// Result of the bulk-solvent + isotropic scaling fit.
 #[derive(Debug, Clone)]
 pub struct ScalingResult {
     /// Overall isotropic scale factor.
     pub k_overall: f64,
-    /// Anisotropic B-tensor components `[B11, B22, B33, B12, B13, B23]`.
-    pub b_aniso: [f64; 6],
+    /// Isotropic B-factor (Å²) applied as `exp(-B_iso * s²)`.
+    pub b_iso: f64,
     /// Bulk-solvent scale factor.
     pub k_sol: f64,
     /// Bulk-solvent B factor (Å²).
     pub b_sol: f64,
-}
-
-// ── Anisotropic constraint basis ─────────────────────────────────────
-
-/// Returns the independent anisotropic B-tensor basis vectors for the given
-/// crystal system.
-///
-/// Each basis vector is a 6-component array `[B11, B22, B33, B12, B13, B23]`.
-/// The number of vectors equals the number of free anisotropic parameters.
-#[must_use]
-#[allow(clippy::trivially_copy_pass_by_ref)]
-pub fn aniso_constraint_basis(system: &CrystalSystem) -> Vec<[f64; 6]> {
-    match system {
-        CrystalSystem::Triclinic => vec![
-            [1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0, 0.0, 0.0, 0.0],
-            [0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
-            [0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
-            [0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
-            [0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
-        ],
-        CrystalSystem::Monoclinic => vec![
-            [1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0, 0.0, 0.0, 0.0],
-            [0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
-            [0.0, 0.0, 0.0, 0.0, 1.0, 0.0], // B13
-        ],
-        CrystalSystem::Orthorhombic => vec![
-            [1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0, 0.0, 0.0, 0.0],
-            [0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
-        ],
-        CrystalSystem::Tetragonal
-        | CrystalSystem::Trigonal
-        | CrystalSystem::Hexagonal => vec![
-            [1.0, 1.0, 0.0, 0.0, 0.0, 0.0], // B11 = B22
-            [0.0, 0.0, 1.0, 0.0, 0.0, 0.0], // B33
-        ],
-        CrystalSystem::Cubic => vec![
-            [1.0, 1.0, 1.0, 0.0, 0.0, 0.0], // B11 = B22 = B33
-        ],
-    }
 }
 
 // ── Wilson plot ───────────────────────────────────────────────────────
@@ -126,7 +89,7 @@ pub fn wilson_estimate(
 
     // Clamp to physically reasonable values.
     let k_clamped = k.clamp(0.01, 100.0);
-    let b_clamped = b_iso.clamp(1.0, 200.0);
+    let b_clamped = b_iso.clamp(B_ISO_LO, B_ISO_HI);
 
     (k_clamped, b_clamped)
 }
@@ -185,16 +148,46 @@ fn solve_spd(a: &[f64], b: &[f64], n: usize) -> Option<Vec<f64>> {
     Some(x)
 }
 
-// ── Levenberg-Marquardt scaling ──────────────────────────────────────
+// ── Staged bounded fit ───────────────────────────────────────────────
 
-/// Maximum number of LM iterations.
-const MAX_ITER: usize = 100;
 /// Convergence threshold on relative change in weighted sum of squared
 /// residuals.
 const REL_TOL: f64 = 1e-5;
+/// Maximum LM iterations per refine stage.
+const MAX_LM_ITER: usize = 40;
 
-/// Fit the anisotropic scale, overall scale, and bulk-solvent parameters to
-/// the observed data using Levenberg-Marquardt optimization.
+/// Box bounds. `k_overall` is only floored; the others are two-sided.
+const K_OVERALL_MIN: f64 = 1e-6;
+const B_ISO_LO: f64 = 1.0;
+const B_ISO_HI: f64 = 200.0;
+const K_SOL_LO: f64 = 0.0;
+const K_SOL_HI: f64 = 0.6;
+const B_SOL_LO: f64 = 10.0;
+const B_SOL_HI: f64 = 200.0;
+
+/// Bulk-solvent grid-scan nodes (canonical coarse bracket around the physical
+/// basin) used to seed the local `(k_sol, b_sol)` refine.
+const K_SOL_GRID: [f64; 13] = [
+    0.0, 0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60,
+];
+const B_SOL_GRID: [f64; 12] = [
+    10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0, 100.0, 110.0, 120.0,
+];
+
+/// The four fitted scalars in optimizer order: `[k_overall, b_iso, k_sol,
+/// b_sol]`.
+type Params = [f64; 4];
+
+/// Clamp a parameter vector into the physical box.
+fn clamp_params(p: &mut Params) {
+    p[0] = p[0].max(K_OVERALL_MIN);
+    p[1] = p[1].clamp(B_ISO_LO, B_ISO_HI);
+    p[2] = p[2].clamp(K_SOL_LO, K_SOL_HI);
+    p[3] = p[3].clamp(B_SOL_LO, B_SOL_HI);
+}
+
+/// Fit the overall scale, isotropic B, and bulk-solvent parameters to the
+/// observed data with a staged, box-bounded protocol.
 ///
 /// # Arguments
 ///
@@ -203,399 +196,280 @@ const REL_TOL: f64 = 1e-5;
 /// * `f_mask` - complex bulk-solvent mask structure factors `[re, im]` per
 ///   reflection
 /// * `unit_cell` - crystallographic unit cell
-/// * `system` - crystal system for anisotropic constraint
 ///
 /// Only working-set reflections (where `free_flag == false`) contribute to the
-/// fit.
-#[allow(
-    clippy::too_many_lines,
-    clippy::trivially_copy_pass_by_ref,
-    clippy::suboptimal_flops
-)]
+/// fit. The returned result never scores a worse weighted residual than the
+/// closed-form Wilson (scale + isotropic B, solvent off) solution.
+#[must_use]
 pub fn fit_scaling(
     reflections: &[Reflection],
     fc: &[[f32; 2]],
     f_mask: &[[f32; 2]],
     unit_cell: &UnitCell,
-    system: &CrystalSystem,
 ) -> ScalingResult {
-    let basis = aniso_constraint_basis(system);
-    let n_basis = basis.len();
-    // Parameter vector: [k_overall, k_sol, B_sol, d_0 .. d_{n_basis-1}]
-    let n_params = 3 + n_basis;
-
-    // Collect working-set indices and precompute per-reflection quantities.
+    // Working set and per-reflection stol2.
     let mut work_idx: Vec<usize> = Vec::new();
     for (i, refl) in reflections.iter().enumerate() {
         if !refl.free_flag && refl.sigma_f > 0.0 {
             work_idx.push(i);
         }
     }
-
-    // Precompute stol2 and hkl as f64 for each reflection.
     let stol2: Vec<f64> = reflections
         .iter()
         .map(|r| unit_cell.d_star_sq(r.h, r.k, r.l) * 0.25)
         .collect();
 
-    // Wilson estimate for initial values.
+    // Stage A: Wilson scale + isotropic B, solvent off. Closed-form and stable.
     let fc_amps: Vec<f64> = fc
         .iter()
         .map(|c| f64::from(c[0]).hypot(f64::from(c[1])))
         .collect();
-    // Only k_init is used; the anisotropic B* is seeded at zero below, so the
-    // Wilson B_iso is intentionally discarded.
-    let (k_init, _b_iso_init) =
-        wilson_estimate(reflections, &fc_amps, unit_cell);
+    let (k_init, b_init) = wilson_estimate(reflections, &fc_amps, unit_cell);
 
-    // Build initial parameter vector.
-    let mut params = vec![0.0_f64; n_params];
-    params[0] = k_init;
-    params[1] = 0.35; // k_sol
-    params[2] = 46.0; // B_sol
+    let mut best: Params = [k_init, b_init, 0.0, 46.0];
+    let mut best_wssr =
+        compute_wssr(&best, reflections, fc, f_mask, &stol2, &work_idx);
 
-    // Start the anisotropic B* at zero. `kaniso` uses raw Miller
-    // indices, so each B* component carries the reciprocal-cell metric and is
-    // tiny; projecting a raw isotropic B_iso/3 onto the basis is
-    // dimensionally wrong (off by the a*² metric factor) and drives kaniso to
-    // ~0 at init, annihilating the mid/high-resolution Fc before the LM even
-    // starts. Seed aniso at zero (kaniso ≈ 1) and let the LM refine it last,
-    // matching gemmi/phenix.
-    for j in 0..n_basis {
-        params[3 + j] = 0.0;
+    // Stage B: bulk solvent by bounded grid scan (scale/B fixed), then a local
+    // bounded LM refine over (k_sol, b_sol) only.
+    let mut grid_best = best;
+    let mut grid_wssr = best_wssr;
+    for &ks in &K_SOL_GRID {
+        for &bs in &B_SOL_GRID {
+            let cand: Params = [best[0], best[1], ks, bs];
+            let w =
+                compute_wssr(&cand, reflections, fc, f_mask, &stol2, &work_idx);
+            if w < grid_wssr {
+                grid_wssr = w;
+                grid_best = cand;
+            }
+        }
     }
-
-    // LM loop.
-    let mut lambda = 1e-3_f64;
-    let mut prev_wssr = compute_wssr(
-        &params,
+    let (b_params, b_wssr) = lm_refine(
+        grid_best,
+        [false, false, true, true],
         reflections,
         fc,
         f_mask,
         &stol2,
         &work_idx,
-        &basis,
     );
-    let mut converge_count = 0u32;
+    if b_wssr < best_wssr {
+        best = b_params;
+        best_wssr = b_wssr;
+    }
 
-    for _iter in 0..MAX_ITER {
-        // Build J^T W J and J^T W r.
-        let (jtj, jtr, wssr) = build_normal_equations(
-            &params,
-            reflections,
-            fc,
-            f_mask,
-            &stol2,
-            &work_idx,
-            &basis,
-            n_params,
-        );
+    // Stage C: joint polish over all four, box-clamped each step. Seeded near
+    // the basin by A/B, so it only sharpens.
+    let (c_params, c_wssr) = lm_refine(
+        best,
+        [true, true, true, true],
+        reflections,
+        fc,
+        f_mask,
+        &stol2,
+        &work_idx,
+    );
+    if c_wssr < best_wssr {
+        best = c_params;
+    }
 
-        // Apply damping: (J^T W J + lambda * diag) delta = J^T W r.
-        // Damp each parameter relative to its own diagonal (standard Marquardt
-        // scaling) with only a tiny absolute floor so a zero diagonal still
-        // gets a regularizer.
-        let mut jtj_damped = jtj.clone();
-        for i in 0..n_params {
-            let diag = jtj[i * n_params + i];
-            jtj_damped[i * n_params + i] = diag + lambda * diag.max(1e-12);
-        }
+    ScalingResult {
+        k_overall: best[0],
+        b_iso: best[1],
+        k_sol: best[2],
+        b_sol: best[3],
+    }
+}
 
-        let Some(delta) = solve_spd(&jtj_damped, &jtr, n_params) else {
-            // If Cholesky fails, increase damping and retry.
-            lambda *= 10.0;
-            continue;
-        };
+/// Bounded Levenberg-Marquardt refine over the parameters flagged in `active`.
+///
+/// Frozen parameters keep their seed value; every accepted step is box-clamped.
+/// Returns the refined parameters and their weighted residual. The seed's
+/// residual is the floor: a stage that cannot improve returns the seed
+/// unchanged.
+#[allow(clippy::too_many_arguments, clippy::similar_names)]
+fn lm_refine(
+    seed: Params,
+    active: [bool; 4],
+    reflections: &[Reflection],
+    fc: &[[f32; 2]],
+    f_mask: &[[f32; 2]],
+    stol2: &[f64],
+    work_idx: &[usize],
+) -> (Params, f64) {
+    let idxs: Vec<usize> = (0..4).filter(|&i| active[i]).collect();
+    let m = idxs.len();
+    if m == 0 {
+        let w = compute_wssr(&seed, reflections, fc, f_mask, stol2, work_idx);
+        return (seed, w);
+    }
 
-        // Trial parameters.
-        let mut trial = params.clone();
-        for i in 0..n_params {
-            trial[i] += delta[i];
-        }
-        // Keep k_overall and B_sol physical before scoring; a step that pushes
-        // either non-physical is only accepted if the floored point lowers
-        // WSSR.
-        if trial[0] < 1e-6 {
-            trial[0] = 1e-6;
-        }
-        if trial[2] < 0.1 {
-            trial[2] = 0.1;
-        }
+    let mut params = seed;
+    let mut best_wssr =
+        compute_wssr(&params, reflections, fc, f_mask, stol2, work_idx);
+    let mut lambda = 1e-3_f64;
 
-        let trial_wssr = compute_wssr(
-            &trial,
-            reflections,
-            fc,
-            f_mask,
-            &stol2,
-            &work_idx,
-            &basis,
-        );
-
-        if trial_wssr < wssr {
-            // Accept step.
-            let rel_change = if wssr > 0.0 {
-                (wssr - trial_wssr) / wssr
-            } else {
-                0.0
+    for _ in 0..MAX_LM_ITER {
+        // Normal equations over the active subset only.
+        let mut jtj = vec![0.0_f64; m * m];
+        let mut jtr = vec![0.0_f64; m];
+        for &i in work_idx {
+            let refl = &reflections[i];
+            let fo = f64::from(refl.f_obs);
+            let Some((y, jac)) = model_and_jac(
+                &params,
+                f64::from(fc[i][0]),
+                f64::from(fc[i][1]),
+                f64::from(f_mask[i][0]),
+                f64::from(f_mask[i][1]),
+                stol2[i],
+            ) else {
+                continue;
             };
-            params = trial;
-            lambda *= 0.1;
-            if lambda < 1e-15 {
-                lambda = 1e-15;
-            }
-
-            if rel_change < REL_TOL {
-                converge_count += 1;
-                if converge_count >= 2 {
-                    break;
+            let r = fo - y;
+            for (a, &pa) in idxs.iter().enumerate() {
+                jtr[a] += jac[pa] * r;
+                for (b, &pb) in idxs.iter().enumerate() {
+                    jtj[a * m + b] += jac[pa] * jac[pb];
                 }
-            } else {
-                converge_count = 0;
             }
-            prev_wssr = trial_wssr;
-        } else {
-            // Reject step.
+        }
+
+        // Marquardt damping on the diagonal.
+        let mut damped = jtj.clone();
+        for a in 0..m {
+            let d = jtj[a * m + a];
+            damped[a * m + a] = d + lambda * d.max(1e-12);
+        }
+        let Some(delta) = solve_spd(&damped, &jtr, m) else {
             lambda *= 10.0;
             if lambda > 1e15 {
                 break;
             }
-            converge_count = 0;
+            continue;
+        };
+
+        let mut trial = params;
+        for (a, &pa) in idxs.iter().enumerate() {
+            trial[pa] += delta[a];
+        }
+        clamp_params(&mut trial);
+
+        let tw = compute_wssr(&trial, reflections, fc, f_mask, stol2, work_idx);
+        if tw < best_wssr {
+            let rel = (best_wssr - tw) / best_wssr.max(1e-30);
+            params = trial;
+            best_wssr = tw;
+            lambda = (lambda * 0.1).max(1e-15);
+            if rel < REL_TOL {
+                break;
+            }
+        } else {
+            lambda *= 10.0;
+            if lambda > 1e15 {
+                break;
+            }
         }
     }
 
-    let _ = prev_wssr; // suppress unused warning
-
-    // Reconstruct full B-tensor from basis coefficients.
-    let mut b_aniso = [0.0_f64; 6];
-    for (j, bv) in basis.iter().enumerate() {
-        let d_j = params[3 + j];
-        for c in 0..6 {
-            b_aniso[c] += d_j * bv[c];
-        }
-    }
-
-    ScalingResult {
-        k_overall: params[0],
-        b_aniso,
-        k_sol: params[1],
-        b_sol: params[2],
-    }
+    (params, best_wssr)
 }
 
-// ── Internal helpers ─────────────────────────────────────────────────
-
-/// Dot product of two 6-element vectors.
-#[allow(clippy::suboptimal_flops)]
-fn dot6(a: &[f64; 6], b: &[f64; 6]) -> f64 {
-    a[0] * b[0]
-        + a[1] * b[1]
-        + a[2] * b[2]
-        + a[3] * b[3]
-        + a[4] * b[4]
-        + a[5] * b[5]
-}
-
-/// Compute `kaniso(h)` given B-tensor components and Miller indices.
-#[allow(clippy::suboptimal_flops)]
-fn kaniso(b: &[f64; 6], h: f64, k: f64, l: f64) -> f64 {
-    let exponent = -0.25
-        * (h * h * b[0]
-            + k * k * b[1]
-            + l * l * b[2]
-            + 2.0 * h * k * b[3]
-            + 2.0 * h * l * b[4]
-            + 2.0 * k * l * b[5]);
-    exponent.exp()
-}
-
-/// Reconstruct the full 6-component B-tensor from basis coefficients.
-fn reconstruct_b(params: &[f64], basis: &[[f64; 6]]) -> [f64; 6] {
-    let mut b = [0.0_f64; 6];
-    for (j, bv) in basis.iter().enumerate() {
-        let d_j = params[3 + j];
-        for c in 0..6 {
-            b[c] += d_j * bv[c];
-        }
-    }
-    b
-}
+// ── Model + derivatives ──────────────────────────────────────────────
 
 /// Compute model amplitude for one reflection given parameters.
 ///
 /// This is the full scaled model the fit optimizes:
-/// `k_overall * kaniso(h) * |Fc + k_sol * exp(-B_sol * s2) * Fmask|`. The
-/// R-factor metrics reuse it so they score the same model rather than a
+/// `k_overall * exp(-B_iso * s²) * |Fc + k_sol * exp(-b_sol * s²) * Fmask|`.
+/// The R-factor metrics reuse it so they score the same model rather than a
 /// bare `k_overall * |Fc|`.
-#[allow(
-    clippy::similar_names,
-    clippy::too_many_arguments,
-    clippy::suboptimal_flops
-)]
+#[allow(clippy::similar_names, clippy::too_many_arguments)]
 pub(crate) fn model_amplitude(
     k_overall: f64,
     k_sol: f64,
     b_sol: f64,
-    b_tensor: &[f64; 6],
+    b_iso: f64,
     fc_re: f64,
     fc_im: f64,
     fm_re: f64,
     fm_im: f64,
     stol2: f64,
-    hf: f64,
-    kf: f64,
-    lf: f64,
 ) -> f64 {
-    let ka = kaniso(b_tensor, hf, kf, lf);
+    let dw = (-b_iso * stol2).exp();
     let solv_b = (-b_sol * stol2).exp();
     let total_re = fc_re + k_sol * solv_b * fm_re;
     let total_im = fc_im + k_sol * solv_b * fm_im;
-    let fc_total_amp = total_re.hypot(total_im);
-    k_overall * ka * fc_total_amp
+    k_overall * dw * total_re.hypot(total_im)
 }
 
-/// Weighted sum of squared residuals.
-#[allow(clippy::too_many_arguments)]
+/// Model amplitude and its Jacobian `[d/dk_overall, d/dB_iso, d/dk_sol,
+/// d/db_sol]` for one reflection. Returns `None` when the model amplitude
+/// vanishes (the solvent derivatives divide by it).
+#[allow(clippy::similar_names)]
+fn model_and_jac(
+    p: &Params,
+    fc_re: f64,
+    fc_im: f64,
+    fm_re: f64,
+    fm_im: f64,
+    stol2: f64,
+) -> Option<(f64, [f64; 4])> {
+    let (k_overall, b_iso, k_sol, b_sol) = (p[0], p[1], p[2], p[3]);
+    let dw = (-b_iso * stol2).exp();
+    let solv_b = (-b_sol * stol2).exp();
+    let total_re = fc_re + k_sol * solv_b * fm_re;
+    let total_im = fc_im + k_sol * solv_b * fm_im;
+    let amp = total_re.hypot(total_im);
+    if amp < 1e-30 {
+        return None;
+    }
+    let y = k_overall * dw * amp;
+
+    // Re(conj(total) · Fmask) / |total|.
+    let conj_dot = (total_re * fm_re + total_im * fm_im) / amp;
+    let jac = [
+        dw * amp,                                            // d/dk_overall
+        -stol2 * y,                                          // d/dB_iso
+        k_overall * dw * solv_b * conj_dot,                  // d/dk_sol
+        -stol2 * k_sol * solv_b * conj_dot * k_overall * dw, // d/db_sol
+    ];
+    Some((y, jac))
+}
+
+/// Sum of squared amplitude residuals over the working set.
+///
+/// Unit weights (not `1/sigma`): the goal is a scale that minimizes the
+/// unweighted `|Fo - F_model|` the R-factor reports, and `1/sigma` weighting
+/// on this dataset up-weights the strong low-resolution reflections enough to
+/// pull the overall scale off the R-optimal value.
 fn compute_wssr(
-    params: &[f64],
+    p: &Params,
     reflections: &[Reflection],
     fc: &[[f32; 2]],
     f_mask: &[[f32; 2]],
     stol2: &[f64],
     work_idx: &[usize],
-    basis: &[[f64; 6]],
 ) -> f64 {
-    let k_overall = params[0];
-    let k_sol = params[1];
-    let b_sol = params[2];
-    let b_tensor = reconstruct_b(params, basis);
-
     let mut wssr = 0.0_f64;
     for &i in work_idx {
         let refl = &reflections[i];
         let fo = f64::from(refl.f_obs);
-        let w = 1.0 / f64::from(refl.sigma_f);
-        let hf = f64::from(refl.h);
-        let kf = f64::from(refl.k);
-        let lf = f64::from(refl.l);
-
-        let y_calc = model_amplitude(
-            k_overall,
-            k_sol,
-            b_sol,
-            &b_tensor,
+        let y = model_amplitude(
+            p[0],
+            p[2],
+            p[3],
+            p[1],
             f64::from(fc[i][0]),
             f64::from(fc[i][1]),
             f64::from(f_mask[i][0]),
             f64::from(f_mask[i][1]),
             stol2[i],
-            hf,
-            kf,
-            lf,
         );
-
-        let r = fo - y_calc;
-        wssr += w * w * r * r;
+        let r = fo - y;
+        wssr += r * r;
     }
     wssr
-}
-
-/// Build the normal equations `J^T W J` and `J^T W r` for the LM step.
-#[allow(
-    clippy::too_many_arguments,
-    clippy::similar_names,
-    clippy::suboptimal_flops
-)]
-fn build_normal_equations(
-    params: &[f64],
-    reflections: &[Reflection],
-    fc: &[[f32; 2]],
-    f_mask: &[[f32; 2]],
-    stol2: &[f64],
-    work_idx: &[usize],
-    basis: &[[f64; 6]],
-    n_params: usize,
-) -> (Vec<f64>, Vec<f64>, f64) {
-    let k_overall = params[0];
-    let k_sol = params[1];
-    let b_sol = params[2];
-    let b_tensor = reconstruct_b(params, basis);
-
-    let mut jtj = vec![0.0_f64; n_params * n_params];
-    let mut jtr = vec![0.0_f64; n_params];
-    let mut wssr = 0.0_f64;
-
-    for &i in work_idx {
-        let refl = &reflections[i];
-        let fo = f64::from(refl.f_obs);
-        let w = 1.0 / f64::from(refl.sigma_f);
-        let hf = f64::from(refl.h);
-        let kf = f64::from(refl.k);
-        let lf = f64::from(refl.l);
-        let s2 = stol2[i];
-
-        let fc_re = f64::from(fc[i][0]);
-        let fc_im = f64::from(fc[i][1]);
-        let fm_re = f64::from(f_mask[i][0]);
-        let fm_im = f64::from(f_mask[i][1]);
-
-        let ka = kaniso(&b_tensor, hf, kf, lf);
-        let solv_b = (-b_sol * s2).exp();
-        let total_re = fc_re + k_sol * solv_b * fm_re;
-        let total_im = fc_im + k_sol * solv_b * fm_im;
-        let fc_total_amp = total_re.hypot(total_im);
-
-        // Avoid division by zero for vanishing Fc.
-        if fc_total_amp < 1e-30 {
-            continue;
-        }
-
-        let y_calc = k_overall * ka * fc_total_amp;
-        let r = fo - y_calc;
-        wssr += w * w * r * r;
-
-        // Jacobian components.
-        let mut jac = vec![0.0_f64; n_params];
-
-        // dy/dk_overall = ka * |fc_total|
-        jac[0] = ka * fc_total_amp;
-
-        // Common factor for solvent derivatives.
-        // Re(conj(fc_total) . Fmask) / |fc_total|
-        let conj_dot_re = (total_re * fm_re + total_im * fm_im) / fc_total_amp;
-
-        // dy/dk_sol
-        jac[1] = solv_b * conj_dot_re * k_overall * ka;
-
-        // dy/dB_sol
-        jac[2] = -s2 * k_sol * solv_b * conj_dot_re * k_overall * ka;
-
-        // Anisotropic B derivatives.
-        // du/dB_ij for the 6 unique components:
-        let du = [
-            -0.25 * y_calc * hf * hf, // B11
-            -0.25 * y_calc * kf * kf, // B22
-            -0.25 * y_calc * lf * lf, // B33
-            -0.50 * y_calc * hf * kf, // B12
-            -0.50 * y_calc * hf * lf, // B13
-            -0.50 * y_calc * kf * lf, // B23
-        ];
-
-        for (j, bv) in basis.iter().enumerate() {
-            jac[3 + j] = dot6(bv, &du);
-        }
-
-        // Accumulate into J^T W J and J^T W r.
-        let w2 = w * w;
-        for p in 0..n_params {
-            jtr[p] += w2 * jac[p] * r;
-            for q in 0..n_params {
-                jtj[p * n_params + q] += w2 * jac[p] * jac[q];
-            }
-        }
-    }
-
-    (jtj, jtr, wssr)
 }
 
 #[cfg(test)]

@@ -5,6 +5,11 @@
 //! build [`RefinementInputs`], and rebuild a fresh [`XtalRefinement`] per call.
 //! This module owns that core so the bindings stay thin marshalling shells.
 
+#[cfg(all(feature = "xtal", feature = "gpu"))]
+use cubecl::wgpu::WgpuDevice;
+
+#[cfg(all(feature = "xtal", feature = "gpu"))]
+use super::StencilBackend;
 use super::{DensityGrid, ExperimentalData, XtalRefinement};
 use crate::adapters::table::AtomTable;
 use crate::element::Element;
@@ -44,6 +49,31 @@ fn non_hydrogen_atoms(table: &AtomTable) -> NonHydrogenAtoms {
     out
 }
 
+/// Splat the non-hydrogen atoms of `table` through an already-configured
+/// `refinement` and return its 2mFo-DFc map. The caller chooses the stencil
+/// backend (CPU or GPU) before handing the refinement in; keeping the device
+/// out of this signature lets it compile with the `gpu` feature off.
+fn density_from_atom_table_impl(
+    data: &ExperimentalData,
+    table: &AtomTable,
+    mut refinement: XtalRefinement,
+) -> Option<DensityGrid> {
+    let subset = non_hydrogen_atoms(table);
+    let inputs = data.refinement_inputs(
+        &subset.positions,
+        &subset.elements,
+        &subset.b_factors,
+        &subset.occupancies,
+    );
+
+    refinement.compute_map(
+        &inputs.positions,
+        &inputs.elements,
+        &inputs.b_factors,
+        &inputs.occupancies,
+    )
+}
+
 /// Compute the 2mFo-DFc electron density map for `table`'s atoms against the
 /// resident `data`, rebuilding a fresh [`XtalRefinement`] for this call.
 ///
@@ -55,36 +85,42 @@ pub fn density_from_atom_table(
     data: &ExperimentalData,
     table: &AtomTable,
 ) -> Option<DensityGrid> {
-    let subset = non_hydrogen_atoms(table);
-    let inputs = data.refinement_inputs(
-        &subset.positions,
-        &subset.elements,
-        &subset.b_factors,
-        &subset.occupancies,
-    );
-
-    let mut refinement = XtalRefinement::from_experimental_data(data);
-    refinement.compute_map(
-        &inputs.positions,
-        &inputs.elements,
-        &inputs.b_factors,
-        &inputs.occupancies,
+    density_from_atom_table_impl(
+        data,
+        table,
+        XtalRefinement::from_experimental_data(data),
     )
 }
 
-/// Refine per-atom isotropic B-factors for `table`'s atoms against the resident
-/// `data`, returning `(full_b, r_work, r_free)`.
+/// GPU-backed [`density_from_atom_table`]: routes the density splat onto the
+/// caller's shared `dev` instead of a CPU stencil.
 ///
-/// Hydrogens are excluded from the refinement, matching the validated
-/// refinement path. The refined non-H B-factors are scattered back into a
-/// full-length array (length == `table.len()`, aligned 1:1 to the atom-table
-/// order) where hydrogen atoms keep their input B-factor. Returns `None` if the
-/// refinement pipeline fails.
-#[cfg(feature = "minimization")]
+/// `dev` is cloned because [`XtalRefinement::with_gpu_device`] takes the device
+/// by value; the clone duplicates a ref-counted wgpu handle, not the device
+/// itself, so a host can reuse one cached handle across calls.
+#[cfg(all(feature = "xtal", feature = "gpu"))]
 #[must_use]
-pub fn refine_b_from_atom_table(
+pub fn density_from_atom_table_gpu(
     data: &ExperimentalData,
     table: &AtomTable,
+    dev: &WgpuDevice,
+) -> Option<DensityGrid> {
+    let mut refinement = XtalRefinement::from_experimental_data(data);
+    refinement.stencil_backend = StencilBackend::Gpu;
+    let refinement = refinement.with_gpu_device(dev.clone());
+    density_from_atom_table_impl(data, table, refinement)
+}
+
+/// Refine per-atom isotropic B-factors through an already-configured
+/// `refinement`, scattering the refined non-H values back over `table`.
+///
+/// The caller selects the stencil backend before handing the refinement in,
+/// keeping the device type out of this signature.
+#[cfg(feature = "minimization")]
+fn refine_b_from_atom_table_impl(
+    data: &ExperimentalData,
+    table: &AtomTable,
+    mut refinement: XtalRefinement,
     n_macro_cycles: usize,
 ) -> Option<(Vec<f32>, f64, f64)> {
     let subset = non_hydrogen_atoms(table);
@@ -95,7 +131,6 @@ pub fn refine_b_from_atom_table(
         &subset.occupancies,
     );
 
-    let mut refinement = XtalRefinement::from_experimental_data(data);
     let mut refined_b = inputs.b_factors;
     let (r_work, r_free) = refinement.refine(
         &inputs.positions,
@@ -120,6 +155,49 @@ pub fn refine_b_from_atom_table(
     }
 
     Some((full_b, r_work, r_free))
+}
+
+/// Refine per-atom isotropic B-factors for `table`'s atoms against the resident
+/// `data`, returning `(full_b, r_work, r_free)`.
+///
+/// Hydrogens are excluded from the refinement, matching the validated
+/// refinement path. The refined non-H B-factors are scattered back into a
+/// full-length array (length == `table.len()`, aligned 1:1 to the atom-table
+/// order) where hydrogen atoms keep their input B-factor. Returns `None` if the
+/// refinement pipeline fails.
+#[cfg(feature = "minimization")]
+#[must_use]
+pub fn refine_b_from_atom_table(
+    data: &ExperimentalData,
+    table: &AtomTable,
+    n_macro_cycles: usize,
+) -> Option<(Vec<f32>, f64, f64)> {
+    refine_b_from_atom_table_impl(
+        data,
+        table,
+        XtalRefinement::from_experimental_data(data),
+        n_macro_cycles,
+    )
+}
+
+/// GPU-backed [`refine_b_from_atom_table`]: routes the density splat onto the
+/// caller's shared `dev` instead of a CPU stencil.
+///
+/// `dev` is cloned because [`XtalRefinement::with_gpu_device`] takes the device
+/// by value; the clone duplicates a ref-counted wgpu handle, letting a host
+/// reuse one cached handle across calls.
+#[cfg(all(feature = "xtal", feature = "gpu", feature = "minimization"))]
+#[must_use]
+pub fn refine_b_from_atom_table_gpu(
+    data: &ExperimentalData,
+    table: &AtomTable,
+    n_macro_cycles: usize,
+    dev: &WgpuDevice,
+) -> Option<(Vec<f32>, f64, f64)> {
+    let mut refinement = XtalRefinement::from_experimental_data(data);
+    refinement.stencil_backend = StencilBackend::Gpu;
+    let refinement = refinement.with_gpu_device(dev.clone());
+    refine_b_from_atom_table_impl(data, table, refinement, n_macro_cycles)
 }
 
 #[cfg(test)]

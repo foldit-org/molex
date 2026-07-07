@@ -82,15 +82,12 @@ pub fn r_work(
             scaling.k_overall,
             scaling.k_sol,
             scaling.b_sol,
-            &scaling.b_aniso,
+            scaling.b_iso,
             f64::from(fc[i][0]),
             f64::from(fc[i][1]),
             f64::from(f_mask[i][0]),
             f64::from(f_mask[i][1]),
             unit_cell.d_star_sq(refl.h, refl.k, refl.l) * 0.25,
-            f64::from(refl.h),
-            f64::from(refl.k),
-            f64::from(refl.l),
         );
         num += (fo - y).abs();
         den += fo.abs();
@@ -129,15 +126,12 @@ pub fn r_free_value(
             scaling.k_overall,
             scaling.k_sol,
             scaling.b_sol,
-            &scaling.b_aniso,
+            scaling.b_iso,
             f64::from(fc[i][0]),
             f64::from(fc[i][1]),
             f64::from(f_mask[i][0]),
             f64::from(f_mask[i][1]),
             unit_cell.d_star_sq(refl.h, refl.k, refl.l) * 0.25,
-            f64::from(refl.h),
-            f64::from(refl.k),
-            f64::from(refl.l),
         );
         num += (fo - y).abs();
         den += fo.abs();
@@ -223,7 +217,7 @@ mod tests {
     fn identity_scaling() -> ScalingResult {
         ScalingResult {
             k_overall: 1.0,
-            b_aniso: [0.0; 6],
+            b_iso: 0.0,
             k_sol: 0.0,
             b_sol: 46.0,
         }

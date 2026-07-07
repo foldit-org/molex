@@ -2,6 +2,9 @@
 //! refinement.
 // foldit:allow-long-file - cohesive refinement pipeline plus gradient tests
 
+#[cfg(feature = "gpu")]
+use cubecl::wgpu::WgpuDevice;
+
 use super::bessel::bessel_i1_over_i0;
 use super::form_factors::{self, FormFactor};
 use super::types::{
@@ -118,6 +121,11 @@ pub struct XtalRefinement {
     /// computation on an arbitrary (e.g. power-of-two) grid, the form the GPU
     /// FFT accepts.
     pub(crate) forward_symmetry: ForwardSymmetry,
+    /// Injected wgpu device shared with a renderer, or `None` to self-create
+    /// one via `WgpuDevice::default()` on first GPU use. Set through
+    /// [`XtalRefinement::with_gpu_device`].
+    #[cfg(feature = "gpu")]
+    gpu_device: Option<WgpuDevice>,
 }
 
 impl XtalRefinement {
@@ -160,7 +168,7 @@ impl XtalRefinement {
             grid_dims,
             scaling: ScalingResult {
                 k_overall: 1.0,
-                b_aniso: [0.0; 6],
+                b_iso: 0.0,
                 k_sol: 0.35,
                 b_sol: 46.0,
             },
@@ -168,7 +176,43 @@ impl XtalRefinement {
             fft_precision: fft_cpu::FftPrecision::F64,
             stencil_backend: StencilBackend::default(),
             forward_symmetry: ForwardSymmetry::SymmetrizeGrid,
+            #[cfg(feature = "gpu")]
+            gpu_device: None,
         }
+    }
+
+    /// Inject a wgpu device (e.g. one shared with a renderer). Omit to let
+    /// molex create its own via `WgpuDevice::default()`.
+    #[cfg(feature = "gpu")]
+    #[must_use]
+    pub fn with_gpu_device(mut self, device: WgpuDevice) -> Self {
+        self.gpu_device = Some(device);
+        self
+    }
+
+    /// The GPU device to run kernels on: the injected one if present, otherwise
+    /// a freshly-defaulted device (byte-identical to the pre-injection path).
+    #[cfg(feature = "gpu")]
+    fn resolved_gpu_device(&self) -> WgpuDevice {
+        self.gpu_device.clone().unwrap_or_default()
+    }
+
+    /// Forward 3-D FFT of a real-space grid on the GPU: pads a zeroed imaginary
+    /// channel, runs the device complex FFT, and repacks the result as complex
+    /// `[re, im]` pairs. Unnormalized, matching `fft_cpu::fft_3d_forward` on the
+    /// row-major `(u, v, w)` grid; the transform is f32 throughout.
+    #[cfg(all(feature = "xtal", feature = "gpu"))]
+    fn gpu_forward_grid(&self, real: &[f32], dims: [usize; 3]) -> Vec<[f32; 2]> {
+        let im0 = vec![0.0_f32; real.len()];
+        let dev = self.resolved_gpu_device();
+        let (re, im) = super::gpu::gpu_cfft_3d(
+            &dev,
+            real,
+            &im0,
+            dims,
+            super::gpu::FftMode::Forward,
+        );
+        re.into_iter().zip(im).map(<[f32; 2]>::from).collect()
     }
 
     /// Build a refinement bound to resident experimental data, cloning its
@@ -223,41 +267,83 @@ impl XtalRefinement {
             self.forward_symmetry,
         )?;
 
-        // Fc amplitudes for scaling/sigma-A.
-        let fc_amps: Vec<f64> = refl_fc
-            .iter()
-            .map(|c| f64::from(c[0]).hypot(f64::from(c[1])))
-            .collect();
-
         // Step 5: Fit scaling.
         self.scaling = scaling::fit_scaling(
             &self.reflections,
             &refl_fc,
             &refl_fmask,
             &self.unit_cell,
-            &self.crystal_system,
         );
 
-        // Step 6: Sigma-A estimation.
+        // Synthesize the scaled complex model structure factor. Sigma-A and the
+        // map coefficients both consume it, so scale, isotropic B, and the
+        // bulk-solvent phase shift are applied consistently.
+        let f_model = self.scaled_f_model(&refl_fc, &refl_fmask);
+        let f_model_amps: Vec<f64> = f_model
+            .iter()
+            .map(|c| f64::from(c[0]).hypot(f64::from(c[1])))
+            .collect();
+
+        // Step 6: Sigma-A estimation on the scaled model amplitudes.
         let sa = sigma_a::estimate_sigma_a(
             &self.reflections,
-            &fc_amps,
+            &f_model_amps,
             &self.unit_cell,
         );
         self.sigma_a = Some(sa.clone());
 
-        // Step 7: Map coefficients.
+        // Step 7: Map coefficients from the scaled model (|F_model| amplitude,
+        // arg(F_model) phase).
         let map_coeffs = map_coefficients::compute_map_coefficients(
             &self.reflections,
-            &refl_fc,
+            &f_model,
             &sa,
             &self.unit_cell,
         );
 
-        // Step 8: Inverse FFT -> density.
+        // Step 8: Inverse FFT -> density. On the GPU stencil (supported grid)
+        // build the coefficient grid on the host and run the inverse transform
+        // on device, taking its real channel as the density; otherwise the CPU
+        // inverse FFT. The GPU transform is f32, dropping f64 intermediates.
+        #[cfg(all(feature = "xtal", feature = "gpu"))]
+        let density_data = if self.stencil_backend == StencilBackend::Gpu
+            && super::gpu::gpu_cfft_grid_supported([nu, nv, nw])
+        {
+            let grid = map_coefficients::build_coefficient_grid(
+                &map_coeffs.two_fo_fc,
+                &self.reflections,
+                &self.group_ops,
+                nu,
+                nv,
+                nw,
+            );
+            let re: Vec<f32> = grid.iter().map(|c| c[0]).collect();
+            let im: Vec<f32> = grid.iter().map(|c| c[1]).collect();
+            let dev = self.resolved_gpu_device();
+            let (density, _) = super::gpu::gpu_cfft_3d(
+                &dev,
+                &re,
+                &im,
+                [nu, nv, nw],
+                super::gpu::FftMode::Inverse,
+            );
+            density
+        } else {
+            map_coefficients::map_from_coefficients(
+                &map_coeffs.two_fo_fc,
+                &self.reflections,
+                &self.group_ops,
+                nu,
+                nv,
+                nw,
+            )
+            .ok()?
+        };
+        #[cfg(not(all(feature = "xtal", feature = "gpu")))]
         let density_data = map_coefficients::map_from_coefficients(
             &map_coeffs.two_fo_fc,
             &self.reflections,
+            &self.group_ops,
             nu,
             nv,
             nw,
@@ -270,6 +356,40 @@ impl XtalRefinement {
             nv,
             nw,
         })
+    }
+
+    /// Synthesize the complex scaled model structure factor `F_model` at each
+    /// reflection from the mask-free `Fc`, the bulk-solvent `Fmask`, and the
+    /// current fitted scaling:
+    ///
+    /// ```text
+    /// F_model = k_overall * exp(-B_iso*s²) * (Fc + k_sol*exp(-b_sol*s²)*Fmask)
+    /// ```
+    ///
+    /// Keeps the phase, so the bulk-solvent contribution shifts `arg(F_model)`
+    /// away from `arg(Fc)` rather than only rescaling the amplitude.
+    #[allow(clippy::cast_possible_truncation)]
+    fn scaled_f_model(
+        &self,
+        refl_fc: &[[f32; 2]],
+        refl_fmask: &[[f32; 2]],
+    ) -> Vec<[f32; 2]> {
+        let s = &self.scaling;
+        self.reflections
+            .iter()
+            .enumerate()
+            .map(|(i, r)| {
+                let stol2 = self.unit_cell.d_star_sq(r.h, r.k, r.l) * 0.25;
+                let dw = (-s.b_iso * stol2).exp();
+                let solv = s.k_sol * (-s.b_sol * stol2).exp();
+                let re = f64::from(refl_fc[i][0])
+                    + solv * f64::from(refl_fmask[i][0]);
+                let im = f64::from(refl_fc[i][1])
+                    + solv * f64::from(refl_fmask[i][1]);
+                let scale = s.k_overall * dw;
+                [(scale * re) as f32, (scale * im) as f32]
+            })
+            .collect()
     }
 
     /// Compute the per-atom B-factor gradient of the maximum-likelihood target
@@ -389,7 +509,9 @@ impl XtalRefinement {
                 unit_cell: &self.unit_cell,
                 blur,
             };
+            let dev = self.resolved_gpu_device();
             return Some(super::gpu::gpu_inverse_gradient_resident(
+                &dev,
                 &idx,
                 &idxn,
                 &dre,
@@ -511,7 +633,9 @@ impl XtalRefinement {
                     unit_cell: &self.unit_cell,
                     blur,
                 };
+                let dev = self.resolved_gpu_device();
                 super::gpu::gpu_gather_gradient(
+                    &dev,
                     &g_map,
                     &gather_params,
                     [nu, nv, nw],
@@ -789,13 +913,15 @@ impl XtalRefinement {
         b_factors: &[f64],
         occupancies: &[f64],
     ) -> Option<(f64, f64)> {
-        // R-factors use the deblurred Fc without a separate bulk-solvent mask.
+        // R-factors score the full scaled model, so the genuine bulk-solvent
+        // mask must be built (with_mask = true); otherwise refl_fmask mirrors
+        // Fc and the k_sol term double-counts the protein.
         let (refl_fc, refl_fmask) = self.model_structure_factors(
             positions,
             elements,
             b_factors,
             occupancies,
-            false,
+            true,
             ForwardSymmetry::SymmetrizeGrid,
         )?;
 
@@ -908,33 +1034,26 @@ impl XtalRefinement {
             }
             #[cfg(all(feature = "xtal", feature = "gpu"))]
             StencilBackend::Gpu => {
-                grid =
-                    super::gpu::gpu_splat_density(&splat_params, [nu, nv, nw]);
+                let dev = self.resolved_gpu_device();
+                grid = super::gpu::gpu_splat_density(
+                    &dev,
+                    &splat_params,
+                    [nu, nv, nw],
+                );
             }
         }
         if symmetry == ForwardSymmetry::SymmetrizeGrid {
             density::symmetrize_sum(&mut grid, &self.group_ops);
         }
 
-        // Mask-carrying GPU orbit path (the mask-free case took the resident
-        // chain above): run the forward FFT on device but read the spectrum
-        // back so the host deblur/extract can share the map's solvent grid.
-        // Every other configuration keeps the CPU FFT so the default pipeline
-        // stays byte-identical. The GPU transform is f32 throughout, so it
-        // ignores `fft_precision`.
+        // Run the model forward FFT on device whenever the GPU stencil is active
+        // and the grid is a supported transform domain; otherwise the CPU FFT.
+        // The GPU transform is f32 throughout, so it ignores `fft_precision`.
         #[cfg(all(feature = "xtal", feature = "gpu"))]
         let fc_complex = if self.stencil_backend == StencilBackend::Gpu
-            && symmetry == ForwardSymmetry::SplatFullOrbit
             && super::gpu::gpu_cfft_grid_supported([nu, nv, nw])
         {
-            let im0 = vec![0.0_f32; grid.data.len()];
-            let (re, im) = super::gpu::gpu_cfft_3d(
-                &grid.data,
-                &im0,
-                [nu, nv, nw],
-                super::gpu::FftMode::Forward,
-            );
-            re.into_iter().zip(im).map(<[f32; 2]>::from).collect()
+            self.gpu_forward_grid(&grid.data, [nu, nv, nw])
         } else {
             fft_cpu::fft_3d_forward_prec(
                 &grid.data,
@@ -975,6 +1094,22 @@ impl XtalRefinement {
                 solvent_mask::DEFAULT_R_PROBE,
                 solvent_mask::DEFAULT_R_SHRINK,
             );
+            #[cfg(all(feature = "xtal", feature = "gpu"))]
+            let fmask_complex = if self.stencil_backend == StencilBackend::Gpu
+                && super::gpu::gpu_cfft_grid_supported([nu, nv, nw])
+            {
+                self.gpu_forward_grid(&mask.data, [nu, nv, nw])
+            } else {
+                fft_cpu::fft_3d_forward_prec(
+                    &mask.data,
+                    nu,
+                    nv,
+                    nw,
+                    self.fft_precision,
+                )
+                .ok()?
+            };
+            #[cfg(not(all(feature = "xtal", feature = "gpu")))]
             let fmask_complex = fft_cpu::fft_3d_forward_prec(
                 &mask.data,
                 nu,
@@ -1036,7 +1171,9 @@ impl XtalRefinement {
             })
             .collect();
         let voxel_volume = cell.volume / (nu * nv * nw) as f64;
+        let dev = self.resolved_gpu_device();
         super::gpu::gpu_forward_fc_resident(
+            &dev,
             params,
             [nu, nv, nw],
             blur,
@@ -1967,6 +2104,84 @@ mod tests {
             corr_grad_oracle > 0.99,
             "gradient GPU-FFT vs oracle Pearson {corr_grad_oracle:.6} below \
              0.99"
+        );
+    }
+
+    /// `compute_map`'s density-init pipeline on the GPU stencil must reproduce
+    /// the CPU pipeline's 2mFo-DFc map to f32 tolerance: same deposited grid and
+    /// coefficients, only the two forward FFTs and the inverse FFT (plus the
+    /// splat) moved to the device. Isolates whether the f32 device inverse FFT
+    /// perturbs the final density beyond rounding. On-device (Metal on macOS).
+    #[cfg(all(feature = "xtal", feature = "gpu"))]
+    #[test]
+    #[allow(clippy::print_stdout, clippy::cast_precision_loss)]
+    fn gpu_compute_map_matches_cpu_1aki() {
+        let Some(rc) = crate::testutil::refinement_from_cif_pair("1AKI") else {
+            println!("1AKI fixtures missing; skipping GPU compute_map parity");
+            return;
+        };
+        let mut refinement = rc.refinement;
+        let (pos, el) = (&rc.positions, &rc.elements);
+        let (b, occ) = (&rc.b_factors, &rc.occupancies);
+
+        // The deposited grid is already 5-smooth, so the device FFT accepts it
+        // and the GPU path fires without any pow2 inflation.
+        assert!(
+            crate::xtal::gpu::gpu_cfft_grid_supported(refinement.grid_dims),
+            "deposited grid {:?} must be GPU-FFT-supported for this test",
+            refinement.grid_dims
+        );
+
+        refinement.stencil_backend = StencilBackend::Cpu;
+        let cpu = refinement
+            .compute_map(pos, el, b, occ)
+            .expect("cpu compute_map");
+
+        refinement.stencil_backend = StencilBackend::Gpu;
+        let gpu = refinement
+            .compute_map(pos, el, b, occ)
+            .expect("gpu compute_map");
+        refinement.stencil_backend = StencilBackend::Cpu;
+
+        assert_eq!(
+            cpu.data.len(),
+            gpu.data.len(),
+            "density grids differ in size"
+        );
+        assert!(
+            gpu.data.iter().all(|v| v.is_finite()),
+            "gpu density produced a non-finite entry"
+        );
+
+        let cpu_d: Vec<f64> = cpu.data.iter().map(|&v| f64::from(v)).collect();
+        let gpu_d: Vec<f64> = gpu.data.iter().map(|&v| f64::from(v)).collect();
+        let corr = pearson(&gpu_d, &cpu_d);
+
+        // Density is signed with many near-zero points, so a per-point relative
+        // error is ill-conditioned; normalize the max deviation by the map's
+        // peak magnitude instead.
+        let denom = cpu_d
+            .iter()
+            .map(|v| v.abs())
+            .fold(0.0_f64, f64::max)
+            .max(1e-30);
+        let maxrel = gpu_d
+            .iter()
+            .zip(&cpu_d)
+            .map(|(g, c)| (g - c).abs() / denom)
+            .fold(0.0_f64, f64::max);
+
+        println!(
+            "gpu compute_map [1AKI]: grid {:?}, n={}\n  density GPU vs CPU: \
+             Pearson={corr:.6}, max_rel(peak-normalized)={maxrel:.3e}",
+            refinement.grid_dims,
+            cpu.data.len()
+        );
+
+        assert!(corr > 0.99, "GPU vs CPU density Pearson {corr:.6} below 0.99");
+        assert!(
+            maxrel < 5.0e-2,
+            "GPU vs CPU density max_rel {maxrel:.3e} above 5e-2"
         );
     }
 

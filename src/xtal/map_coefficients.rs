@@ -6,7 +6,7 @@
 use super::bessel::bessel_i1_over_i0;
 use super::fft_cpu::{fft_3d_inverse, FftError};
 use super::sigma_a::SigmaAResult;
-use super::types::{Reflection, UnitCell};
+use super::types::{GroupOps, Reflection, UnitCell};
 
 /// Threshold above which the Bessel ratio I₁/I₀ is effectively 1.0.
 const FOM_X_CLAMP: f64 = 700.0;
@@ -125,12 +125,76 @@ pub fn compute_map_coefficients(
     MapCoefficients { two_fo_fc, fo_fc }
 }
 
+/// Expand map coefficients over the space group's rotation operators onto a 3D
+/// reciprocal-space grid, ready for the inverse FFT.
+///
+/// Each measured reflection is expanded over the space group's rotation
+/// operators before it lands on the grid: a symmetric density obeys
+/// `F(hR) = F(h)·exp(+2πi h·t)` for every symop `(R, t)`, so the coefficient is
+/// phase-shifted by `exp(-i·phase_shift(h))` and placed at the transformed
+/// index `hR` (and, as the complex conjugate, at its Friedel mate `−hR`). This
+/// fills the whole reciprocal grid that the forward `symmetrize_sum` path
+/// populates, rather than only `(h, k, l)`/`(−h, −k, −l)`; the phase sign is
+/// the consistent inverse of the forward `e^{-2πi h·x}` convention, so the
+/// synthesized density registers on the atoms.
+///
+/// Symmetry-equivalent reflections carry consistent coefficients (systematic
+/// absences are filtered upstream), so writing each transformed index directly
+/// is idempotent when several symops or redundant input reflections map to the
+/// same cell.
+///
+/// The returned grid is row-major `[re, im]` at index `(u*nv + v)*nw + w`, the
+/// layout both [`fft_3d_inverse`] and the device inverse FFT consume.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_coefficient_grid(
+    coefficients: &[[f32; 2]],
+    reflections: &[Reflection],
+    group_ops: &GroupOps,
+    nu: usize,
+    nv: usize,
+    nw: usize,
+) -> Vec<[f32; 2]> {
+    let n_total = nu * nv * nw;
+    let mut grid = vec![[0.0_f32; 2]; n_total];
+
+    for (i, refl) in reflections.iter().enumerate() {
+        let coeff = coefficients[i];
+        let hkl = [refl.h, refl.k, refl.l];
+        let re = f64::from(coeff[0]);
+        let im = f64::from(coeff[1]);
+
+        for op in &group_ops.sym_ops {
+            let [hh, kk, ll] = op.apply_to_hkl(hkl);
+
+            // F(hR) = F(h)·exp(+2πi h·t); phase_shift returns -2π(h·t/DEN).
+            let (sin_p, cos_p) = (-op.phase_shift(hkl)).sin_cos();
+            #[allow(clippy::cast_possible_truncation)]
+            let shifted = [
+                re.mul_add(cos_p, -(im * sin_p)) as f32,
+                re.mul_add(sin_p, im * cos_p) as f32,
+            ];
+
+            let u = wrap_index(hh, nu);
+            let v = wrap_index(kk, nv);
+            let w = wrap_index(ll, nw);
+            grid[u * nv * nw + v * nw + w] = shifted;
+
+            // Friedel mate: (-hR) gets the complex conjugate.
+            let fu = wrap_index(-hh, nu);
+            let fv = wrap_index(-kk, nv);
+            let fw = wrap_index(-ll, nw);
+            grid[fu * nv * nw + fv * nw + fw] = [shifted[0], -shifted[1]];
+        }
+    }
+
+    grid
+}
+
 /// Place map coefficients onto a 3D reciprocal-space grid and inverse-FFT to
 /// obtain a real-space electron-density map.
 ///
-/// Each reflection `(h, k, l)` is mapped to the corresponding grid position
-/// (with negative-index wrapping). The Friedel mate `(−h, −k, −l)` is set to
-/// the complex conjugate so the resulting map is real-valued.
+/// The reciprocal grid is built by [`build_coefficient_grid`] (which documents
+/// the symmetry expansion) and transformed by [`fft_3d_inverse`].
 ///
 /// # Errors
 ///
@@ -138,34 +202,24 @@ pub fn compute_map_coefficients(
 pub fn map_from_coefficients(
     coefficients: &[[f32; 2]],
     reflections: &[Reflection],
+    group_ops: &GroupOps,
     nu: usize,
     nv: usize,
     nw: usize,
 ) -> Result<Vec<f32>, FftError> {
-    let n_total = nu * nv * nw;
-    let mut grid = vec![[0.0_f32; 2]; n_total];
-
-    for (i, refl) in reflections.iter().enumerate() {
-        let coeff = coefficients[i];
-
-        // Map Miller index to grid position with negative wrapping.
-        let u = wrap_index(refl.h, nu);
-        let v = wrap_index(refl.k, nv);
-        let w = wrap_index(refl.l, nw);
-
-        let idx = u * nv * nw + v * nw + w;
-        grid[idx] = coeff;
-
-        // Friedel mate: (-h, -k, -l) gets the complex conjugate.
-        let fu = wrap_index(-refl.h, nu);
-        let fv = wrap_index(-refl.k, nv);
-        let fw = wrap_index(-refl.l, nw);
-
-        let fidx = fu * nv * nw + fv * nw + fw;
-        grid[fidx] = [coeff[0], -coeff[1]];
-    }
-
-    fft_3d_inverse(&grid, nu, nv, nw)
+    fft_3d_inverse(
+        &build_coefficient_grid(
+            coefficients,
+            reflections,
+            group_ops,
+            nu,
+            nv,
+            nw,
+        ),
+        nu,
+        nv,
+        nw,
+    )
 }
 
 /// Wrap a signed Miller index into the range `[0, size)`.
@@ -325,7 +379,16 @@ mod tests {
         };
         let coeffs = [[dc_value, 0.0_f32]];
 
-        let grid = map_from_coefficients(&coeffs, &[refl], nu, nv, nw);
+        // P1: a single identity symop, so the reflection lands unshifted.
+        let group = GroupOps {
+            sym_ops: vec![super::super::types::Symop {
+                rot: [[24, 0, 0], [0, 24, 0], [0, 0, 24]],
+                tran: [0, 0, 0],
+            }],
+            cen_ops: vec![[0, 0, 0]],
+        };
+
+        let grid = map_from_coefficients(&coeffs, &[refl], &group, nu, nv, nw);
         assert!(grid.is_ok(), "map_from_coefficients should succeed");
 
         // The inverse FFT divides by N, so a DC-only input gives dc_value / N

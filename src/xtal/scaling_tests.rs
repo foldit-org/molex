@@ -93,39 +93,6 @@ fn wilson_estimate_recovers_known() {
     );
 }
 
-/// Orthorhombic system has exactly 3 basis vectors.
-#[test]
-fn constraint_basis_orthorhombic() {
-    let basis = aniso_constraint_basis(&CrystalSystem::Orthorhombic);
-    assert_eq!(basis.len(), 3);
-}
-
-/// Cubic system has exactly 1 basis vector.
-#[test]
-fn constraint_basis_cubic() {
-    let basis = aniso_constraint_basis(&CrystalSystem::Cubic);
-    assert_eq!(basis.len(), 1);
-    assert!((basis[0][0] - 1.0).abs() < 1e-12);
-    assert!((basis[0][1] - 1.0).abs() < 1e-12);
-    assert!((basis[0][2] - 1.0).abs() < 1e-12);
-}
-
-/// Verify that every crystal system returns the expected number of basis
-/// vectors.
-#[test]
-fn constraint_basis_dimensions() {
-    assert_eq!(aniso_constraint_basis(&CrystalSystem::Triclinic).len(), 6);
-    assert_eq!(aniso_constraint_basis(&CrystalSystem::Monoclinic).len(), 4);
-    assert_eq!(
-        aniso_constraint_basis(&CrystalSystem::Orthorhombic).len(),
-        3
-    );
-    assert_eq!(aniso_constraint_basis(&CrystalSystem::Tetragonal).len(), 2);
-    assert_eq!(aniso_constraint_basis(&CrystalSystem::Trigonal).len(), 2);
-    assert_eq!(aniso_constraint_basis(&CrystalSystem::Hexagonal).len(), 2);
-    assert_eq!(aniso_constraint_basis(&CrystalSystem::Cubic).len(), 1);
-}
-
 /// Cholesky solver on a trivial 2×2 SPD system.
 #[test]
 fn solve_spd_2x2() {
@@ -158,7 +125,6 @@ fn solve_spd_2x2() {
 #[test]
 fn fit_scaling_smoke() {
     let cell = UnitCell::new(50.0, 50.0, 80.0, 90.0, 90.0, 90.0);
-    let system = CrystalSystem::Tetragonal;
 
     let mut reflections = Vec::new();
     let mut fc_vals = Vec::new();
@@ -196,7 +162,7 @@ fn fit_scaling_smoke() {
         }
     }
 
-    let result = fit_scaling(&reflections, &fc_vals, &fm_vals, &cell, &system);
+    let result = fit_scaling(&reflections, &fc_vals, &fm_vals, &cell);
 
     // Just verify it produced reasonable numbers.
     assert!(result.k_overall > 0.0, "k_overall should be positive");

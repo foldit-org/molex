@@ -621,6 +621,7 @@ fn flatten_inputs(params: &SplatParams<'_>, dims: [usize; 3]) -> FlatInputs {
     clippy::too_many_lines
 )]
 pub fn gpu_splat_density(
+    device: &WgpuDevice,
     params: &SplatParams<'_>,
     dims: [usize; 3],
 ) -> DensityGrid {
@@ -640,8 +641,7 @@ pub fn gpu_splat_density(
 
     let inputs = flatten_inputs(params, dims);
 
-    let device = WgpuDevice::default();
-    let client = WgpuRuntime::client(&device);
+    let client = WgpuRuntime::client(device);
 
     let g = client.create_from_slice(u32::as_bytes(&vec![0_u32; total]));
     let h_u0 = client.create_from_slice(i32::as_bytes(&inputs.u0));
@@ -707,9 +707,11 @@ pub fn gpu_splat_density(
     clippy::cast_precision_loss,
     clippy::cast_sign_loss,
     clippy::cast_possible_wrap,
-    clippy::missing_panics_doc
+    clippy::missing_panics_doc,
+    clippy::too_many_arguments
 )]
 pub fn gpu_gather_gradient(
+    device: &WgpuDevice,
     g_map: &[f32],
     params: &SplatParams<'_>,
     dims: [usize; 3],
@@ -733,8 +735,7 @@ pub fn gpu_gather_gradient(
 
     let inputs = flatten_inputs(params, dims);
 
-    let device = WgpuDevice::default();
-    let client = WgpuRuntime::client(&device);
+    let client = WgpuRuntime::client(device);
 
     let h_gmap = client.create_from_slice(f32::as_bytes(g_map));
     let part =
@@ -823,6 +824,7 @@ fn factor_235(mut n: usize) -> Vec<u32> {
     clippy::too_many_lines
 )]
 pub fn gpu_cfft_3d(
+    device: &WgpuDevice,
     re: &[f32],
     im: &[f32],
     dims: [usize; 3],
@@ -841,8 +843,7 @@ pub fn gpu_cfft_3d(
         return (Vec::new(), Vec::new());
     }
 
-    let device = WgpuDevice::default();
-    let client = WgpuRuntime::client(&device);
+    let client = WgpuRuntime::client(device);
 
     let re_buf = client.create_from_slice(f32::as_bytes(re));
     let im_buf = client.create_from_slice(f32::as_bytes(im));
@@ -941,6 +942,7 @@ fn fft_3d_axes_inplace(
     clippy::too_many_arguments
 )]
 pub fn gpu_forward_fc_resident(
+    device: &WgpuDevice,
     params: &SplatParams<'_>,
     dims: [usize; 3],
     blur: f64,
@@ -961,8 +963,7 @@ pub fn gpu_forward_fc_resident(
 
     let inputs = flatten_inputs(params, dims);
 
-    let device = WgpuDevice::default();
-    let client = WgpuRuntime::client(&device);
+    let client = WgpuRuntime::client(device);
 
     // Splat atomic density into the u32 fixed-point accumulator on device.
     let g = client.create_from_slice(u32::as_bytes(&vec![0_u32; total]));
@@ -1085,6 +1086,7 @@ pub fn gpu_forward_fc_resident(
     clippy::too_many_lines
 )]
 pub fn gpu_inverse_gradient_resident(
+    device: &WgpuDevice,
     idx: &[u32],
     idxn: &[u32],
     dre: &[f32],
@@ -1110,8 +1112,7 @@ pub fn gpu_inverse_gradient_resident(
     );
     let orbit = n_copies / n_atoms;
 
-    let device = WgpuDevice::default();
-    let client = WgpuRuntime::client(&device);
+    let client = WgpuRuntime::client(device);
 
     // Zeroed complex grid; the scatter writes only the reflection bins, so the
     // rest must stay zero for the inverse transform.
@@ -1205,6 +1206,22 @@ pub(crate) fn gpu_cfft_grid_supported(dims: [usize; 3]) -> bool {
     })
 }
 
+/// Build a molex GPU device that SHARES foldit's/viso's existing wgpu device
+/// with cubecl, instead of letting molex create its own.
+///
+/// The caller assembles a [`cubecl::wgpu::WgpuSetup`] from its own wgpu
+/// resources (instance/adapter/device/queue/backend) and hands it here; cubecl
+/// registers the device and returns the [`WgpuDevice`] handle to pass to
+/// [`XtalRefinement::with_gpu_device`]. Call ONCE and cache the result (cubecl
+/// mints a fresh id per call). Omit entirely to let molex self-create via
+/// `WgpuDevice::default()`.
+///
+/// [`XtalRefinement::with_gpu_device`]: super::refinement::XtalRefinement::with_gpu_device
+#[must_use]
+pub fn shared_gpu_device(setup: cubecl::wgpu::WgpuSetup) -> WgpuDevice {
+    cubecl::wgpu::init_device(setup, cubecl::wgpu::RuntimeOptions::default())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1265,7 +1282,8 @@ mod tests {
             nw,
         };
         splat_density(&mut cpu, &params);
-        let gpu = gpu_splat_density(&params, [nu, nv, nw]);
+        let gpu =
+            gpu_splat_density(&WgpuDevice::default(), &params, [nu, nv, nw]);
 
         let (max_diff, peak) = max_abs_diff_and_peak(&gpu.data, &cpu.data);
         let rel = max_diff / peak;
@@ -1332,7 +1350,8 @@ mod tests {
             nw,
         };
         splat_density(&mut cpu, &params);
-        let gpu = gpu_splat_density(&params, [nu, nv, nw]);
+        let gpu =
+            gpu_splat_density(&WgpuDevice::default(), &params, [nu, nv, nw]);
 
         let (max_diff, peak) = max_abs_diff_and_peak(&gpu.data, &cpu.data);
         let rel = max_diff / peak;
@@ -1396,6 +1415,7 @@ mod cfft_tests {
     /// grid family the pipeline actually uses, cubic and non-cubic. Prints the
     /// forward max-rel and round-trip abs error for each grid.
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn gpu_cfft_3d_matches_cpu() {
         let grids: [[usize; 3]; 10] = [
             // pow2 fast path.
@@ -1423,7 +1443,13 @@ mod cfft_tests {
             let im_zero = vec![0.0_f32; total];
 
             // (a) forward vs CPU (real input, imaginary zero).
-            let (gr, gi) = gpu_cfft_3d(&re, &im_zero, dims, FftMode::Forward);
+            let (gr, gi) = gpu_cfft_3d(
+                &WgpuDevice::default(),
+                &re,
+                &im_zero,
+                dims,
+                FftMode::Forward,
+            );
             let cpu = fft_3d_forward(&re, nu, nv, nw).expect("cpu forward");
             let cr: Vec<f32> = cpu.iter().map(|c| c[0]).collect();
             let ci: Vec<f32> = cpu.iter().map(|c| c[1]).collect();
@@ -1432,8 +1458,20 @@ mod cfft_tests {
             // (b) round-trip on a full complex field.
             let im: Vec<f32> =
                 (0..total).map(|_| next_unit(&mut seed)).collect();
-            let (fr, fi) = gpu_cfft_3d(&re, &im, dims, FftMode::Forward);
-            let (rr, ri) = gpu_cfft_3d(&fr, &fi, dims, FftMode::Inverse);
+            let (fr, fi) = gpu_cfft_3d(
+                &WgpuDevice::default(),
+                &re,
+                &im,
+                dims,
+                FftMode::Forward,
+            );
+            let (rr, ri) = gpu_cfft_3d(
+                &WgpuDevice::default(),
+                &fr,
+                &fi,
+                dims,
+                FftMode::Inverse,
+            );
             let mut rt = 0.0_f64;
             for (((&a, &b), &c), &d) in rr.iter().zip(&ri).zip(&re).zip(&im) {
                 rt = rt.max(f64::from(a - c).abs());

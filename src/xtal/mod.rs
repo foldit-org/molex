@@ -43,15 +43,25 @@ mod types;
 // ── Public re-exports ───────────────────────────────────────────────
 
 pub use atom_workflow::density_from_atom_table;
+#[cfg(all(feature = "xtal", feature = "gpu"))]
+pub use atom_workflow::density_from_atom_table_gpu;
 #[cfg(feature = "minimization")]
 pub use atom_workflow::refine_b_from_atom_table;
+#[cfg(all(feature = "xtal", feature = "gpu", feature = "minimization"))]
+pub use atom_workflow::refine_b_from_atom_table_gpu;
 pub use bessel::log_bessel_i0;
+#[cfg(all(feature = "xtal", feature = "gpu"))]
+pub use cubecl::wgpu::WgpuDevice;
+#[cfg(all(feature = "xtal", feature = "gpu"))]
+pub use cubecl::wgpu::WgpuSetup;
 pub use density::{
     compute_blur, cutoff_radius, kernel_eval, splat_density, SplatParams,
 };
 pub use experimental::{ExperimentalData, RefinementInputs};
 pub use fft_cpu::FftPrecision;
 pub use form_factors::{form_factor, FormFactor};
+#[cfg(all(feature = "xtal", feature = "gpu"))]
+pub use gpu::shared_gpu_device;
 pub use map_coefficients::MapCoefficients;
 use ndarray::Array3;
 #[cfg(all(feature = "xtal", any(test, feature = "testutil")))]
@@ -92,12 +102,13 @@ pub fn deterministic_free_flag_seed(key: &str) -> u64 {
 ///
 /// 1. Filters out reflections with missing Fobs (no measured amplitude).
 /// 2. Converts `f64` → `f32` for Fobs and sigma.
-/// 3. If the file did not provide R-free flags (`free_flags_from_file ==
-///    false`), randomly assigns approximately `free_fraction` of reflections as
-///    the test set using a deterministic PRNG seeded by `seed`. Each reflection
-///    is assigned independently by comparing a per-reflection xorshift draw
-///    against a single global threshold; the partition is not stratified by
-///    resolution.
+/// 3. If the file provided no usable R-free flags — either it carried no flag
+///    column at all, or the column flags nothing free (e.g. an all-"observed"
+///    status column) — randomly assigns approximately `free_fraction` of
+///    reflections as the test set using a deterministic PRNG seeded by `seed`.
+///    Each reflection is assigned independently by comparing a per-reflection
+///    xorshift draw against a single global threshold; the partition is not
+///    stratified by resolution.
 ///
 /// The `seed` should be fixed per dataset (e.g. hash of the PDB code) so the
 /// free set is reproducible across refinement runs.
@@ -133,8 +144,15 @@ pub fn reflections_from_cif(
         return Vec::new();
     }
 
-    // If file had free flags, just convert directly.
-    if data.free_flags_from_file {
+    // Honor deposited flags only when at least one reflection is actually
+    // flagged free. A status column that is entirely working (e.g. all 'o')
+    // sets `free_flags_from_file` without producing a test set; refining
+    // against that empty free set leaves sigma-A/scaling with no
+    // cross-validation reflections (R-free is undefined, the map overfits).
+    // Treat that case as "no flags" and seed-derive a partition instead.
+    let has_deposited_free = data.free_flags_from_file
+        && data.reflections.iter().any(|r| r.free_flag);
+    if has_deposited_free {
         return valid
             .iter()
             .map(|&i| {

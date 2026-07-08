@@ -23,8 +23,8 @@ name = "molex"
 crate-type = ["rlib", "staticlib", "cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.28", optional = true }
-numpy = { version = "0.28", optional = true }
+pyo3 = { version = "0.29", optional = true }
+numpy = { version = "0.29", optional = true }
 ndarray = "0.15"
 thiserror = "2"
 glam = "0.30"

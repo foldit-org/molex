@@ -199,10 +199,14 @@ impl XtalRefinement {
 
     /// Forward 3-D FFT of a real-space grid on the GPU: pads a zeroed imaginary
     /// channel, runs the device complex FFT, and repacks the result as complex
-    /// `[re, im]` pairs. Unnormalized, matching `fft_cpu::fft_3d_forward` on the
-    /// row-major `(u, v, w)` grid; the transform is f32 throughout.
+    /// `[re, im]` pairs. Unnormalized, matching `fft_cpu::fft_3d_forward` on
+    /// the row-major `(u, v, w)` grid; the transform is f32 throughout.
     #[cfg(all(feature = "xtal", feature = "gpu"))]
-    fn gpu_forward_grid(&self, real: &[f32], dims: [usize; 3]) -> Vec<[f32; 2]> {
+    fn gpu_forward_grid(
+        &self,
+        real: &[f32],
+        dims: [usize; 3],
+    ) -> Vec<[f32; 2]> {
         let im0 = vec![0.0_f32; real.len()];
         let dev = self.resolved_gpu_device();
         let (re, im) = super::gpu::gpu_cfft_3d(
@@ -247,6 +251,7 @@ impl XtalRefinement {
     /// * `elements` - element type per atom
     /// * `b_factors` - isotropic B-factor per atom
     /// * `occupancies` - site occupancy per atom
+    #[allow(clippy::too_many_lines)]
     pub fn compute_map(
         &mut self,
         positions: &[[f64; 3]],
@@ -256,15 +261,32 @@ impl XtalRefinement {
     ) -> Option<DensityGrid> {
         let [nu, nv, nw] = self.grid_dims;
 
-        // Steps 1-4: splat -> symmetrize -> FFT -> deblur, plus the real
-        // solvent mask FFT that yields a genuine Fmask.
+        // Steps 1-4: splat -> symmetry realization -> FFT -> deblur, plus the
+        // real solvent mask FFT that yields a genuine Fmask.
+        //
+        // On the GPU stencil with a supported grid, realize symmetry by
+        // splatting the full orbit so the whole forward runs device-resident
+        // (splat -> FFT -> deblur -> extract, grid never read back); every
+        // other configuration keeps the default grid-symmetrization
+        // forward.
+        #[cfg(all(feature = "xtal", feature = "gpu"))]
+        let forward_symmetry = if self.stencil_backend == StencilBackend::Gpu
+            && super::gpu::gpu_cfft_grid_supported([nu, nv, nw])
+        {
+            ForwardSymmetry::SplatFullOrbit
+        } else {
+            self.forward_symmetry
+        };
+        #[cfg(not(all(feature = "xtal", feature = "gpu")))]
+        let forward_symmetry = self.forward_symmetry;
+
         let (refl_fc, refl_fmask) = self.model_structure_factors(
             positions,
             elements,
             b_factors,
             occupancies,
             true,
-            self.forward_symmetry,
+            forward_symmetry,
         )?;
 
         // Step 5: Fit scaling.
@@ -302,14 +324,15 @@ impl XtalRefinement {
         );
 
         // Step 8: Inverse FFT -> density. On the GPU stencil (supported grid)
-        // build the coefficient grid on the host and run the inverse transform
-        // on device, taking its real channel as the density; otherwise the CPU
-        // inverse FFT. The GPU transform is f32, dropping f64 intermediates.
+        // upload only the per-assignment coefficient list, scatter it into a
+        // zeroed grid on device, run the inverse transform in place, and take
+        // its real channel as the density; otherwise the CPU inverse FFT. The
+        // GPU transform is f32, dropping f64 intermediates.
         #[cfg(all(feature = "xtal", feature = "gpu"))]
         let density_data = if self.stencil_backend == StencilBackend::Gpu
             && super::gpu::gpu_cfft_grid_supported([nu, nv, nw])
         {
-            let grid = map_coefficients::build_coefficient_grid(
+            let (bins, vals) = map_coefficients::build_coefficient_assignments(
                 &map_coeffs.two_fo_fc,
                 &self.reflections,
                 &self.group_ops,
@@ -317,17 +340,16 @@ impl XtalRefinement {
                 nv,
                 nw,
             );
-            let re: Vec<f32> = grid.iter().map(|c| c[0]).collect();
-            let im: Vec<f32> = grid.iter().map(|c| c[1]).collect();
+            let re: Vec<f32> = vals.iter().map(|c| c[0]).collect();
+            let im: Vec<f32> = vals.iter().map(|c| c[1]).collect();
             let dev = self.resolved_gpu_device();
-            let (density, _) = super::gpu::gpu_cfft_3d(
+            super::gpu::gpu_inverse_map_resident(
                 &dev,
+                &bins,
                 &re,
                 &im,
                 [nu, nv, nw],
-                super::gpu::FftMode::Inverse,
-            );
-            density
+            )
         } else {
             map_coefficients::map_from_coefficients(
                 &map_coeffs.two_fo_fc,
@@ -1010,15 +1032,30 @@ impl XtalRefinement {
 
         // Fully device-resident forward chain: the density grid and complex
         // spectrum stay on the GPU through splat, FFT, deblur, and extract, and
-        // only the per-reflection Fc vector returns to host. A bulk-solvent
-        // mask needs its own host FFT, so it takes the staged path below.
+        // only the per-reflection Fc vector returns to host. With a
+        // bulk-solvent mask the host-built real mask grid rides the
+        // same resident forward-FFT
+        // + extract, so its Fmask never round-trips through host either.
         #[cfg(all(feature = "xtal", feature = "gpu"))]
         if self.stencil_backend == StencilBackend::Gpu
             && symmetry == ForwardSymmetry::SplatFullOrbit
-            && !with_mask
             && super::gpu::gpu_cfft_grid_supported([nu, nv, nw])
         {
             let refl_fc = self.gpu_forward_fc_resident(&splat_params, blur);
+            if with_mask {
+                let mask = solvent_mask::solvent_mask(
+                    positions,
+                    elements,
+                    &self.unit_cell,
+                    nu,
+                    nv,
+                    nw,
+                    solvent_mask::DEFAULT_R_PROBE,
+                    solvent_mask::DEFAULT_R_SHRINK,
+                );
+                let refl_fmask = self.gpu_forward_mask_resident(&mask.data);
+                return Some((refl_fc, refl_fmask));
+            }
             return Some((refl_fc.clone(), refl_fc));
         }
 
@@ -1046,9 +1083,10 @@ impl XtalRefinement {
             density::symmetrize_sum(&mut grid, &self.group_ops);
         }
 
-        // Run the model forward FFT on device whenever the GPU stencil is active
-        // and the grid is a supported transform domain; otherwise the CPU FFT.
-        // The GPU transform is f32 throughout, so it ignores `fft_precision`.
+        // Run the model forward FFT on device whenever the GPU stencil is
+        // active and the grid is a supported transform domain;
+        // otherwise the CPU FFT. The GPU transform is f32 throughout,
+        // so it ignores `fft_precision`.
         #[cfg(all(feature = "xtal", feature = "gpu"))]
         let fc_complex = if self.stencil_backend == StencilBackend::Gpu
             && super::gpu::gpu_cfft_grid_supported([nu, nv, nw])
@@ -1160,16 +1198,7 @@ impl XtalRefinement {
             cell.cos_betar as f32,
             cell.cos_gammar as f32,
         ];
-        let refl_idx: Vec<u32> = self
-            .reflections
-            .iter()
-            .map(|r| {
-                let u = wrap_miller_index(r.h, nu);
-                let v = wrap_miller_index(r.k, nv);
-                let w = wrap_miller_index(r.l, nw);
-                ((u * nv + v) * nw + w) as u32
-            })
-            .collect();
+        let refl_idx = self.resident_refl_idx();
         let voxel_volume = cell.volume / (nu * nv * nw) as f64;
         let dev = self.resolved_gpu_device();
         super::gpu::gpu_forward_fc_resident(
@@ -1181,6 +1210,45 @@ impl XtalRefinement {
             &refl_idx,
             voxel_volume,
         )
+    }
+
+    /// Device-resident forward transform of the prebuilt real solvent mask,
+    /// returning the per-reflection Fmask. Forward-FFT + extract only: the mask
+    /// is a host-built real grid, not a Gaussian density, so it is neither
+    /// splatted nor deblurred. Shares the reflection-index and voxel-volume
+    /// construction with the fc-resident wrapper.
+    #[cfg(all(feature = "xtal", feature = "gpu"))]
+    #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+    fn gpu_forward_mask_resident(&self, mask: &[f32]) -> Vec<[f32; 2]> {
+        let [nu, nv, nw] = self.grid_dims;
+        let refl_idx = self.resident_refl_idx();
+        let voxel_volume = self.unit_cell.volume / (nu * nv * nw) as f64;
+        let dev = self.resolved_gpu_device();
+        super::gpu::gpu_forward_grid_extract_resident(
+            &dev,
+            mask,
+            [nu, nv, nw],
+            &refl_idx,
+            voxel_volume as f32,
+        )
+    }
+
+    /// Flat wrapped-Miller grid index per reflection: the gather index both
+    /// device-resident forward extractions read. Every Miller bin wraps into
+    /// `[0, nu*nv*nw)`, so each index is in range.
+    #[cfg(all(feature = "xtal", feature = "gpu"))]
+    #[allow(clippy::cast_possible_truncation)]
+    fn resident_refl_idx(&self) -> Vec<u32> {
+        let [nu, nv, nw] = self.grid_dims;
+        self.reflections
+            .iter()
+            .map(|r| {
+                let u = wrap_miller_index(r.h, nu);
+                let v = wrap_miller_index(r.k, nv);
+                let w = wrap_miller_index(r.l, nw);
+                ((u * nv + v) * nw + w) as u32
+            })
+            .collect()
     }
 
     /// Expand asymmetric-unit atoms to their full symmetry-plus-centering
@@ -2108,10 +2176,11 @@ mod tests {
     }
 
     /// `compute_map`'s density-init pipeline on the GPU stencil must reproduce
-    /// the CPU pipeline's 2mFo-DFc map to f32 tolerance: same deposited grid and
-    /// coefficients, only the two forward FFTs and the inverse FFT (plus the
-    /// splat) moved to the device. Isolates whether the f32 device inverse FFT
-    /// perturbs the final density beyond rounding. On-device (Metal on macOS).
+    /// the CPU pipeline's 2mFo-DFc map to f32 tolerance: same deposited grid
+    /// and coefficients, only the two forward FFTs and the inverse FFT
+    /// (plus the splat) moved to the device. Isolates whether the f32
+    /// device inverse FFT perturbs the final density beyond rounding.
+    /// On-device (Metal on macOS).
     #[cfg(all(feature = "xtal", feature = "gpu"))]
     #[test]
     #[allow(clippy::print_stdout, clippy::cast_precision_loss)]
@@ -2178,10 +2247,274 @@ mod tests {
             cpu.data.len()
         );
 
-        assert!(corr > 0.99, "GPU vs CPU density Pearson {corr:.6} below 0.99");
+        assert!(
+            corr > 0.99,
+            "GPU vs CPU density Pearson {corr:.6} below 0.99"
+        );
         assert!(
             maxrel < 5.0e-2,
             "GPU vs CPU density max_rel {maxrel:.3e} above 5e-2"
+        );
+    }
+
+    /// Isolate the device-resident forward port from the (unchanged) inverse:
+    /// the resident `refl_fc`/`refl_fmask` that `compute_map` now produces must
+    /// match a staged forward of the *same* orbit model to f32-rounding
+    /// tolerance. The staged reference is reconstructed from the building
+    /// blocks the resident chain replaces (device splat -> readback ->
+    /// device FFT -> host deblur -> host extract for Fc; the same
+    /// host-built mask through `gpu_forward_grid` + host extract for
+    /// Fmask). Only where the deblur and extract run moves; the splat and
+    /// device FFT are identical, so agreement is far tighter than the
+    /// orbit-vs-symmetrize whole-pipeline gate. On-device (Metal on macOS).
+    #[cfg(all(feature = "xtal", feature = "gpu"))]
+    #[test]
+    #[allow(
+        clippy::print_stdout,
+        clippy::cast_precision_loss,
+        clippy::too_many_lines
+    )]
+    fn gpu_resident_forward_matches_staged_1aki() {
+        let Some(rc) = crate::testutil::refinement_from_cif_pair("1AKI") else {
+            println!("1AKI fixtures missing; skipping resident-forward parity");
+            return;
+        };
+        let mut refinement = rc.refinement;
+        let (pos, el) = (&rc.positions, &rc.elements);
+        let (b, occ) = (&rc.b_factors, &rc.occupancies);
+
+        assert!(
+            crate::xtal::gpu::gpu_cfft_grid_supported(refinement.grid_dims),
+            "deposited grid {:?} must be GPU-FFT-supported",
+            refinement.grid_dims
+        );
+        refinement.stencil_backend = StencilBackend::Gpu;
+        let [nu, nv, nw] = refinement.grid_dims;
+
+        // Resident forward: the device-resident orbit path compute_map drives.
+        let (res_fc, res_fmask) = refinement
+            .model_structure_factors(
+                pos,
+                el,
+                b,
+                occ,
+                true,
+                ForwardSymmetry::SplatFullOrbit,
+            )
+            .expect("resident forward");
+
+        // Staged reference on the SAME orbit model. Blur must match the
+        // resident path exactly (it drives the deblur), so derive it
+        // identically.
+        let ffs: Vec<&FormFactor> = el
+            .iter()
+            .filter_map(|e| form_factors::form_factor(*e))
+            .collect();
+        assert_eq!(ffs.len(), pos.len(), "every element needs a form factor");
+        let b_min = b.iter().copied().fold(f64::MAX, f64::min);
+        let blur =
+            density::compute_blur(refinement.estimate_d_min(), 1.5, b_min);
+        let (op, of, ob, oo) = refinement.expand_orbit(pos, &ffs, b, occ);
+        let params = density::SplatParams {
+            positions: &op,
+            form_factors: &of,
+            b_factors: &ob,
+            occupancies: &oo,
+            unit_cell: &refinement.unit_cell,
+            blur,
+        };
+        let dev = refinement.resolved_gpu_device();
+        let grid =
+            crate::xtal::gpu::gpu_splat_density(&dev, &params, [nu, nv, nw]);
+        let mut fc_grid = refinement.gpu_forward_grid(&grid.data, [nu, nv, nw]);
+        density::deblur_fc(
+            &mut fc_grid,
+            &refinement.unit_cell,
+            nu,
+            nv,
+            nw,
+            blur,
+        );
+        let mask = solvent_mask::solvent_mask(
+            pos,
+            el,
+            &refinement.unit_cell,
+            nu,
+            nv,
+            nw,
+            solvent_mask::DEFAULT_R_PROBE,
+            solvent_mask::DEFAULT_R_SHRINK,
+        );
+        let fmask_grid = refinement.gpu_forward_grid(&mask.data, [nu, nv, nw]);
+        let (stg_fc, stg_fmask) = refinement.extract_reflection_values(
+            &fc_grid,
+            &fmask_grid,
+            nu,
+            nv,
+            nw,
+        );
+
+        let amp = |v: &[[f32; 2]]| -> Vec<f64> {
+            v.iter()
+                .map(|c| f64::from(c[0]).hypot(f64::from(c[1])))
+                .collect()
+        };
+        let check = |label: &str, res: &[[f32; 2]], stg: &[[f32; 2]]| {
+            assert_eq!(res.len(), stg.len(), "{label}: length mismatch");
+            let (ra, sa) = (amp(res), amp(stg));
+            let corr = pearson(&ra, &sa);
+            // Complex-difference max deviation, normalized by the reference's
+            // peak amplitude (per-reflection relative error is ill-conditioned
+            // at near-zero reflections).
+            let peak = sa.iter().copied().fold(0.0_f64, f64::max).max(1e-30);
+            let maxrel = res
+                .iter()
+                .zip(stg)
+                .map(|(r, s)| {
+                    let dr = f64::from(r[0]) - f64::from(s[0]);
+                    let di = f64::from(r[1]) - f64::from(s[1]);
+                    dr.hypot(di) / peak
+                })
+                .fold(0.0_f64, f64::max);
+            println!(
+                "resident vs staged {label} [1AKI]: n={}, Pearson={corr:.6}, \
+                 max_rel(peak-normalized)={maxrel:.3e}",
+                res.len()
+            );
+            assert!(
+                corr > 0.9999,
+                "{label}: resident vs staged Pearson {corr:.6} below 0.9999"
+            );
+            assert!(
+                maxrel < 1.0e-4,
+                "{label}: resident vs staged max_rel {maxrel:.3e} above 1e-4"
+            );
+        };
+        check("Fc", &res_fc, &stg_fc);
+        check("Fmask", &res_fmask, &stg_fmask);
+        refinement.stencil_backend = StencilBackend::Cpu;
+    }
+
+    /// Isolate the device-resident inverse from the (unchanged) forward: given
+    /// the same map coefficients, the resident inverse (upload the per-entry
+    /// assignment list, scatter into a zeroed grid on device, inverse-FFT in
+    /// place, read back the real channel) must match the staged inverse (host
+    /// `build_coefficient_grid` + device `gpu_cfft_3d` `Inverse`) to f32
+    /// tolerance. Only where the coefficient grid is built moves; the inverse
+    /// FFT and its normalization are identical, so agreement is far tighter
+    /// than the orbit-vs-symmetrize whole-pipeline gate. On-device (Metal
+    /// on macOS).
+    #[cfg(all(feature = "xtal", feature = "gpu"))]
+    #[test]
+    #[allow(
+        clippy::print_stdout,
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::too_many_lines
+    )]
+    fn gpu_resident_inverse_matches_staged_1aki() {
+        let Some(rc) = crate::testutil::refinement_from_cif_pair("1AKI") else {
+            println!("1AKI fixtures missing; skipping resident-inverse parity");
+            return;
+        };
+        let mut refinement = rc.refinement;
+        assert!(
+            crate::xtal::gpu::gpu_cfft_grid_supported(refinement.grid_dims),
+            "deposited grid {:?} must be GPU-FFT-supported",
+            refinement.grid_dims
+        );
+        refinement.stencil_backend = StencilBackend::Gpu;
+        let [nu, nv, nw] = refinement.grid_dims;
+
+        // Deterministic complex coefficient per reflection. The inverse
+        // isolation only needs a nonzero, well-spread coefficient set to
+        // exercise every symop expansion, Friedel mate, and grid wrap; both GPU
+        // paths consume the identical vector.
+        let coeffs: Vec<[f32; 2]> = refinement
+            .reflections
+            .iter()
+            .map(|r| {
+                let phase = 0.1 * f64::from(r.h + 2 * r.k + 3 * r.l);
+                let amp = f64::from(r.f_obs).max(1.0);
+                [(amp * phase.cos()) as f32, (amp * phase.sin()) as f32]
+            })
+            .collect();
+
+        // Staged reference: full host coefficient grid, device inverse FFT,
+        // real channel as density.
+        let grid = map_coefficients::build_coefficient_grid(
+            &coeffs,
+            &refinement.reflections,
+            &refinement.group_ops,
+            nu,
+            nv,
+            nw,
+        );
+        let re: Vec<f32> = grid.iter().map(|c| c[0]).collect();
+        let im: Vec<f32> = grid.iter().map(|c| c[1]).collect();
+        let dev = refinement.resolved_gpu_device();
+        let (staged, _) = crate::xtal::gpu::gpu_cfft_3d(
+            &dev,
+            &re,
+            &im,
+            [nu, nv, nw],
+            crate::xtal::gpu::FftMode::Inverse,
+        );
+
+        // Resident: scatter the deduped per-bin list on device, inverse-FFT
+        // in place, read back the real channel.
+        let (bins, vals) = map_coefficients::build_coefficient_assignments(
+            &coeffs,
+            &refinement.reflections,
+            &refinement.group_ops,
+            nu,
+            nv,
+            nw,
+        );
+        let are: Vec<f32> = vals.iter().map(|c| c[0]).collect();
+        let aim: Vec<f32> = vals.iter().map(|c| c[1]).collect();
+        let resident = crate::xtal::gpu::gpu_inverse_map_resident(
+            &dev,
+            &bins,
+            &are,
+            &aim,
+            [nu, nv, nw],
+        );
+        refinement.stencil_backend = StencilBackend::Cpu;
+
+        assert_eq!(staged.len(), resident.len(), "density length mismatch");
+        assert!(
+            resident.iter().all(|v| v.is_finite()),
+            "resident inverse produced a non-finite entry"
+        );
+
+        let sd: Vec<f64> = staged.iter().map(|&v| f64::from(v)).collect();
+        let rd: Vec<f64> = resident.iter().map(|&v| f64::from(v)).collect();
+        let corr = pearson(&rd, &sd);
+        let peak = sd
+            .iter()
+            .map(|v| v.abs())
+            .fold(0.0_f64, f64::max)
+            .max(1e-30);
+        let maxrel = rd
+            .iter()
+            .zip(&sd)
+            .map(|(r, s)| (r - s).abs() / peak)
+            .fold(0.0_f64, f64::max);
+
+        println!(
+            "resident vs staged inverse [1AKI]: grid {:?}, n={}, \
+             Pearson={corr:.6}, max_rel(peak-normalized)={maxrel:.3e}",
+            refinement.grid_dims,
+            staged.len()
+        );
+        assert!(
+            corr > 0.9999,
+            "resident vs staged inverse Pearson {corr:.6} below 0.9999"
+        );
+        assert!(
+            maxrel < 1.0e-4,
+            "resident vs staged inverse max_rel {maxrel:.3e} above 1e-4"
         );
     }
 

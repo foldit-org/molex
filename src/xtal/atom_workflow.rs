@@ -111,6 +111,79 @@ pub fn density_from_atom_table_gpu(
     density_from_atom_table_impl(data, table, refinement)
 }
 
+/// Score the non-hydrogen atoms of `table` against `data` through an
+/// already-configured `refinement`, returning `(r_work, r_free)`.
+///
+/// A prior [`XtalRefinement::compute_map`] populates the scaling and sigma-A
+/// terms that [`XtalRefinement::r_factors`] reads; its density grid is
+/// discarded here (only the scaling side effect is wanted). The caller selects
+/// the stencil backend before handing the refinement in.
+fn r_factors_from_atom_table_impl(
+    data: &ExperimentalData,
+    table: &AtomTable,
+    mut refinement: XtalRefinement,
+) -> Option<(f64, f64)> {
+    let subset = non_hydrogen_atoms(table);
+    let inputs = data.refinement_inputs(
+        &subset.positions,
+        &subset.elements,
+        &subset.b_factors,
+        &subset.occupancies,
+    );
+
+    let _scaling_grid = refinement.compute_map(
+        &inputs.positions,
+        &inputs.elements,
+        &inputs.b_factors,
+        &inputs.occupancies,
+    )?;
+
+    refinement.r_factors(
+        &inputs.positions,
+        &inputs.elements,
+        &inputs.b_factors,
+        &inputs.occupancies,
+    )
+}
+
+/// Compute `(r_work, r_free)` for `table`'s atoms against the resident `data`
+/// without refining, rebuilding a fresh [`XtalRefinement`] for this call.
+///
+/// This is a one-shot scoring pass: it scales the current model and reads off
+/// the R-factors, doing no B-factor or coordinate minimization. Hydrogens are
+/// excluded, matching the validated refinement path. Returns `None` if the
+/// pipeline fails (unsupported space group or empty data).
+#[must_use]
+pub fn r_factors_from_atom_table(
+    data: &ExperimentalData,
+    table: &AtomTable,
+) -> Option<(f64, f64)> {
+    r_factors_from_atom_table_impl(
+        data,
+        table,
+        XtalRefinement::from_experimental_data(data),
+    )
+}
+
+/// GPU-backed [`r_factors_from_atom_table`]: routes the density splat onto the
+/// caller's shared `dev` instead of a CPU stencil.
+///
+/// `dev` is cloned because [`XtalRefinement::with_gpu_device`] takes the device
+/// by value; the clone duplicates a ref-counted wgpu handle, letting a host
+/// reuse one cached handle across calls.
+#[cfg(all(feature = "xtal", feature = "gpu"))]
+#[must_use]
+pub fn r_factors_from_atom_table_gpu(
+    data: &ExperimentalData,
+    table: &AtomTable,
+    dev: &WgpuDevice,
+) -> Option<(f64, f64)> {
+    let mut refinement = XtalRefinement::from_experimental_data(data);
+    refinement.stencil_backend = StencilBackend::Gpu;
+    let refinement = refinement.with_gpu_device(dev.clone());
+    r_factors_from_atom_table_impl(data, table, refinement)
+}
+
 /// Refine per-atom isotropic B-factors through an already-configured
 /// `refinement`, scattering the refined non-H values back over `table`.
 ///
@@ -122,6 +195,7 @@ fn refine_b_from_atom_table_impl(
     table: &AtomTable,
     mut refinement: XtalRefinement,
     n_macro_cycles: usize,
+    progress: impl FnMut(usize, usize, usize) + 'static,
 ) -> Option<(Vec<f32>, f64, f64)> {
     let subset = non_hydrogen_atoms(table);
     let inputs = data.refinement_inputs(
@@ -138,6 +212,7 @@ fn refine_b_from_atom_table_impl(
         &mut refined_b,
         &inputs.occupancies,
         n_macro_cycles,
+        progress,
     )?;
 
     // Scatter the refined non-H B-factors back over the full atom table;
@@ -171,12 +246,14 @@ pub fn refine_b_from_atom_table(
     data: &ExperimentalData,
     table: &AtomTable,
     n_macro_cycles: usize,
+    progress: impl FnMut(usize, usize, usize) + 'static,
 ) -> Option<(Vec<f32>, f64, f64)> {
     refine_b_from_atom_table_impl(
         data,
         table,
         XtalRefinement::from_experimental_data(data),
         n_macro_cycles,
+        progress,
     )
 }
 
@@ -193,11 +270,18 @@ pub fn refine_b_from_atom_table_gpu(
     table: &AtomTable,
     n_macro_cycles: usize,
     dev: &WgpuDevice,
+    progress: impl FnMut(usize, usize, usize) + 'static,
 ) -> Option<(Vec<f32>, f64, f64)> {
     let mut refinement = XtalRefinement::from_experimental_data(data);
     refinement.stencil_backend = StencilBackend::Gpu;
     let refinement = refinement.with_gpu_device(dev.clone());
-    refine_b_from_atom_table_impl(data, table, refinement, n_macro_cycles)
+    refine_b_from_atom_table_impl(
+        data,
+        table,
+        refinement,
+        n_macro_cycles,
+        progress,
+    )
 }
 
 #[cfg(test)]

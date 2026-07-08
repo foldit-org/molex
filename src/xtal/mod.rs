@@ -42,13 +42,15 @@ mod types;
 
 // ── Public re-exports ───────────────────────────────────────────────
 
-pub use atom_workflow::density_from_atom_table;
 #[cfg(all(feature = "xtal", feature = "gpu"))]
 pub use atom_workflow::density_from_atom_table_gpu;
+#[cfg(all(feature = "xtal", feature = "gpu"))]
+pub use atom_workflow::r_factors_from_atom_table_gpu;
 #[cfg(feature = "minimization")]
 pub use atom_workflow::refine_b_from_atom_table;
 #[cfg(all(feature = "xtal", feature = "gpu", feature = "minimization"))]
 pub use atom_workflow::refine_b_from_atom_table_gpu;
+pub use atom_workflow::{density_from_atom_table, r_factors_from_atom_table};
 pub use bessel::log_bessel_i0;
 #[cfg(all(feature = "xtal", feature = "gpu"))]
 pub use cubecl::wgpu::WgpuDevice;

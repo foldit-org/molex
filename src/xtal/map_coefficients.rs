@@ -125,23 +125,89 @@ pub fn compute_map_coefficients(
     MapCoefficients { two_fo_fc, fo_fc }
 }
 
+/// Expand map coefficients over the space group's rotation operators into a
+/// collision-free per-bin list ready to scatter onto the reciprocal-space grid.
+///
+/// Each measured reflection is expanded over the space group's rotation
+/// operators: a symmetric density obeys `F(hR) = F(h)·exp(+2πi h·t)` for every
+/// symop `(R, t)`, so the coefficient is phase-shifted by
+/// `exp(-i·phase_shift(h))` and placed at the transformed index `hR` (and, as
+/// the complex conjugate, at its Friedel mate `−hR`). This fills the whole
+/// reciprocal grid that the forward `symmetrize_sum` path populates, rather
+/// than only `(h, k, l)`/`(−h, −k, −l)`; the phase sign is the consistent
+/// inverse of the forward `e^{-2πi h·x}` convention, so the synthesized density
+/// registers on the atoms.
+///
+/// Returns `(bins, vals)`: each *unique* row-major flat index
+/// `(u*nv + v)*nw + w` that receives a write, paired with its final complex
+/// `[re, im]`. The forward index takes the phase-shifted `re`/`im`; the Friedel
+/// mate takes `re` and the negated `im`. The forward and Friedel writes are
+/// folded through a per-bin last-write map in emission order (forward before
+/// its Friedel mate for each `(reflection, symop)` pair, reflections and symops
+/// in iteration order), so a bin several assignments target keeps the last
+/// write, exactly as a sequential scatter would resolve it (including a
+/// self-Friedel bin `idx == idxn`, which ends on the Friedel-conjugate write).
+/// Every returned bin is unique, so a parallel scatter over the list is
+/// race-free.
+#[allow(clippy::too_many_arguments, clippy::cast_possible_truncation)]
+pub(crate) fn build_coefficient_assignments(
+    coefficients: &[[f32; 2]],
+    reflections: &[Reflection],
+    group_ops: &GroupOps,
+    nu: usize,
+    nv: usize,
+    nw: usize,
+) -> (Vec<u32>, Vec<[f32; 2]>) {
+    let cap = reflections.len() * group_ops.sym_ops.len() * 2;
+    let mut writes: std::collections::HashMap<u32, [f32; 2]> =
+        std::collections::HashMap::with_capacity(cap);
+
+    for (i, refl) in reflections.iter().enumerate() {
+        let coeff = coefficients[i];
+        let hkl = [refl.h, refl.k, refl.l];
+        let re = f64::from(coeff[0]);
+        let im = f64::from(coeff[1]);
+
+        for op in &group_ops.sym_ops {
+            let [hh, kk, ll] = op.apply_to_hkl(hkl);
+
+            // F(hR) = F(h)·exp(+2πi h·t); phase_shift returns -2π(h·t/DEN).
+            let (sin_p, cos_p) = (-op.phase_shift(hkl)).sin_cos();
+            let vr = re.mul_add(cos_p, -(im * sin_p)) as f32;
+            let vi = re.mul_add(sin_p, im * cos_p) as f32;
+
+            let u = wrap_index(hh, nu);
+            let v = wrap_index(kk, nv);
+            let w = wrap_index(ll, nw);
+            let bin = (u * nv * nw + v * nw + w) as u32;
+            let _ = writes.insert(bin, [vr, vi]);
+
+            // Friedel mate: (-hR) gets the complex conjugate.
+            let fu = wrap_index(-hh, nu);
+            let fv = wrap_index(-kk, nv);
+            let fw = wrap_index(-ll, nw);
+            let fbin = (fu * nv * nw + fv * nw + fw) as u32;
+            let _ = writes.insert(fbin, [vr, -vi]);
+        }
+    }
+
+    let mut bins = Vec::with_capacity(writes.len());
+    let mut vals = Vec::with_capacity(writes.len());
+    for (bin, val) in writes {
+        bins.push(bin);
+        vals.push(val);
+    }
+    (bins, vals)
+}
+
 /// Expand map coefficients over the space group's rotation operators onto a 3D
 /// reciprocal-space grid, ready for the inverse FFT.
 ///
-/// Each measured reflection is expanded over the space group's rotation
-/// operators before it lands on the grid: a symmetric density obeys
-/// `F(hR) = F(h)·exp(+2πi h·t)` for every symop `(R, t)`, so the coefficient is
-/// phase-shifted by `exp(-i·phase_shift(h))` and placed at the transformed
-/// index `hR` (and, as the complex conjugate, at its Friedel mate `−hR`). This
-/// fills the whole reciprocal grid that the forward `symmetrize_sum` path
-/// populates, rather than only `(h, k, l)`/`(−h, −k, −l)`; the phase sign is
-/// the consistent inverse of the forward `e^{-2πi h·x}` convention, so the
-/// synthesized density registers on the atoms.
-///
-/// Symmetry-equivalent reflections carry consistent coefficients (systematic
-/// absences are filtered upstream), so writing each transformed index directly
-/// is idempotent when several symops or redundant input reflections map to the
-/// same cell.
+/// Scatters the deduped per-bin list from [`build_coefficient_assignments`]
+/// (which documents the symmetry expansion) into a zeroed grid: each unique bin
+/// takes its final complex value. Because that list already folded the forward
+/// and Friedel writes through a per-bin last-write map, the resulting grid is
+/// identical to a sequential emission-order scatter.
 ///
 /// The returned grid is row-major `[re, im]` at index `(u*nv + v)*nw + w`, the
 /// layout both [`fft_3d_inverse`] and the device inverse FFT consume.
@@ -157,34 +223,17 @@ pub(crate) fn build_coefficient_grid(
     let n_total = nu * nv * nw;
     let mut grid = vec![[0.0_f32; 2]; n_total];
 
-    for (i, refl) in reflections.iter().enumerate() {
-        let coeff = coefficients[i];
-        let hkl = [refl.h, refl.k, refl.l];
-        let re = f64::from(coeff[0]);
-        let im = f64::from(coeff[1]);
+    let (bins, vals) = build_coefficient_assignments(
+        coefficients,
+        reflections,
+        group_ops,
+        nu,
+        nv,
+        nw,
+    );
 
-        for op in &group_ops.sym_ops {
-            let [hh, kk, ll] = op.apply_to_hkl(hkl);
-
-            // F(hR) = F(h)·exp(+2πi h·t); phase_shift returns -2π(h·t/DEN).
-            let (sin_p, cos_p) = (-op.phase_shift(hkl)).sin_cos();
-            #[allow(clippy::cast_possible_truncation)]
-            let shifted = [
-                re.mul_add(cos_p, -(im * sin_p)) as f32,
-                re.mul_add(sin_p, im * cos_p) as f32,
-            ];
-
-            let u = wrap_index(hh, nu);
-            let v = wrap_index(kk, nv);
-            let w = wrap_index(ll, nw);
-            grid[u * nv * nw + v * nw + w] = shifted;
-
-            // Friedel mate: (-hR) gets the complex conjugate.
-            let fu = wrap_index(-hh, nu);
-            let fv = wrap_index(-kk, nv);
-            let fw = wrap_index(-ll, nw);
-            grid[fu * nv * nw + fv * nw + fw] = [shifted[0], -shifted[1]];
-        }
+    for (bin, val) in bins.iter().zip(vals) {
+        grid[*bin as usize] = val;
     }
 
     grid
@@ -199,6 +248,7 @@ pub(crate) fn build_coefficient_grid(
 /// # Errors
 ///
 /// Returns [`FftError`] if the inverse FFT fails (e.g. dimension mismatch).
+#[allow(clippy::too_many_arguments)]
 pub fn map_from_coefficients(
     coefficients: &[[f32; 2]],
     reflections: &[Reflection],

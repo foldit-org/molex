@@ -94,7 +94,14 @@ fn assert_recovers_prec(
         .expect("r_factors (flattened)");
 
     let (r_work_after, _) = refinement
-        .refine(&positions, &elements, &mut refined_b, &occupancies, 50)
+        .refine(
+            &positions,
+            &elements,
+            &mut refined_b,
+            &occupancies,
+            50,
+            |_, _, _| {},
+        )
         .expect("refine");
 
     assert!(

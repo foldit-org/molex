@@ -1,13 +1,6 @@
 [advisories]
 unmaintained = "workspace"
-ignore = [
-    # molex reaches neither vulnerable pyo3 path: no PyCFunction::new_closure use
-    # (RUSTSEC-2026-0177), and PyList is only constructed, never .nth()/.nth_back()
-    # iterated with an untrusted index (RUSTSEC-2026-0176). pyo3 stays 0.28 (numpy
-    # 0.28 caps it); the 0.29 upgrade is tracked under the numpy-version cap.
-    "RUSTSEC-2026-0176",
-    "RUSTSEC-2026-0177",
-]
+ignore = []
 
 [licenses]
 allow = [

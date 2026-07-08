@@ -201,6 +201,7 @@ fn clamp_params(p: &mut Params) {
 /// fit. The returned result never scores a worse weighted residual than the
 /// closed-form Wilson (scale + isotropic B, solvent off) solution.
 #[must_use]
+#[allow(clippy::too_many_lines)]
 pub fn fit_scaling(
     reflections: &[Reflection],
     fc: &[[f32; 2]],
@@ -288,7 +289,11 @@ pub fn fit_scaling(
 /// Returns the refined parameters and their weighted residual. The seed's
 /// residual is the floor: a stage that cannot improve returns the seed
 /// unchanged.
-#[allow(clippy::too_many_arguments, clippy::similar_names)]
+#[allow(
+    clippy::too_many_arguments,
+    clippy::similar_names,
+    clippy::too_many_lines
+)]
 fn lm_refine(
     seed: Params,
     active: [bool; 4],
@@ -406,7 +411,7 @@ pub(crate) fn model_amplitude(
 /// Model amplitude and its Jacobian `[d/dk_overall, d/dB_iso, d/dk_sol,
 /// d/db_sol]` for one reflection. Returns `None` when the model amplitude
 /// vanishes (the solvent derivatives divide by it).
-#[allow(clippy::similar_names)]
+#[allow(clippy::similar_names, clippy::too_many_arguments)]
 fn model_and_jac(
     p: &Params,
     fc_re: f64,
@@ -443,6 +448,7 @@ fn model_and_jac(
 /// unweighted `|Fo - F_model|` the R-factor reports, and `1/sigma` weighting
 /// on this dataset up-weights the strong low-resolution reflections enough to
 /// pull the overall scale off the R-optimal value.
+#[allow(clippy::too_many_arguments)]
 fn compute_wssr(
     p: &Params,
     reflections: &[Reflection],

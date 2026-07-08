@@ -335,9 +335,12 @@ pub extern "C" fn molex_experimental_data_refine_b_factors(
     };
 
     let table = AtomTable::from_entities(assembly.entities());
-    let Some((full_b, r_work, r_free)) =
-        crate::xtal::refine_b_from_atom_table(inner, &table, n_macro_cycles)
-    else {
+    let Some((full_b, r_work, r_free)) = crate::xtal::refine_b_from_atom_table(
+        inner,
+        &table,
+        n_macro_cycles,
+        |_, _, _| {},
+    ) else {
         set_last_error(&"B-factor refinement failed");
         return MOLEX_ERR;
     };

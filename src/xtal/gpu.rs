@@ -39,6 +39,47 @@ const SCALE: f32 = 67_108_864.0;
 /// Threads per work group along the atom axis.
 const WORKGROUP: u32 = 64;
 
+/// Backend cap on cube groups per dispatch dimension (Metal/Vulkan: 65 535).
+const MAX_CUBE_DIM: u32 = 65_535;
+
+/// Lay `groups` 1-D cubes out as a cube count that respects [`MAX_CUBE_DIM`].
+///
+/// Large cells (e.g. a ~47 Å short axis sampled onto a power-of-two grid) push
+/// a per-window or per-voxel dispatch past the 65 535 groups-per-dimension cap,
+/// so a flat `(groups, 1, 1)` launch is a validation error. Every kernel here
+/// indexes off `ABSOLUTE_POS` / `CUBE_POS`, both of which flatten across cube
+/// dimensions, so folding the excess into a second dimension leaves indexing
+/// untouched.
+///
+/// The returned `Static(a, b, 1)` count is an *exact* cover: `a * b == groups`
+/// with both `a` and `b` `<= MAX_CUBE_DIM`, so no cube lands past `groups` and
+/// no dispatched thread indexes a window beyond its bound. Panics if `groups`
+/// has no such in-range factorization; this is unreachable for the 5-smooth
+/// grid-window counts callers dispatch (each grid axis `<= MAX_FFT_LEN`), and a
+/// clear panic is preferable to overshooting into unguarded window reads.
+// The panic is the intended safe terminus for an unfactorable count, so the
+// restriction lint is suppressed here.
+#[allow(clippy::panic)]
+fn cube_count_1d(groups: u32) -> CubeCount {
+    if groups <= MAX_CUBE_DIM {
+        return CubeCount::Static(groups, 1, 1);
+    }
+    // Search downward from floor(sqrt(groups)) for the first exact divisor
+    // whose cofactor also fits the cap, giving a reasonably balanced 2-D
+    // split.
+    let mut a = groups.isqrt().min(MAX_CUBE_DIM);
+    while a >= 1 {
+        if groups.is_multiple_of(a) && groups / a <= MAX_CUBE_DIM {
+            return CubeCount::Static(a, groups / a, 1);
+        }
+        a -= 1;
+    }
+    panic!(
+        "cube_count_1d: {groups} groups has no factorization a*b with both \
+         dims <= MAX_CUBE_DIM ({MAX_CUBE_DIM})"
+    );
+}
+
 /// Largest window the shared-memory FFT accepts. One thread per sample caps the
 /// window at the per-cube thread limit, and the four `f32` ping-pong scratch
 /// arrays cost `4 * MAX_FFT_LEN * 4` bytes of shared memory; 1024 stays inside
@@ -520,6 +561,35 @@ fn scatter_coeff_kernel(
     }
 }
 
+/// One thread per unique bin: plain-ASSIGN the map coefficient into a zeroed
+/// complex grid at that bin (`bin`), so the inverse FFT yields a real density.
+/// The bin list from `build_coefficient_assignments` is collision-free by
+/// construction (its host-side last-write dedup already resolved every
+/// forward/Friedel overlap, including self-Friedel bins), so each thread owns a
+/// distinct slot and the parallel scatter is race-free.
+///
+/// This ASSIGNS; it does NOT double the self-Friedel bin the way
+/// [`scatter_coeff_kernel`] does. The two must stay distinct: the gradient
+/// scatter's `2*vr` doubling is correct for the adjoint but wrong for the
+/// density map, where each transformed index carries a symmetry-consistent
+/// coefficient assigned once.
+#[cube(launch)]
+fn map_scatter_kernel(
+    re: &mut Array<f32>,
+    im: &mut Array<f32>,
+    bin: &Array<u32>,
+    vre: &Array<f32>,
+    vim: &Array<f32>,
+    n_entry: u32,
+) {
+    let r = ABSOLUTE_POS;
+    if r < n_entry as usize {
+        let b = bin[r] as usize;
+        re[b] = vre[r];
+        im[b] = vim[r];
+    }
+}
+
 /// Per-atom-copy kernel inputs, flattened for upload. Shared by the forward
 /// splat and the adjoint gather: both traverse the identical covered-voxel box,
 /// so both derive bounding boxes, offsets, cutoffs, and five-Gaussian
@@ -658,7 +728,7 @@ pub fn gpu_splat_density(
 
     splat_kernel::launch::<WgpuRuntime>(
         &client,
-        CubeCount::Static(blocks, 1, 1),
+        cube_count_1d(blocks),
         CubeDim::new_1d(WORKGROUP),
         unsafe { ArrayArg::from_raw_parts(g.clone(), total) },
         unsafe { ArrayArg::from_raw_parts(h_u0, n_atoms * 3) },
@@ -754,7 +824,7 @@ pub fn gpu_gather_gradient(
 
     gather_kernel::launch::<WgpuRuntime>(
         &client,
-        CubeCount::Static(blocks, 1, 1),
+        cube_count_1d(blocks),
         CubeDim::new_1d(WORKGROUP),
         unsafe { ArrayArg::from_raw_parts(h_gmap, total) },
         unsafe { ArrayArg::from_raw_parts(part.clone(), n_copies) },
@@ -902,7 +972,7 @@ fn fft_3d_axes_inplace(
 
         fft_axis::launch::<WgpuRuntime>(
             client,
-            CubeCount::Static(num_windows as u32, 1, 1),
+            cube_count_1d(num_windows as u32),
             CubeDim::new_1d(n as u32),
             unsafe { ArrayArg::from_raw_parts(re_buf.clone(), total) },
             unsafe { ArrayArg::from_raw_parts(im_buf.clone(), total) },
@@ -916,6 +986,43 @@ fn fft_3d_axes_inplace(
             scale,
         );
     }
+}
+
+/// Gather one complex value per working reflection off a device-resident
+/// complex spectrum and read it back: launch [`extract_kernel`] over `refl_idx`
+/// (scaling by the voxel volume `V/N`) and reshape the flat readback into
+/// `[re, im]` pairs. This per-reflection vector is the only buffer that leaves
+/// the device. Consumes the spectrum handles `re_buf`/`im_buf` (their last
+/// use).
+#[allow(clippy::cast_possible_truncation, clippy::too_many_arguments)]
+fn extract_reflections_resident(
+    client: &ComputeClient<WgpuRuntime>,
+    re_buf: Handle,
+    im_buf: Handle,
+    refl_idx: &[u32],
+    voxel_volume: f32,
+    total: usize,
+) -> Vec<[f32; 2]> {
+    let n_refl = refl_idx.len();
+    let idx_buf = client.create_from_slice(u32::as_bytes(refl_idx));
+    let out = client.empty(n_refl * 2 * 4);
+    let refl_blocks = (n_refl as u32).div_ceil(WORKGROUP);
+
+    extract_kernel::launch::<WgpuRuntime>(
+        client,
+        cube_count_1d(refl_blocks),
+        CubeDim::new_1d(WORKGROUP),
+        unsafe { ArrayArg::from_raw_parts(re_buf, total) },
+        unsafe { ArrayArg::from_raw_parts(im_buf, total) },
+        unsafe { ArrayArg::from_raw_parts(idx_buf, n_refl) },
+        unsafe { ArrayArg::from_raw_parts(out.clone(), n_refl * 2) },
+        voxel_volume,
+        n_refl as u32,
+    );
+
+    let bytes = client.read_one_unchecked(out);
+    let flat = f32::from_bytes(&bytes);
+    flat.chunks_exact(2).map(|c| [c[0], c[1]]).collect()
 }
 
 /// Device-resident forward structure factors: splat -> mixed-radix FFT ->
@@ -981,7 +1088,7 @@ pub fn gpu_forward_fc_resident(
 
     splat_kernel::launch::<WgpuRuntime>(
         &client,
-        CubeCount::Static(atom_blocks, 1, 1),
+        cube_count_1d(atom_blocks),
         CubeDim::new_1d(WORKGROUP),
         unsafe { ArrayArg::from_raw_parts(g.clone(), total) },
         unsafe { ArrayArg::from_raw_parts(h_u0, n_atoms * 3) },
@@ -1006,7 +1113,7 @@ pub fn gpu_forward_fc_resident(
 
     scale_kernel::launch::<WgpuRuntime>(
         &client,
-        CubeCount::Static(grid_blocks, 1, 1),
+        cube_count_1d(grid_blocks),
         CubeDim::new_1d(WORKGROUP),
         unsafe { ArrayArg::from_raw_parts(g, total) },
         unsafe { ArrayArg::from_raw_parts(re_buf.clone(), total) },
@@ -1018,7 +1125,7 @@ pub fn gpu_forward_fc_resident(
 
     deblur_kernel::launch::<WgpuRuntime>(
         &client,
-        CubeCount::Static(grid_blocks, 1, 1),
+        cube_count_1d(grid_blocks),
         CubeDim::new_1d(WORKGROUP),
         unsafe { ArrayArg::from_raw_parts(re_buf.clone(), total) },
         unsafe { ArrayArg::from_raw_parts(im_buf.clone(), total) },
@@ -1037,25 +1144,77 @@ pub fn gpu_forward_fc_resident(
 
     // Gather one complex value per reflection; this vector is the only
     // readback.
-    let idx_buf = client.create_from_slice(u32::as_bytes(refl_idx));
-    let out = client.empty(n_refl * 2 * 4);
-    let refl_blocks = (n_refl as u32).div_ceil(WORKGROUP);
-
-    extract_kernel::launch::<WgpuRuntime>(
+    extract_reflections_resident(
         &client,
-        CubeCount::Static(refl_blocks, 1, 1),
-        CubeDim::new_1d(WORKGROUP),
-        unsafe { ArrayArg::from_raw_parts(re_buf, total) },
-        unsafe { ArrayArg::from_raw_parts(im_buf, total) },
-        unsafe { ArrayArg::from_raw_parts(idx_buf, n_refl) },
-        unsafe { ArrayArg::from_raw_parts(out.clone(), n_refl * 2) },
+        re_buf,
+        im_buf,
+        refl_idx,
         voxel_volume as f32,
-        n_refl as u32,
+        total,
+    )
+}
+
+/// Device-resident forward transform of a prebuilt real-space grid: upload the
+/// grid once, pair it with a zeroed imaginary channel, mixed-radix FFT, and
+/// extract one complex value per reflection, keeping the spectrum on the GPU
+/// and reading back only the per-reflection vector.
+///
+/// This is forward-FFT + extract only: no splat and no deblur. The bulk-solvent
+/// mask is a real grid built on host (not a Gaussian density), so it must not
+/// be deblurred; keep this distinct from the splat/deblur chain in
+/// [`gpu_forward_fc_resident`].
+///
+/// `refl_idx[r]` is the flat grid index of reflection `r`'s wrapped-Miller bin
+/// (same construction the fc-resident wrapper uses); `voxel_volume` is `V/N`,
+/// the physical structure-factor scale `extract_kernel` applies. Returns
+/// `refl_idx.len()` complex `[re, im]` pairs.
+///
+/// # Panics
+///
+/// Panics if the wgpu device cannot be initialized.
+#[must_use]
+#[allow(clippy::cast_possible_truncation, clippy::missing_panics_doc)]
+pub(crate) fn gpu_forward_grid_extract_resident(
+    device: &WgpuDevice,
+    real_grid: &[f32],
+    dims: [usize; 3],
+    refl_idx: &[u32],
+    voxel_volume: f32,
+) -> Vec<[f32; 2]> {
+    let [nu, nv, nw] = dims;
+    let total = nu * nv * nw;
+    let n_refl = refl_idx.len();
+    if n_refl == 0 {
+        return Vec::new();
+    }
+    if total == 0 {
+        return vec![[0.0, 0.0]; n_refl];
+    }
+    assert_eq!(
+        real_grid.len(),
+        total,
+        "real_grid length must equal nu*nv*nw"
     );
 
-    let bytes = client.read_one_unchecked(out);
-    let flat = f32::from_bytes(&bytes);
-    flat.chunks_exact(2).map(|c| [c[0], c[1]]).collect()
+    let client = WgpuRuntime::client(device);
+
+    // Upload the real grid and a zeroed imaginary channel; both stay on device
+    // across the FFT and extract.
+    let re_buf = client.create_from_slice(f32::as_bytes(real_grid));
+    let im_buf = client.create_from_slice(f32::as_bytes(&vec![0.0_f32; total]));
+
+    fft_3d_axes_inplace(&client, &re_buf, &im_buf, dims, FftMode::Forward);
+
+    // Gather one complex value per reflection; this vector is the only
+    // readback.
+    extract_reflections_resident(
+        &client,
+        re_buf,
+        im_buf,
+        refl_idx,
+        voxel_volume,
+        total,
+    )
 }
 
 /// Device-resident inverse gradient chain: scatter the per-reflection
@@ -1128,7 +1287,7 @@ pub fn gpu_inverse_gradient_resident(
 
         scatter_coeff_kernel::launch::<WgpuRuntime>(
             &client,
-            CubeCount::Static(refl_blocks, 1, 1),
+            cube_count_1d(refl_blocks),
             CubeDim::new_1d(WORKGROUP),
             unsafe { ArrayArg::from_raw_parts(re_buf.clone(), total) },
             unsafe { ArrayArg::from_raw_parts(im_buf.clone(), total) },
@@ -1161,7 +1320,7 @@ pub fn gpu_inverse_gradient_resident(
 
     gather_kernel::launch::<WgpuRuntime>(
         &client,
-        CubeCount::Static(copy_blocks, 1, 1),
+        cube_count_1d(copy_blocks),
         CubeDim::new_1d(WORKGROUP),
         unsafe { ArrayArg::from_raw_parts(re_buf, total) },
         unsafe { ArrayArg::from_raw_parts(part.clone(), n_copies) },
@@ -1191,6 +1350,76 @@ pub fn gpu_inverse_gradient_resident(
     }
 
     grad
+}
+
+/// Device-resident inverse density synthesis: scatter the per-assignment map
+/// coefficients into a zeroed complex grid, inverse-FFT in place, and read back
+/// the real channel as the electron density, keeping the coefficient grid on
+/// the GPU throughout. Only the small per-entry assignment list crosses to the
+/// device and the real density crosses back.
+///
+/// `bins` are the unique row-major flat grid indices and `re`/`im` their final
+/// complex coefficient split into channels, as produced by
+/// `build_coefficient_assignments`. The list is collision-free, so
+/// [`map_scatter_kernel`] assigns each bin from its own thread (no self-Friedel
+/// doubling); the inverse transform folds the `1/(nu*nv*nw)` normalization, and
+/// the real channel is the density (matching the host `build_coefficient_grid`
+/// + [`gpu_cfft_3d`] `Inverse` staged path).
+///
+/// # Panics
+///
+/// Panics if the wgpu device cannot be initialized.
+#[must_use]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::missing_panics_doc,
+    clippy::too_many_arguments
+)]
+pub fn gpu_inverse_map_resident(
+    device: &WgpuDevice,
+    bins: &[u32],
+    re: &[f32],
+    im: &[f32],
+    dims: [usize; 3],
+) -> Vec<f32> {
+    let [nu, nv, nw] = dims;
+    let total = nu * nv * nw;
+    if total == 0 {
+        return Vec::new();
+    }
+    let n_entry = bins.len();
+
+    let client = WgpuRuntime::client(device);
+
+    // Zeroed complex grid; the scatter writes only the coefficient bins, so the
+    // rest must stay zero for the inverse transform.
+    let re_buf = client.create_from_slice(f32::as_bytes(&vec![0.0_f32; total]));
+    let im_buf = client.create_from_slice(f32::as_bytes(&vec![0.0_f32; total]));
+
+    if n_entry > 0 {
+        let h_bin = client.create_from_slice(u32::as_bytes(bins));
+        let h_re = client.create_from_slice(f32::as_bytes(re));
+        let h_im = client.create_from_slice(f32::as_bytes(im));
+        let entry_blocks = (n_entry as u32).div_ceil(WORKGROUP);
+
+        map_scatter_kernel::launch::<WgpuRuntime>(
+            &client,
+            cube_count_1d(entry_blocks),
+            CubeDim::new_1d(WORKGROUP),
+            unsafe { ArrayArg::from_raw_parts(re_buf.clone(), total) },
+            unsafe { ArrayArg::from_raw_parts(im_buf.clone(), total) },
+            unsafe { ArrayArg::from_raw_parts(h_bin, n_entry) },
+            unsafe { ArrayArg::from_raw_parts(h_re, n_entry) },
+            unsafe { ArrayArg::from_raw_parts(h_im, n_entry) },
+            n_entry as u32,
+        );
+    }
+
+    // Inverse FFT in place; the coefficient grid is Hermitian, so `re_buf` now
+    // holds the real-space density and `im_buf` is discarded.
+    fft_3d_axes_inplace(&client, &re_buf, &im_buf, dims, FftMode::Inverse);
+
+    f32::from_bytes(&client.read_one_unchecked(re_buf)).to_vec()
 }
 
 /// Whether `dims` is a valid transform domain for [`gpu_cfft_3d`]: every axis
@@ -1247,6 +1476,43 @@ mod tests {
     fn integrated(data: &[f32], cell_volume: f64, total: usize) -> f64 {
         let voxel = cell_volume / total as f64;
         data.iter().map(|&v| f64::from(v)).sum::<f64>() * voxel
+    }
+
+    /// Every dispatch count `cube_count_1d` returns must be an exact cover:
+    /// `a * b == groups` with both dims inside the backend cap, so no surplus
+    /// cube reaches an unguarded window read.
+    #[test]
+    #[allow(clippy::panic)]
+    fn cube_count_1d_is_exact_and_in_range() {
+        let cases = [
+            1_u32,
+            2,
+            1000,
+            65_534,
+            MAX_CUBE_DIM,
+            MAX_CUBE_DIM + 1,
+            65_536,
+            640 * 800,
+            768 * 900,
+            1024 * 1024,
+            1_000_000,
+            600 * 625,
+        ];
+        for &groups in &cases {
+            let CubeCount::Static(a, b, c) = cube_count_1d(groups) else {
+                panic!("expected Static count for {groups}");
+            };
+            assert_eq!(c, 1, "third dim must be 1 for {groups}");
+            assert_eq!(
+                u64::from(a) * u64::from(b),
+                u64::from(groups),
+                "product must equal groups exactly for {groups} (got {a}*{b})"
+            );
+            assert!(
+                a <= MAX_CUBE_DIM && b <= MAX_CUBE_DIM,
+                "both dims must fit MAX_CUBE_DIM for {groups} (got {a}, {b})"
+            );
+        }
     }
 
     #[test]

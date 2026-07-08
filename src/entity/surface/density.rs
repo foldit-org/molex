@@ -184,7 +184,7 @@ impl Density {
     /// than one repeat along that axis), so the window is free to reach past
     /// `mx`; the periodic (`pos_mod`) fill then wraps the density back onto
     /// those atoms. Within the window every voxel farther than
-    /// [`MASK_RADIUS_A`] from all `points` is zeroed so the block hugs the
+    /// `MASK_RADIUS_A` from all `points` is zeroed so the block hugs the
     /// model rather than showing a full periodic slab of symmetry mates. The
     /// statistics (`dmin`/`dmax`/`dmean`/`rms`) are recomputed over the masked
     /// sub-block so the sigma contour is relative to it.
@@ -261,8 +261,8 @@ impl Density {
 /// edge spans more than one repeat along that axis; clamping to `mx` there
 /// collapses the crop to a full periodic slab (all symmetry mates) that also
 /// fails to enclose the out-of-box atoms. Letting the window run past `mx`
-/// keeps it tight around the model, and [`crop_to_points`]'s `pos_mod` fill
-/// wraps the periodic density back onto those atoms.
+/// keeps it tight around the model, and [`Density::crop_to_points`]'s `pos_mod`
+/// fill wraps the periodic density back onto those atoms.
 #[allow(
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
@@ -463,6 +463,13 @@ pub enum DensityError {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::float_cmp,
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss
+    )]
+
     use super::*;
 
     /// Full-cell 10x10x10 orthogonal map with `data[[x,y,z]] = x*100+y*10+z`.

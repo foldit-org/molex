@@ -7,7 +7,8 @@
 //! to argmin is the pure maximum-likelihood target, so the analytic gradient
 //! that descends it is reused verbatim (chained through the transform).
 
-use argmin::core::{CostFunction, Error, Executor, Gradient, State};
+use argmin::core::observers::{Observe, ObserverMode};
+use argmin::core::{CostFunction, Error, Executor, Gradient, State, KV};
 use argmin::solver::linesearch::MoreThuenteLineSearch;
 use argmin::solver::quasinewton::LBFGS;
 
@@ -152,6 +153,43 @@ impl Gradient for BFactorProblem<'_> {
     }
 }
 
+/// argmin observer that forwards per-inner-iteration progress out of an L-BFGS
+/// solve. One is attached per macro-cycle carrying that cycle's 1-based index;
+/// argmin invokes `observe_iter` after each inner iteration until the solver
+/// converges or reaches `INNER_ITERS`.
+struct ProgressObserver<F> {
+    cycle: usize,
+    /// `Arc<Mutex>` so the fresh per-cycle observers share one user `FnMut`
+    /// (argmin takes each observer by value).
+    cb: std::sync::Arc<std::sync::Mutex<F>>,
+}
+
+impl<F, I> Observe<I> for ProgressObserver<F>
+where
+    F: FnMut(usize, usize, usize),
+    I: State,
+{
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "argmin iteration counters are bounded by INNER_ITERS; the \
+                  u64 -> usize casts cannot truncate a value this small"
+    )]
+    fn observe_iter(&mut self, state: &I, _kv: &KV) -> Result<(), Error> {
+        {
+            let mut cb = self
+                .cb
+                .lock()
+                .map_err(|_| Error::msg("progress callback mutex poisoned"))?;
+            cb(
+                self.cycle,
+                state.get_iter() as usize + 1,
+                state.get_max_iters() as usize,
+            );
+        }
+        Ok(())
+    }
+}
+
 impl XtalRefinement {
     /// Refine per-atom isotropic B-factors by maximum likelihood.
     ///
@@ -164,6 +202,13 @@ impl XtalRefinement {
     ///
     /// `b_factors` is updated in place. Returns `(r_work, r_free)` after the
     /// final cycle, or `None` if the pipeline fails at any point.
+    ///
+    /// `progress` is invoked once per inner L-BFGS iteration with
+    /// `(macro_cycle, inner_iter, inner_total)`: `macro_cycle` and `inner_iter`
+    /// are 1-based, `inner_total` is the per-cycle iteration cap. A caller can
+    /// fill a determinate bar within each macro-cycle and reset it when
+    /// `macro_cycle` advances. L-BFGS often converges before `inner_total`, in
+    /// which case that cycle's ticks simply stop early.
     #[allow(clippy::too_many_arguments)]
     pub fn refine(
         &mut self,
@@ -172,10 +217,12 @@ impl XtalRefinement {
         b_factors: &mut [f64],
         occupancies: &[f64],
         n_macro_cycles: usize,
+        progress: impl FnMut(usize, usize, usize) + 'static,
     ) -> Option<(f64, f64)> {
+        let progress = std::sync::Arc::new(std::sync::Mutex::new(progress));
         let mut prev_target: Option<f64> = None;
 
-        for _cycle in 0..n_macro_cycles {
+        for cycle in 0..n_macro_cycles {
             // Refit scaling + sigma-A to the current B-factors; the inner solve
             // treats them as frozen.
             let _map =
@@ -200,6 +247,13 @@ impl XtalRefinement {
                     LBFGS::new(MoreThuenteLineSearch::new(), LBFGS_MEMORY);
                 let res = Executor::new(problem, solver)
                     .configure(|state| state.param(u0).max_iters(INNER_ITERS))
+                    .add_observer(
+                        ProgressObserver {
+                            cycle: cycle + 1,
+                            cb: std::sync::Arc::clone(&progress),
+                        },
+                        ObserverMode::Always,
+                    )
                     .run()
                     .ok()?;
                 let u = res.state().get_best_param()?.clone();
@@ -252,6 +306,93 @@ mod tests {
                 (analytic - fd).abs() < 1e-4,
                 "u={u}: analytic {analytic} vs fd {fd}"
             );
+        }
+    }
+
+    /// The progress callback fires once per inner L-BFGS iteration, carrying
+    /// `(macro_cycle, inner_iter, inner_total)`: macro-cycle indices stay
+    /// within `1..=n_macro_cycles`, inner-iteration indices start at 1 and
+    /// increase within a cycle, and `inner_total` reports the `INNER_ITERS`
+    /// cap.
+    ///
+    /// Self-consistent synthetic data converges in ~2 cycles, which would cut
+    /// the run short of the requested count. To keep multiple cycles running,
+    /// the observed amplitudes get a resolution-dependent B-offset so the model
+    /// must inflate every B-factor to match; the sigma-A refit lags that
+    /// motion, so each macro-cycle keeps improving past `CONVERGENCE_TOL`.
+    /// The cell and grid stay small so the whole refine is
+    /// millisecond-class.
+    #[test]
+    #[allow(clippy::expect_used, clippy::cast_possible_truncation)]
+    fn progress_callback_fires_per_inner_iter() {
+        let case = crate::testutil::synthetic_refinement(
+            32,
+            1,
+            [20.0, 20.0, 20.0, 90.0, 90.0, 90.0],
+            1.2,
+            20.0,
+        );
+        let mut refinement = case.refinement;
+
+        // Damp F_obs as if the data carried an extra +80 A^2 of isotropic B,
+        // pulling the best-fit model well above the b_true start.
+        const DATA_B_OFFSET: f64 = 80.0;
+        let unit_cell = refinement.unit_cell.clone();
+        for r in &mut refinement.reflections {
+            let s2 = unit_cell.d_star_sq(r.h, r.k, r.l);
+            r.f_obs *= (-DATA_B_OFFSET * s2 / 4.0).exp() as f32;
+        }
+
+        let mut b = vec![20.0; case.positions.len()];
+
+        const N_MACRO_CYCLES: usize = 3;
+        let ticks = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let ticks_cb = std::sync::Arc::clone(&ticks);
+        let _ = refinement
+            .refine(
+                &case.positions,
+                &case.elements,
+                &mut b,
+                &case.occupancies,
+                N_MACRO_CYCLES,
+                move |macro_cycle, inner_iter, inner_total| {
+                    ticks_cb.lock().expect("ticks mutex").push((
+                        macro_cycle,
+                        inner_iter,
+                        inner_total,
+                    ));
+                },
+            )
+            .expect("synthetic refine");
+
+        let ticks = ticks.lock().expect("ticks mutex");
+        assert!(!ticks.is_empty(), "at least one inner-iteration tick fired");
+
+        // Group inner ticks by macro-cycle, checking cycle range, inner_total,
+        // and that inner_iter starts at 1 and strictly increases within a
+        // cycle.
+        let mut cycle_of_prev = 0usize;
+        let mut prev_inner = 0usize;
+        for &(macro_cycle, inner_iter, inner_total) in ticks.iter() {
+            assert!(
+                (1..=N_MACRO_CYCLES).contains(&macro_cycle),
+                "macro_cycle {macro_cycle} out of 1..={N_MACRO_CYCLES}"
+            );
+            assert_eq!(inner_total, INNER_ITERS as usize, "inner_total is cap");
+            if macro_cycle == cycle_of_prev {
+                assert_eq!(
+                    inner_iter,
+                    prev_inner + 1,
+                    "inner_iter increments by 1 within a macro-cycle"
+                );
+            } else {
+                assert_eq!(
+                    inner_iter, 1,
+                    "inner_iter restarts at 1 for a new macro-cycle"
+                );
+            }
+            cycle_of_prev = macro_cycle;
+            prev_inner = inner_iter;
         }
     }
 

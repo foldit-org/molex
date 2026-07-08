@@ -1,0 +1,38 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "molex"
+version = "0.7.3"
+description = "Parse, analyze, and transform molecular structure data (PDB, mmCIF, BinaryCIF, MRC)"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+authors = [{ name = "Andreas Petrides" }]
+keywords = [
+  "protein",
+  "molecular",
+  "pdb",
+  "mmcif",
+  "structure",
+  "bioinformatics",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "Topic :: Scientific/Engineering :: Bio-Informatics",
+  "Topic :: Scientific/Engineering :: Chemistry",
+]
+
+[project.urls]
+Repository = "https://github.com/foldit-org/molex"
+Documentation = "https://foldit-org.github.io/molex/"
+
+[tool.maturin]
+features = ["python", "extension-module"]
+bindings = "pyo3"
+module-name = "molex"
+# Pure-Rust extension (no `python-source`): maturin ships the project-root
+# `molex.pyi` type stubs and adds the `py.typed` marker automatically. The
+# stubs are hand-maintained against the pyo3 surface in `src/python/`.

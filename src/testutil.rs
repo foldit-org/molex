@@ -491,7 +491,7 @@ pub fn recover_b_factors_full_gpu(pdb: &str) -> Option<GpuRecovery> {
             &mut refined_b,
             &occupancies,
             50,
-            |_, _, _| {},
+            |_, _, _| true,
         )
         .expect("refine (full-GPU orbit)");
 

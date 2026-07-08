@@ -100,7 +100,7 @@ fn assert_recovers_prec(
             &mut refined_b,
             &occupancies,
             50,
-            |_, _, _| {},
+            |_, _, _| true,
         )
         .expect("refine");
 

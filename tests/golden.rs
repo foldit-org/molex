@@ -335,9 +335,12 @@ fn uc12_covalent_bonds() {
 
     let bonds = asm.covalent_bonds();
 
-    // Captured 2026-06-24: 604 bonds, entirely from the single protein
-    // entity (the 58-atom water bulk contributes none). Exact.
-    assert_eq!(bonds.len(), 604, "1UBQ Heavy covalent bond count");
+    // 607 bonds, entirely from the single protein entity (the 58-atom water
+    // bulk contributes none). Includes 1UBQ's 3 proline N-CD ring closures,
+    // which the entity bond graph (`build_protein_bonds`) emits alongside the
+    // template bonds; the per-amino-acid `AminoAcid::bonds()` template excludes
+    // them, so this runs +3 over the pre-proline-fix count of 604. Exact.
+    assert_eq!(bonds.len(), 607, "1UBQ Heavy covalent bond count");
 
     // Aggregate equals the sum of per-entity bond slices, and the water
     // bulk contributes exactly zero.

@@ -203,8 +203,8 @@ impl AminoAcid {
 
     /// Render-only ring-closure bonds: edges that close a sidechain ring
     /// back onto the backbone and are therefore intentionally excluded from
-    /// [`Self::bonds`] to keep the heavy-atom graph a tree (see
-    /// [`crate::chemistry::rotamer::distal_atoms`]).
+    /// [`Self::bonds`] to keep the heavy-atom graph a tree (see the private
+    /// `rotamer::distal_atoms` walk).
     ///
     /// Proline returns its N-CD closure; every other residue returns an empty
     /// slice. Consumers that draw the molecule append these to the covalent

@@ -20,7 +20,7 @@ ignored = ["argmin-math"]
 
 [lib]
 name = "molex"
-crate-type = ["rlib", "staticlib"]
+crate-type = ["rlib", "staticlib", "cdylib"]
 
 [dependencies]
 pyo3 = { version = "0.28", optional = true }

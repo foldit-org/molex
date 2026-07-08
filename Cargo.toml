@@ -2,7 +2,7 @@
 
 [package]
 name = "molex"
-version = "0.7.2"
+version = "0.7.3"
 edition = "2021"
 authors = ["Andreas Petrides"]
 description = "Parse, analyze, and transform molecular structure data (PDB, mmCIF, BinaryCIF, MRC)"
@@ -11,13 +11,10 @@ repository = "https://github.com/foldit-org/molex"
 readme = "README.md"
 keywords = ["protein", "molecular", "pdb", "mmcif", "structure"]
 categories = ["science", "parser-implementations", "data-structures"]
-# Regeneration provenance, not needed at runtime: the generated
-# src/chemistry/completion_data.rs is compiled-in const data.
 exclude = ["examples/gen_completion_table.rs", "data/ccd/"]
 
 # argmin-math is a feature-only dependency: its Vec<f64> backend is consumed
-# through argmin's generic trait bounds, never named directly in source, so
-# cargo-machete cannot see the use.
+# through argmin's generic trait bounds
 [package.metadata.cargo-machete]
 ignored = ["argmin-math"]
 
@@ -38,10 +35,9 @@ compact_str = "0.9"
 log = "0.4"
 rustfft = { version = "6", optional = true }
 argmin = { version = "0.11", optional = true }
-# argmin depends on argmin-math with only the `primitives` backend; the
-# `Vec<f64>` trait impls the solver needs live behind argmin-math's `vec`
-# feature, which must be requested explicitly.
-argmin-math = { version = "0.5", optional = true, default-features = false, features = ["vec"] }
+argmin-math = { version = "0.5", optional = true, default-features = false, features = [
+  "vec",
+] }
 serde = { version = "1", features = ["derive"], optional = true }
 specta = { version = "=2.0.0-rc.25", features = ["derive"], optional = true }
 cubecl = { version = "0.10", features = ["wgpu"], optional = true }
@@ -52,25 +48,13 @@ cbindgen = { version = "0.29", optional = true }
 [features]
 default = []
 python = ["dep:pyo3", "dep:numpy"]
-# Only for building the importable Python extension (via maturin). Enabling
-# this tells the linker NOT to link libpython, so it CANNOT be active during
-# `cargo test` (a standalone test binary would fail to resolve Py* symbols).
 extension-module = ["pyo3/extension-module"]
 serde = ["dep:serde"]
 specta = ["dep:specta"]
 c-api = ["dep:cbindgen"]
 xtal = ["dep:rustfft"]
-# B-factor (and future wiggle) minimization via argmin. Orthogonal to `xtal` so
-# the SF-CIF parse + model-density path compiles without pulling a solver; the
-# argmin-math `vec` backend the solver needs is requested at the dep line below.
 minimization = ["dep:argmin", "dep:argmin-math"]
-# Real-space density stencils / FFT on the GPU via CubeCL/wgpu (Metal on macOS).
-# Orthogonal to `xtal` so it can back non-xtal kernels later. Default off;
-# selectable per refinement through `XtalRefinement::stencil_backend`.
 gpu = ["dep:cubecl"]
-# Exposes the shared xtal test/bench fixtures (`crate::testutil`) as `pub`, so
-# the external bench and integration-test crates can build refinements. Implies
-# `xtal`, which owns the types the fixtures construct.
 testutil = ["xtal"]
 
 [dev-dependencies]
@@ -116,12 +100,10 @@ harness = false
 required-features = ["xtal", "testutil"]
 
 [lints.clippy]
-# Broad lint groups (lower priority so individual lints can override)
 all = { level = "deny", priority = -1 }
 pedantic = { level = "deny", priority = -1 }
 nursery = { level = "deny", priority = -1 }
 cargo = { level = "deny", priority = -1 }
-# Restriction lints (opt-in, not covered by the groups above)
 unwrap_used = "deny"
 expect_used = "deny"
 panic = "deny"
@@ -132,10 +114,7 @@ print_stdout = "deny"
 print_stderr = "deny"
 str_to_string = "deny"
 
-# Multiple crate versions: transitive deps — not actionable
 multiple_crate_versions = "allow"
-
-# Pedantic allowances
 missing_const_for_fn = "allow"
 default_trait_access = "allow"
 doc_markdown = "allow"

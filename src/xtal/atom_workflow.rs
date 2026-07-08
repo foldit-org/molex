@@ -195,7 +195,7 @@ fn refine_b_from_atom_table_impl(
     table: &AtomTable,
     mut refinement: XtalRefinement,
     n_macro_cycles: usize,
-    progress: impl FnMut(usize, usize, usize) + 'static,
+    progress: impl FnMut(usize, usize, usize) -> bool + 'static,
 ) -> Option<(Vec<f32>, f64, f64)> {
     let subset = non_hydrogen_atoms(table);
     let inputs = data.refinement_inputs(
@@ -246,7 +246,7 @@ pub fn refine_b_from_atom_table(
     data: &ExperimentalData,
     table: &AtomTable,
     n_macro_cycles: usize,
-    progress: impl FnMut(usize, usize, usize) + 'static,
+    progress: impl FnMut(usize, usize, usize) -> bool + 'static,
 ) -> Option<(Vec<f32>, f64, f64)> {
     refine_b_from_atom_table_impl(
         data,
@@ -270,7 +270,7 @@ pub fn refine_b_from_atom_table_gpu(
     table: &AtomTable,
     n_macro_cycles: usize,
     dev: &WgpuDevice,
-    progress: impl FnMut(usize, usize, usize) + 'static,
+    progress: impl FnMut(usize, usize, usize) -> bool + 'static,
 ) -> Option<(Vec<f32>, f64, f64)> {
     let mut refinement = XtalRefinement::from_experimental_data(data);
     refinement.stencil_backend = StencilBackend::Gpu;

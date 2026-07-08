@@ -837,7 +837,8 @@ fn canonicalize_protein_residues(
     (new_atoms, new_residues)
 }
 
-/// Emit intra-residue bonds (backbone + sidechain/anchor) for one
+/// Emit intra-residue bonds (backbone + sidechain/anchor, plus proline's
+/// N-CD ring-closure edge from [`AminoAcid::ring_closures()`]) for one
 /// protein residue into `bonds`.
 #[allow(
     clippy::cast_possible_truncation,
@@ -892,6 +893,23 @@ fn emit_protein_residue_bonds(
             });
         }
     }
+    for (name_a, name_b) in aa.ring_closures() {
+        if let (Some(&ia), Some(&ib)) =
+            (name_to_idx.get(name_a), name_to_idx.get(name_b))
+        {
+            bonds.push(CovalentBond {
+                a: AtomId {
+                    entity: entity_id,
+                    index: ia as u32,
+                },
+                b: AtomId {
+                    entity: entity_id,
+                    index: ib as u32,
+                },
+                order: BondOrder::Single,
+            });
+        }
+    }
 }
 
 /// Populate a protein entity's covalent bond graph.
@@ -899,6 +917,7 @@ fn emit_protein_residue_bonds(
 /// Emits: universal backbone bonds (N-CA, CA-C, C=O) per residue,
 /// sidechain/anchor bonds from [`AminoAcid::bonds()`] matched by
 /// [`AtomName`] within the residue,
+/// proline's N-CD ring-closure edge from [`AminoAcid::ring_closures()`],
 /// and inter-residue peptide bonds
 /// `C(i)-N(i+1)` between consecutive kept residues that are not
 /// separated by a segment break.

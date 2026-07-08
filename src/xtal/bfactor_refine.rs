@@ -166,7 +166,7 @@ struct ProgressObserver<F> {
 
 impl<F, I> Observe<I> for ProgressObserver<F>
 where
-    F: FnMut(usize, usize, usize),
+    F: FnMut(usize, usize, usize) -> bool,
     I: State,
 {
     #[allow(
@@ -175,7 +175,7 @@ where
                   u64 -> usize casts cannot truncate a value this small"
     )]
     fn observe_iter(&mut self, state: &I, _kv: &KV) -> Result<(), Error> {
-        {
+        let keep_going = {
             let mut cb = self
                 .cb
                 .lock()
@@ -184,9 +184,16 @@ where
                 self.cycle,
                 state.get_iter() as usize + 1,
                 state.get_max_iters() as usize,
-            );
+            )
+        };
+        // The callback returns `false` to request cancellation. Surfacing it
+        // as an observer error halts the inner solver; the caller's
+        // `.run().ok()?` then unwinds the whole refine to `None`.
+        if keep_going {
+            Ok(())
+        } else {
+            Err(Error::msg("b-factor refine cancelled"))
         }
-        Ok(())
     }
 }
 
@@ -217,7 +224,7 @@ impl XtalRefinement {
         b_factors: &mut [f64],
         occupancies: &[f64],
         n_macro_cycles: usize,
-        progress: impl FnMut(usize, usize, usize) + 'static,
+        progress: impl FnMut(usize, usize, usize) -> bool + 'static,
     ) -> Option<(f64, f64)> {
         let progress = std::sync::Arc::new(std::sync::Mutex::new(progress));
         let mut prev_target: Option<f64> = None;
@@ -361,6 +368,7 @@ mod tests {
                         inner_iter,
                         inner_total,
                     ));
+                    true
                 },
             )
             .expect("synthetic refine");

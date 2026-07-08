@@ -339,7 +339,7 @@ pub extern "C" fn molex_experimental_data_refine_b_factors(
         inner,
         &table,
         n_macro_cycles,
-        |_, _, _| {},
+        |_, _, _| true,
     ) else {
         set_last_error(&"B-factor refinement failed");
         return MOLEX_ERR;

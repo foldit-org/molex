@@ -173,7 +173,8 @@ impl AminoAcid {
     /// peptide bonds separately when populating `ProteinEntity` bond
     /// graphs.
     ///
-    /// The proline ring-closure bond CD-N is intentionally omitted.
+    /// The proline ring-closure bond N-CD is intentionally omitted here; it is
+    /// exposed separately via [`Self::ring_closures`] for rendering.
     #[must_use]
     pub const fn bonds(self) -> &'static [(AtomName, AtomName)] {
         match self {
@@ -197,6 +198,23 @@ impl AminoAcid {
             Self::Trp => TRP_BONDS,
             Self::Tyr => TYR_BONDS,
             Self::Val => VAL_BONDS,
+        }
+    }
+
+    /// Render-only ring-closure bonds: edges that close a sidechain ring
+    /// back onto the backbone and are therefore intentionally excluded from
+    /// [`Self::bonds`] to keep the heavy-atom graph a tree (see
+    /// [`crate::chemistry::rotamer::distal_atoms`]).
+    ///
+    /// Proline returns its N-CD closure; every other residue returns an empty
+    /// slice. Consumers that draw the molecule append these to the covalent
+    /// bond list; consumers that reason over connectivity (rotamers,
+    /// distal-atom walks) must NOT use them.
+    #[must_use]
+    pub const fn ring_closures(self) -> &'static [(AtomName, AtomName)] {
+        match self {
+            Self::Pro => PRO_RING_CLOSURE,
+            _ => &[],
         }
     }
 
@@ -392,6 +410,8 @@ const PRO_BONDS: &[(AtomName, AtomName)] = &[
     (an(b"CB"), an(b"CG")),
     (an(b"CG"), an(b"CD")),
 ];
+
+const PRO_RING_CLOSURE: &[(AtomName, AtomName)] = &[(an(b"N"), an(b"CD"))];
 
 const SER_BONDS: &[(AtomName, AtomName)] =
     &[(an(b"CA"), an(b"CB")), (an(b"CB"), an(b"OG"))];
@@ -609,5 +629,19 @@ mod tests {
             let expected = hydrophobic.contains(&aa);
             assert_eq!(aa.is_hydrophobic(), expected, "{aa:?} hydrophobicity");
         }
+    }
+
+    #[test]
+    fn proline_ring_closure_is_render_only() {
+        let n = an(b"N");
+        let cd = an(b"CD");
+        // Ring closure exposed for rendering...
+        assert_eq!(AminoAcid::Pro.ring_closures(), &[(n, cd)]);
+        // ...but absent from the connectivity graph, keeping it a tree.
+        assert!(!AminoAcid::Pro.bonds().contains(&(n, cd)));
+        assert!(!AminoAcid::Pro.bonds().contains(&(cd, n)));
+        // Non-proline residues have no ring closures.
+        assert!(AminoAcid::Ala.ring_closures().is_empty());
+        assert!(AminoAcid::Gly.ring_closures().is_empty());
     }
 }

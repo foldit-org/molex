@@ -172,7 +172,7 @@ impl PyExperimentalData {
             &self.inner,
             atoms.table(),
             n_macro_cycles,
-            |_, _, _| {},
+            |_, _, _| true,
         )
         .ok_or_else(|| value_err("B-factor refinement failed"))?;
 

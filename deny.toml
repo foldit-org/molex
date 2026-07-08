@@ -16,6 +16,9 @@ allow = [
     "Unicode-3.0",
     "CDLA-Permissive-2.0",
     "Zlib",
+    # Boost Software License (OSI-approved, FSF-free); pulled in transitively
+    # by cubecl (gpu feature) via xxhash-rust.
+    "BSL-1.0",
 ]
 confidence-threshold = 0.8
 exceptions = []

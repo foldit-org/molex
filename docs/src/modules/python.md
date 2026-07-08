@@ -136,3 +136,25 @@ name. So annotation-free input (hand-built backbone frames, concatenated
 templates, folding-model outputs) classifies a protein backbone as protein
 rather than ligand. When `entity_ids` is omitted, entity ids are synthesized
 from each atom's `(chain_id, mol_type)` pair in first-appearance order.
+
+## Crystallographic refinement (`PyExperimentalData`, feature = `xtal`)
+
+When molex is built with the `xtal` feature, the Python module exposes
+`PyExperimentalData` for structure-factor-based density synthesis and
+B-factor refinement.
+
+```python
+import molex
+
+exp = molex.PyExperimentalData.from_sf_cif(sf_cif_string)
+exp = molex.PyExperimentalData.from_sf_cif_with_spacegroup(sf_cif_string, 19)
+
+density = exp.compute_density(atom_table)   # PyAtomTable -> density grid
+refined = exp.refine_b_factors(atom_table)  # needs the `minimization` feature
+
+# Metadata getters
+exp.d_min                 # resolution limit (Angstrom)
+exp.space_group_number
+exp.num_reflections
+exp.grid_dims             # (nx, ny, nz)
+```

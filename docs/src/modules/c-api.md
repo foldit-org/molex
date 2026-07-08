@@ -37,6 +37,10 @@ C has no namespace mechanism. C++ consumers wrap the types in
   assembly's structure.
 - **Edits** (`c_api::edit`): the handle-based edit and delta surface that the
   Python `EditList` parallels.
+- **Crystallographic refinement** (`c_api::xtal`, gated on `c-api` + `xtal`):
+  `molex_experimental_data_from_sf_cif` and its `*_with_spacegroup` variant,
+  `molex_experimental_data_compute_density`, and
+  `molex_experimental_data_refine_b_factors`.
 
 ## Error reporting
 

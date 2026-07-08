@@ -9,12 +9,19 @@ Add to your `Cargo.toml`:
 molex = "0.3"
 ```
 
-To enable Python bindings (PyO3 + NumPy + AtomWorks interop):
+To enable Python bindings (PyO3 + NumPy, Biotite-free numpy-column interchange via `PyAtomTable`, with optional AtomWorks-style vocabulary columns):
 
 ```toml
 [dependencies]
 molex = { version = "0.3", features = ["python"] }
 ```
+
+Other optional features:
+
+- `c-api` -- C ABI, `libmolex.a`, and the generated `include/molex.h`
+- `xtal` -- crystallographic refinement pipeline (density, scaling, sigma-A, FFT)
+- `minimization` -- B-factor refinement (argmin), on top of `xtal`
+- `gpu` -- GPU density/refinement backend (cubecl + wgpu), on top of `xtal`
 
 ## As a Python package
 

@@ -9,4 +9,4 @@ src = "src"
 build-dir = "book"
 
 [output.html]
-git-repository-url = "https://github.com/petridecus/molex"
+git-repository-url = "https://github.com/foldit-org/molex"

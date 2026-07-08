@@ -8,11 +8,21 @@ Every structure parser feeds parser-emitted atom rows into the shared `EntityBui
 
 Hand-rolled column-positional scanner over wwPDB v3.3 section 9. Records other than `ATOM`, `HETATM`, `MODEL`, `ENDMDL`, `TER`, and `END` are skipped.
 
-```rust,ignore
-pdb_file_to_entities(path: &Path) -> Result<Vec<MoleculeEntity>, AdapterError>
-pdb_str_to_entities(pdb_str: &str) -> Result<Vec<MoleculeEntity>, AdapterError>
-structure_file_to_entities(path: &Path) -> Result<Vec<MoleculeEntity>, AdapterError>
+The public entry points build an `Assembly` directly (the raw
+`*_to_entities` functions are crate-internal):
 
+```rust,ignore
+Assembly::from_file(path: &Path) -> Result<Assembly, AdapterError>
+Assembly::from_pdb(pdb_str: &str) -> Result<Assembly, AdapterError>
+Assembly::from_pdb_with(pdb_str: &str, level: Completion)
+    -> Result<Assembly, AdapterError>
+```
+
+`Assembly::from_file` auto-detects PDB vs mmCIF by file extension
+(`.pdb`/`.ent` -> PDB, everything else -> mmCIF) and defaults to
+`Completion::Heavy`. Reach the parsed molecules via `assembly.entities()`.
+
+```rust,ignore
 // Per-MODEL entry points (NMR ensembles, multi-state trajectories)
 pdb_str_to_all_models(pdb_str: &str)
     -> Result<Vec<Vec<MoleculeEntity>>, AdapterError>
@@ -25,8 +35,6 @@ entities_to_pdb<E: Borrow<MoleculeEntity>>(entities: &[E])
     -> Result<String, AdapterError>
 ```
 
-`structure_file_to_entities` auto-detects PDB vs mmCIF by file extension (`.pdb`/`.ent` -> PDB, everything else -> mmCIF).
-
 The writers refuse to emit when the assembly exceeds any legacy PDB limit (>99,999 atoms, >62 polymer chains, >9,999 residues per chain), returning `AdapterError::InvalidFormat` so callers can switch to the mmCIF writer.
 
 ## mmCIF (`adapters::cif`)
@@ -34,8 +42,8 @@ The writers refuse to emit when the assembly exceeds any legacy PDB limit (>99,9
 A streaming fast scanner handles the common case directly; a DOM-backed fallback covers structurally awkward files. Both paths emit `AtomRow` into `EntityBuilder`. The DOM types are also re-exported for typed extractors (`CoordinateData`, `ReflectionData`, `UnitCell`).
 
 ```rust,ignore
-mmcif_file_to_entities(path: &Path) -> Result<Vec<MoleculeEntity>, AdapterError>
-mmcif_str_to_entities(cif_str: &str) -> Result<Vec<MoleculeEntity>, AdapterError>
+Assembly::from_mmcif(cif_str: &str) -> Result<Assembly, AdapterError>
+Assembly::from_file(path: &Path)    -> Result<Assembly, AdapterError>  // PDB or mmCIF by extension
 
 // One entity list per pdbx_PDB_model_num
 mmcif_str_to_all_models(cif_str: &str)

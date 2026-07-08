@@ -20,6 +20,7 @@ molex/src/
 ├── bond.rs           Cross-cutting CovalentBond (AtomId endpoints)
 ├── connection.rs     Inter-entity rendering connections (ConnectionType, AtomEnd, AtomLink)
 ├── element.rs        Element enum (symbols, covalent radii, colors)
+├── xtal/             Crystallographic refinement pipeline (feature = "xtal")
 ├── c_api/            C ABI surface (feature = "c-api")
 ├── python/           PyO3 bindings (feature = "python")
 └── lib.rs            Crate root, re-exports
@@ -29,7 +30,7 @@ molex/src/
 
 Entities (`Vec<MoleculeEntity>`) are the primary data model.
 
-**Adapters** parse files into entities. The `*_to_entities` functions are the primary API; the `*_to_all_models` variants return one entity list per MODEL block for NMR ensembles or multi-state trajectories.
+**Adapters** parse files into an `Assembly`. The `Assembly::from_file` / `from_pdb` / `from_mmcif` / `from_bcif` constructors are the primary API; the `*_to_all_models` variants return one entity list per MODEL block for NMR ensembles or multi-state trajectories.
 
 **Analysis** operates on `&[Atom]`, `&[ResidueBackbone]`, or `&[MoleculeEntity]`.
 
@@ -85,6 +86,8 @@ The `entity::surface` module provides volumetric data types:
 
 - **`VoxelGrid`** -- a generic 3D grid (`ndarray::Array3<f32>`) with crystallographic cell metadata. Handles fractional-to-Cartesian coordinate conversion.
 - **`Density`** -- wraps `VoxelGrid` with density-specific metadata. Constructed by the MRC adapter.
+
+The feature-gated `xtal` refinement layer sits above these `VoxelGrid` / `Density` primitives: it synthesizes density from atoms, scales against experimental structure factors, and refines B-factors.
 
 ## Binary format
 

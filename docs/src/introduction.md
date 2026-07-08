@@ -18,12 +18,22 @@
 
 - **`VoxelGrid`** and **`Density`** represent 3D volumetric data (electron density, cryo-EM maps).
 
+- Beyond the pure-Rust core, molex ships a feature-gated crystallographic-refinement subsystem (`xtal`) and C / Python bindings for cross-language consumers.
+
 ## Crate features
 
-| Feature  | Description |
-|----------|-------------|
-| `default` | Core Rust library (no Python) |
-| `python` | PyO3 bindings + AtomWorks interop |
+| Feature | Enables |
+| --- | --- |
+| *(default)* | Pure-Rust core: parsing, entity model, analysis, wire format |
+| `serde` | `Serialize` / `Deserialize` on the core types |
+| `specta` | TypeScript type-export derives |
+| `python` | PyO3 bindings + numpy interchange |
+| `extension-module` | Build the Python extension as a loadable wheel (with maturin) |
+| `c-api` | C ABI, `libmolex.a`, and the generated `include/molex.h` |
+| `xtal` | Crystallographic refinement pipeline (density, scaling, sigma-A, FFT) |
+| `minimization` | B-factor refinement (argmin), on top of `xtal` |
+| `gpu` | GPU density/refinement backend (cubecl + wgpu), on top of `xtal` |
+| `testutil` | Crystallographic test fixtures for external bench/integration crates |
 
 ## API documentation
 

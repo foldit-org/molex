@@ -37,8 +37,8 @@ Analysis, Transform, and Wire are independent; use any combination depending on 
 Every structure adapter returns `Vec<MoleculeEntity>`:
 
 ```rust,ignore
-let entities = pdb_file_to_entities(Path::new("1ubq.pdb"))?;
-let entities = mmcif_file_to_entities(Path::new("3nez.cif"))?;
+let entities = Assembly::from_file(Path::new("1ubq.pdb"))?.into_entities();
+let entities = Assembly::from_file(Path::new("3nez.cif"))?.into_entities(); // mmCIF by extension
 // BinaryCIF parses from bytes (no path-taking entry point):
 let bytes = std::fs::read("1ubq.bcif")?;
 let entities = Assembly::from_bcif(&bytes)?.into_entities();

@@ -10,9 +10,9 @@ alignment, RMSD) live in [`molex::ops::transform`](analysis.md#transforms-opstra
 
 ## Error type
 
-`AdapterError` is the `Err` variant for the adapter entry points
-(`pdb_str_to_entities`, `mmcif_str_to_entities`, and their `_file_*` /
-`_to_all_models` siblings), the PDB writers, and the assembly wire codec.
+`AdapterError` is the `Err` variant for the `Assembly` parse entry points
+(`from_pdb` / `from_mmcif` / `from_bcif` / `from_file` and the `*_to_all_models`
+multi-model functions), the PDB writers, and the assembly wire codec.
 
 ```rust,ignore
 pub enum AdapterError {

@@ -1,35 +1,30 @@
 # Quick Start
 
-## Parse a PDB file into entities
+## Parse a structure file into an assembly
+
+`Assembly::from_file` dispatches on the extension (`.pdb`/`.ent` -> PDB,
+mmCIF otherwise) and defaults to `Completion::Heavy`:
 
 ```rust,ignore
-use molex::adapters::pdb::pdb_file_to_entities;
 use std::path::Path;
+use molex::Assembly;
 
-let entities = pdb_file_to_entities(Path::new("1ubq.pdb"))?;
-for e in &entities {
-    println!("{}: {} atoms", e.label(), e.atom_count());
+let assembly = Assembly::from_file(Path::new("1ubq.pdb"))?;
+for e in assembly.entities() {
+    println!("{:?}: {} atoms", e.molecule_type(), e.atom_count());
 }
-// Output:
-//   Protein A: 660 atoms
-//   Water (58 molecules): 58 atoms
 ```
 
-## Auto-detect format by extension
-
-`structure_file_to_entities` dispatches on `.pdb`/`.ent` vs mmCIF:
-
-```rust,ignore
-use molex::adapters::pdb::structure_file_to_entities;
-use std::path::Path;
-
-let entities = structure_file_to_entities(Path::new("3nez.cif"))?;
-```
+For string input use `Assembly::from_pdb(&str)` / `from_mmcif` / `from_bcif`,
+each with a `_with(..., Completion)` variant. Reach the entities via
+`assembly.entities()` and write back with `assembly.to_pdb()`.
 
 ## Work with entities
 
 ```rust,ignore
 use molex::{MoleculeEntity, MoleculeType};
+
+let entities = assembly.entities();
 
 // Filter to protein chains
 let proteins: Vec<_> = entities.iter()

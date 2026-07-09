@@ -11,7 +11,9 @@ repository = "https://github.com/foldit-org/molex"
 readme = "README.md"
 keywords = ["protein", "molecular", "pdb", "mmcif", "structure"]
 categories = ["science", "parser-implementations", "data-structures"]
-exclude = ["examples/gen_completion_table.rs", "data/ccd/"]
+# tests/data/ is ~190MiB of structure factors; packaging it puts the .crate
+# tarball over the crates.io 10MiB upload cap.
+exclude = ["examples/gen_completion_table.rs", "data/ccd/", "tests/data/"]
 
 # argmin-math is a feature-only dependency: its Vec<f64> backend is consumed
 # through argmin's generic trait bounds

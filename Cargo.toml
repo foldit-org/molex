@@ -2,7 +2,7 @@
 
 [package]
 name = "molex"
-version = "0.7.4"
+version = "0.8.0"
 edition = "2021"
 authors = ["Andreas Petrides"]
 description = "Parse, analyze, and transform molecular structure data (PDB, mmCIF, BinaryCIF, MRC)"

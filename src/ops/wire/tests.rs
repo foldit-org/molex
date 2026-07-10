@@ -29,6 +29,20 @@ fn atom_at(name: &str, element: Element, x: f32) -> Atom {
     }
 }
 
+fn atom_bo(
+    name: &str,
+    element: Element,
+    x: f32,
+    b_factor: f32,
+    occupancy: f32,
+) -> Atom {
+    Atom {
+        occupancy,
+        b_factor,
+        ..atom_at(name, element, x)
+    }
+}
+
 fn res_bytes(s: &str) -> [u8; 3] {
     let mut n = [b' '; 3];
     for (i, b) in s.bytes().take(3).enumerate() {
@@ -86,7 +100,7 @@ fn assembly_bytes_roundtrip_mixed() {
     let entities = vec![protein, ligand, zinc];
     let bytes = assembly_bytes(&entities).unwrap();
     assert_eq!(&bytes[0..8], b"ASSEMBLY");
-    assert_eq!(bytes[8], 1);
+    assert_eq!(bytes[8], 2);
 
     let roundtripped = deserialize_assembly(&bytes).unwrap();
     assert_eq!(roundtripped.entities().len(), entities.len());
@@ -190,10 +204,10 @@ fn assembly_byte_layout() {
     let bytes = assembly_bytes(&entities).unwrap();
 
     // 8 magic + 1 version + 4 count + per-entity header (9 fixed + 2 chain
-    // len + 1 chain byte "A") + 4 atoms * 25 + 4 variant-count u32 (zero, no
-    // variants on this residue).
+    // len + 1 chain byte "A") + 4 atoms * 33 (v2 row) + 4 variant-count u32
+    // (zero, no variants on this residue).
     assert_eq!(&bytes[0..8], b"ASSEMBLY");
-    assert_eq!(bytes[8], 1); // version
+    assert_eq!(bytes[8], 2); // version
     assert_eq!(u32::from_be_bytes(bytes[9..13].try_into().unwrap()), 1);
     assert_eq!(bytes[13], 0); // Protein
     assert_eq!(u32::from_be_bytes(bytes[14..18].try_into().unwrap()), 4);
@@ -201,7 +215,7 @@ fn assembly_byte_layout() {
     // length (1); bytes[24] the chain byte (b'A').
     assert_eq!(u16::from_be_bytes(bytes[22..24].try_into().unwrap()), 1);
     assert_eq!(bytes[24], b'A');
-    assert_eq!(bytes.len(), 8 + 1 + 4 + (9 + 2 + 1) + 4 * 25 + 4);
+    assert_eq!(bytes.len(), 8 + 1 + 4 + (9 + 2 + 1) + 4 * 33 + 4);
 }
 
 #[test]
@@ -391,10 +405,10 @@ fn deserialize_assembly_truncated_atom_data() {
 #[test]
 fn deserialize_assembly_rejects_unknown_version() {
     // A well-formed header with an unsupported version byte must be a clean
-    // error, not a panic or a misparse. Only version 1 is valid.
+    // error, not a panic or a misparse. Versions 1 and 2 are valid.
     let mut bytes = Vec::new();
     bytes.extend_from_slice(b"ASSEMBLY");
-    bytes.push(2); // unsupported version
+    bytes.push(3); // unsupported version
     bytes.extend_from_slice(&0u32.to_be_bytes()); // 0 entities
     assert!(deserialize_assembly(&bytes).is_err());
 }
@@ -564,5 +578,160 @@ fn over_ninety_chains_survive_roundtrip() {
     assert_eq!(rt.entities().len(), 120);
     for (i, e) in rt.entities().iter().enumerate() {
         assert_eq!(e.pdb_chain_id(), Some(format!("CH{i}").as_str()));
+    }
+}
+
+#[test]
+fn assembly_roundtrip_preserves_b_factor_and_occupancy() {
+    let id = EntityIdAllocator::new().allocate();
+    let ligand = MoleculeEntity::SmallMolecule(SmallMoleculeEntity::new(
+        id,
+        MoleculeType::Ligand,
+        vec![
+            atom_bo("C1", Element::C, 10.0, 12.5, 0.75),
+            atom_bo("N2", Element::N, 11.0, 33.25, 0.5),
+            atom_bo("O3", Element::O, 12.0, 7.125, 1.0),
+        ],
+        res_bytes("ATP"),
+        String::from("B"),
+    ));
+
+    let bytes = assembly_bytes(&[ligand]).unwrap();
+    assert_eq!(bytes[8], 2);
+    let rt = deserialize_assembly(&bytes).unwrap();
+    let cols = rt.entities()[0].columns();
+
+    let mut got: Vec<([u8; 4], f32, f32)> = (0..cols.len())
+        .map(|i| (cols.name[i], cols.b_factor[i], cols.occupancy[i]))
+        .collect();
+    got.sort_by_key(|(n, _, _)| *n);
+    assert_eq!(
+        got,
+        vec![
+            (*b"C1  ", 12.5, 0.75),
+            (*b"N2  ", 33.25, 0.5),
+            (*b"O3  ", 7.125, 1.0),
+        ],
+    );
+}
+
+#[test]
+fn assembly_v1_payload_decodes_with_defaults() {
+    // A v1 payload (25-byte rows, no b_factor/occupancy) must still decode;
+    // the two absent fields fall back to their defaults (0.0 / 1.0).
+    use crate::entity::molecule::atom::AtomRef;
+    use crate::ops::wire::serialize::write_atom_row;
+    use crate::ops::wire::RowLayout;
+
+    // The source atom carries non-default values, but the v1 row cannot hold
+    // them, so the decoded atom must show the defaults instead.
+    let atom = atom_bo("ZN", Element::Zn, 5.5, 42.0, 0.5);
+
+    let mut buf = Vec::new();
+    buf.extend_from_slice(b"ASSEMBLY");
+    buf.push(1); // v1
+    buf.extend_from_slice(&1u32.to_be_bytes()); // 1 entity
+    buf.push(4); // Ion molecule-type wire byte
+    buf.extend_from_slice(&1u32.to_be_bytes()); // atom_count = 1
+    buf.extend_from_slice(&0u32.to_be_bytes()); // entity_id = 0
+    buf.extend_from_slice(&1u16.to_be_bytes()); // chain_len = 1
+    buf.push(b'B'); // chain byte
+    write_atom_row(
+        AtomRef::from_atom(&atom),
+        res_bytes("ZN"),
+        1,
+        RowLayout::V1,
+        &mut buf,
+    );
+    buf.extend_from_slice(&0u32.to_be_bytes()); // variants: zero for the entity
+
+    let rt = deserialize_assembly(&buf).unwrap();
+    let cols = rt.entities()[0].columns();
+    assert_eq!(cols.b_factor[0], 0.0);
+    assert_eq!(cols.occupancy[0], 1.0);
+    assert_eq!(cols.position[0].x, 5.5);
+}
+
+#[test]
+fn delta_mutate_residue_preserves_b_factor_and_occupancy() {
+    use crate::ops::edit::AssemblyEdit;
+    use crate::ops::wire::delta::{deserialize_edits, serialize_edits};
+
+    let id = EntityIdAllocator::new().allocate();
+    let new_atoms = vec![
+        atom_bo("N", Element::N, 0.0, 11.0, 0.9),
+        atom_bo("CA", Element::C, 1.0, 22.5, 0.8),
+    ];
+    let edits = vec![AssemblyEdit::MutateResidue {
+        entity: id,
+        residue_idx: 3,
+        new_name: res_bytes("HIS"),
+        new_atoms,
+        new_variants: Vec::new(),
+    }];
+
+    let bytes = serialize_edits(&edits).unwrap();
+    assert_eq!(bytes[8], 2);
+    let rt = deserialize_edits(&bytes).unwrap();
+    let AssemblyEdit::MutateResidue {
+        new_atoms: rt_atoms,
+        ..
+    } = &rt[0]
+    else {
+        unreachable!("unexpected edit: {:?}", rt[0]);
+    };
+    assert_eq!(rt_atoms[0].b_factor, 11.0);
+    assert_eq!(rt_atoms[0].occupancy, 0.9);
+    assert_eq!(rt_atoms[1].b_factor, 22.5);
+    assert_eq!(rt_atoms[1].occupancy, 0.8);
+}
+
+#[test]
+fn delta_v1_payload_decodes_with_defaults() {
+    // A v1 delta MutateResidue payload (25-byte rows) must still decode; the
+    // absent b_factor/occupancy fall back to their defaults (0.0 / 1.0).
+    use crate::entity::molecule::atom::AtomRef;
+    use crate::ops::edit::AssemblyEdit;
+    use crate::ops::wire::delta::{deserialize_edits, DELTA_MAGIC};
+    use crate::ops::wire::serialize::write_atom_row;
+    use crate::ops::wire::RowLayout;
+
+    let atoms = vec![
+        atom_bo("N", Element::N, 0.0, 11.0, 0.9),
+        atom_bo("CA", Element::C, 1.0, 22.5, 0.8),
+    ];
+
+    let mut buf = Vec::new();
+    buf.extend_from_slice(DELTA_MAGIC);
+    buf.push(1); // v1
+    buf.extend_from_slice(&1u32.to_be_bytes()); // 1 edit
+    buf.push(0x03); // TAG_MUTATE_RESIDUE
+    buf.extend_from_slice(&0u32.to_be_bytes()); // entity_id raw
+    buf.extend_from_slice(&3u32.to_be_bytes()); // residue_idx
+    buf.extend_from_slice(&res_bytes("HIS")); // new_name (3 bytes)
+    buf.extend_from_slice(&2u32.to_be_bytes()); // atom_count = 2
+    for a in &atoms {
+        write_atom_row(
+            AtomRef::from_atom(a),
+            res_bytes("HIS"),
+            0,
+            RowLayout::V1,
+            &mut buf,
+        );
+    }
+    buf.extend_from_slice(&0u32.to_be_bytes()); // variant_count = 0
+
+    let rt = deserialize_edits(&buf).unwrap();
+    let AssemblyEdit::MutateResidue {
+        new_atoms: rt_atoms,
+        ..
+    } = &rt[0]
+    else {
+        unreachable!("unexpected edit: {:?}", rt[0]);
+    };
+    assert_eq!(rt_atoms.len(), 2);
+    for a in rt_atoms {
+        assert_eq!(a.b_factor, 0.0);
+        assert_eq!(a.occupancy, 1.0);
     }
 }

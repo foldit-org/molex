@@ -1,7 +1,9 @@
 //! Serialization for the assembly binary wire format.
 
 use super::variants::serialize_variants_section;
-use super::{molecule_type_to_wire, ASSEMBLY_MAGIC, ASSEMBLY_VERSION};
+use super::{
+    molecule_type_to_wire, RowLayout, ASSEMBLY_MAGIC, ASSEMBLY_VERSION,
+};
 use crate::adapters::table::AtomTable;
 use crate::assembly::Assembly;
 use crate::entity::molecule::atom::AtomRef;
@@ -15,9 +17,9 @@ use crate::ops::error::AdapterError;
 /// rebuild via [`Assembly::new`], and `ss_types` comes back empty until a
 /// caller opts in via [`Assembly::recompute_ss`].
 ///
-/// Format (version 1):
+/// Format (version 2):
 /// - 8 bytes: magic `b"ASSEMBLY"`
-/// - 1 byte:  version (currently 1)
+/// - 1 byte:  version (currently 2)
 /// - 4 bytes: entity_count (u32 BE)
 /// - Per entity header (variable):
 ///   - 1 byte: `molecule_type` wire byte
@@ -28,20 +30,23 @@ use crate::ops::error::AdapterError;
 ///   - 2 bytes: `chain_len` (`u16` BE)
 ///   - `chain_len` bytes: the entity's chain id (UTF-8 `label_asym_id`). Empty
 ///     for non-polymer entities.
-/// - Per atom (25 bytes):
+/// - Per atom (33 bytes under v2; 25 under v1, without the final two fields):
 ///   - 12 bytes: x, y, z (`f32` BE x 3)
 ///   - 3 bytes:  `res_name`
 ///   - 4 bytes:  `res_num` (`i32` BE)
 ///   - 4 bytes:  `atom_name`
 ///   - 2 bytes:  element symbol (byte 0, byte 1 or 0)
+///   - 4 bytes:  `b_factor` (`f32` BE)
+///   - 4 bytes:  `occupancy` (`f32` BE)
 /// - Per-entity variants section (after all atoms, in entity order). See the
 ///   `variants` submodule for the inner layout.
 ///
 /// The chain id lives in the per-entity header as a length-prefixed string,
 /// so chain ids are not capped to a single printable byte.
 ///
-/// Occupancy and b_factor are not preserved on the wire; deserialize
-/// resets them to 1.0 and 0.0 respectively.
+/// `b_factor` and `occupancy` are carried per atom under v2. `formal_charge`
+/// and `observed` are still not on the wire; deserialize resets them to 0 and
+/// `true`.
 ///
 /// # Errors
 ///
@@ -71,7 +76,7 @@ pub(crate) fn serialize_entities<E: std::borrow::Borrow<MoleculeEntity>>(
         .filter_map(|e| e.borrow().pdb_chain_id().map(str::len))
         .sum();
     let header_size = 8 + 1 + 4 + entities.len() * 11 + chain_bytes;
-    let atom_size = total_atoms * 25;
+    let atom_size = total_atoms * RowLayout::V2.bytes();
     let mut buffer = Vec::with_capacity(header_size + atom_size);
 
     // Magic + version byte
@@ -99,7 +104,7 @@ pub(crate) fn serialize_entities<E: std::borrow::Borrow<MoleculeEntity>>(
 
     // Atom data per entity, walking residues directly.
     for entity in entities {
-        write_entity_atoms(entity.borrow(), &mut buffer);
+        write_entity_atoms(entity.borrow(), RowLayout::V2, &mut buffer);
     }
 
     // Per-entity variants section. Empty when no residue carries
@@ -125,11 +130,15 @@ fn write_chain_id(chain_id: &str, buffer: &mut Vec<u8>) {
 /// order with synthesized residue numbers for non-polymers; the exact body the
 /// per-entity header's row count ([`AtomTable::flat_atom_count`]) describes.
 /// `formal_charge` and `observed` are not written (the wire carries neither).
-fn write_entity_atoms(entity: &MoleculeEntity, buffer: &mut Vec<u8>) {
+fn write_entity_atoms(
+    entity: &MoleculeEntity,
+    layout: RowLayout,
+    buffer: &mut Vec<u8>,
+) {
     AtomTable::for_each_flat_row(
         std::slice::from_ref(entity),
         |atom, res_name, res_id| {
-            write_atom_row(atom, res_name, res_id, buffer);
+            write_atom_row(atom, res_name, res_id, layout, buffer);
         },
     );
 }
@@ -138,6 +147,7 @@ pub(crate) fn write_atom_row(
     atom: AtomRef<'_>,
     res_name: [u8; 3],
     res_num: i32,
+    layout: RowLayout,
     buffer: &mut Vec<u8>,
 ) {
     buffer.extend_from_slice(&atom.position.x.to_be_bytes());
@@ -150,4 +160,8 @@ pub(crate) fn write_atom_row(
     let sym_bytes = sym.as_bytes();
     buffer.push(sym_bytes.first().copied().unwrap_or(b'X'));
     buffer.push(sym_bytes.get(1).copied().unwrap_or(0));
+    if matches!(layout, RowLayout::V2) {
+        buffer.extend_from_slice(&atom.b_factor.to_be_bytes());
+        buffer.extend_from_slice(&atom.occupancy.to_be_bytes());
+    }
 }

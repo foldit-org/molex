@@ -23,12 +23,12 @@
 /**
  * Wire format version written after [`ASSEMBLY_MAGIC`].
  */
-#define ASSEMBLY_VERSION 1
+#define ASSEMBLY_VERSION 2
 
 /**
  * Wire format version written after [`DELTA_MAGIC`].
  */
-#define DELTA_VERSION 1
+#define DELTA_VERSION 2
 
 /**
  * Default probe radius (Angstroms) for bulk solvent mask.

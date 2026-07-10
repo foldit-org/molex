@@ -1,14 +1,15 @@
 //! Deserialization for the assembly binary wire format.
 //!
 //! Reads the 8-byte magic, then a `u8` version byte. Each entity's chain
-//! id lives in its header and atom rows are 25 bytes. Any version other
-//! than [`ASSEMBLY_VERSION`] is a clean [`AdapterError::InvalidFormat`].
+//! id lives in its header; the atom-row width follows the version (25 bytes
+//! in v1, 33 in v2). Versions 1 and 2 decode; any other version is a clean
+//! [`AdapterError::InvalidFormat`].
 
 use compact_str::CompactString;
 use glam::Vec3;
 
 use super::variants::{deserialize_variants_section, EntityVariants};
-use super::{molecule_type_from_wire, ASSEMBLY_MAGIC, ASSEMBLY_VERSION};
+use super::{molecule_type_from_wire, RowLayout, ASSEMBLY_MAGIC};
 use crate::adapters::table::{empty_entity, AtomTable};
 use crate::element::Element;
 use crate::entity::molecule::atom::Atom;
@@ -17,19 +18,29 @@ use crate::entity::molecule::polymer::Residue;
 use crate::entity::molecule::{MoleculeEntity, MoleculeType};
 use crate::ops::error::AdapterError;
 
-/// Atom-row width: the chain id lives in the entity header, not the row.
-const ATOM_ROW_BYTES: usize = 25;
-
 /// Byte offset where per-entity headers begin: 8-byte magic + 1-byte
 /// version + 4-byte entity count.
 const HEADERS_START: usize = 13;
 
+/// Decode a big-endian `f32` from `cursor[range]`, naming `field` in the
+/// error so a truncated row reports which value failed.
+fn read_row_f32(
+    cursor: &[u8],
+    range: std::ops::Range<usize>,
+    field: &str,
+) -> Result<f32, AdapterError> {
+    Ok(f32::from_be_bytes(cursor[range].try_into().map_err(
+        |_| AdapterError::SerializationError(format!("Invalid {field}")),
+    )?))
+}
+
 /// Decode one wire atom row into its [`Atom`] payload plus the residue keys
-/// (name + number) the partition groups on. `occupancy`/`b_factor` are not on
-/// the wire and reset to their defaults; `formal_charge` and `observed`
-/// likewise reset (the wire carries neither).
+/// (name + number) the partition groups on. `occupancy`/`b_factor` come off
+/// the wire under [`RowLayout::V2`] and reset to their defaults under `V1`;
+/// `formal_charge` and `observed` always reset (the wire carries neither).
 pub(crate) fn read_atom_row(
     cursor: &[u8],
+    layout: RowLayout,
 ) -> Result<(Atom, [u8; 3], i32), AdapterError> {
     let x = f32::from_be_bytes(cursor[0..4].try_into().map_err(|_| {
         AdapterError::SerializationError("Invalid x coordinate".to_owned())
@@ -63,11 +74,19 @@ pub(crate) fn read_atom_row(
         .trim();
     let element = Element::from_symbol(sym_str);
 
+    let (b_factor, occupancy) = match layout {
+        RowLayout::V1 => (0.0, 1.0),
+        RowLayout::V2 => (
+            read_row_f32(cursor, rest_off + 13..rest_off + 17, "b_factor")?,
+            read_row_f32(cursor, rest_off + 17..rest_off + 21, "occupancy")?,
+        ),
+    };
+
     Ok((
         Atom {
             position: Vec3::new(x, y, z),
-            occupancy: 1.0,
-            b_factor: 0.0,
+            occupancy,
+            b_factor,
             element,
             name: atom_name,
             formal_charge: 0,
@@ -84,11 +103,12 @@ pub(crate) fn read_atom_row(
 fn build_entity<'a>(
     mut cursor: &'a [u8],
     header: &EntityHeader,
+    layout: RowLayout,
 ) -> Result<(MoleculeEntity, &'a [u8]), AdapterError> {
     let mut table = AtomTable::with_capacity(header.atom_count);
     let chain = CompactString::new(&header.chain_id);
     for _ in 0..header.atom_count {
-        let (atom, res_name, res_num) = read_atom_row(cursor)?;
+        let (atom, res_name, res_num) = read_atom_row(cursor, layout)?;
         table.push_row(
             &atom,
             header.entity_id_raw,
@@ -97,7 +117,7 @@ fn build_entity<'a>(
             res_num,
             res_name,
         );
-        cursor = &cursor[ATOM_ROW_BYTES..];
+        cursor = &cursor[layout.bytes()..];
     }
 
     // A zero-atom entity yields nothing from the partition; fall back to the
@@ -275,12 +295,12 @@ pub(crate) fn deserialize_assembly_entities(
         ));
     }
 
-    if bytes[8] != ASSEMBLY_VERSION {
-        return Err(AdapterError::InvalidFormat(format!(
+    let layout = RowLayout::from_version(bytes[8]).ok_or_else(|| {
+        AdapterError::InvalidFormat(format!(
             "Unsupported assembly wire version: {}",
             bytes[8],
-        )));
-    }
+        ))
+    })?;
 
     let entity_count =
         u32::from_be_bytes(bytes[9..13].try_into().map_err(|_| {
@@ -304,7 +324,7 @@ pub(crate) fn deserialize_assembly_entities(
     } = parse_entity_headers(bytes, entity_count)?;
 
     let total_atoms: usize = headers.iter().map(|h| h.atom_count).sum();
-    let atoms_end = headers_end + total_atoms * ATOM_ROW_BYTES;
+    let atoms_end = headers_end + total_atoms * layout.bytes();
     if bytes.len() < atoms_end {
         return Err(AdapterError::InvalidFormat(
             "Data too short for atom data".to_owned(),
@@ -315,7 +335,7 @@ pub(crate) fn deserialize_assembly_entities(
     let mut entities = Vec::with_capacity(entity_count);
 
     for header in headers {
-        let (entity, rest) = build_entity(cursor, &header)?;
+        let (entity, rest) = build_entity(cursor, &header, layout)?;
         cursor = rest;
         entities.push(entity);
     }

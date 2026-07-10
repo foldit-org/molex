@@ -3,8 +3,9 @@
 //! The header is a fixed 8-byte magic followed by a `u8` version byte.
 //! The version selects the payload layout; the magic never changes when
 //! the payload does. Each entity's chain id is a length-prefixed string
-//! in the per-entity header (lifting any single-byte chain cap) and atom
-//! rows are 25 bytes.
+//! in the per-entity header (lifting any single-byte chain cap) and the
+//! atom-row width follows the version: 25 bytes in v1, 33 in v2 (which
+//! appends `b_factor` and `occupancy`).
 //!
 //! See `serialize_assembly` for the byte layout.
 
@@ -21,7 +22,37 @@ use crate::ops::error::AdapterError;
 pub const ASSEMBLY_MAGIC: &[u8; 8] = b"ASSEMBLY";
 
 /// Wire format version written after [`ASSEMBLY_MAGIC`].
-pub const ASSEMBLY_VERSION: u8 = 1;
+pub const ASSEMBLY_VERSION: u8 = 2;
+
+/// Atom-row layout selected by a wire version byte. The single source of
+/// truth for row stride, shared by the assembly and delta formats: v1 rows
+/// are 25 bytes; v2 rows append `b_factor` then `occupancy` (`f32` BE, 4
+/// bytes each) for 33.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum RowLayout {
+    V1,
+    V2,
+}
+
+impl RowLayout {
+    /// Row stride in bytes.
+    pub(crate) const fn bytes(self) -> usize {
+        match self {
+            RowLayout::V1 => 25,
+            RowLayout::V2 => 33,
+        }
+    }
+
+    /// Select the row layout for a wire version byte, or `None` when the
+    /// version is unsupported.
+    pub(crate) const fn from_version(version: u8) -> Option<Self> {
+        match version {
+            1 => Some(RowLayout::V1),
+            2 => Some(RowLayout::V2),
+            _ => None,
+        }
+    }
+}
 
 /// Encode a `MoleculeType` to its wire byte.
 pub(crate) fn molecule_type_to_wire(mol_type: MoleculeType) -> u8 {

@@ -14,7 +14,7 @@
 //!
 //! ```text
 //! 8 bytes  magic b"DELTA\0\0\0"
-//! 1 byte   version (currently 1)
+//! 1 byte   version (currently 2)
 //! 4 bytes  edit_count u32 BE
 //! per edit:
 //!   1 byte tag
@@ -28,9 +28,9 @@
 //! - `0x02` SetResidueCoords: u32 entity_id, u32 residue_idx, u32 coord_count,
 //!   12 bytes per coord
 //! - `0x03` MutateResidue: u32 entity_id, u32 residue_idx, 3 bytes new_name,
-//!   u32 atom_count, 25 bytes per atom (same row layout as the assembly
-//!   format), u32 variant_count, per-variant payload (same as the assembly
-//!   variants block)
+//!   u32 atom_count, one atom row per atom (same row layout as the assembly
+//!   format: 33 bytes under v2, 25 under v1), u32 variant_count, per-variant
+//!   payload (same as the assembly variants block)
 //! - `0x04` SetVariants: u32 entity_id, u32 residue_idx, u32 variant_count,
 //!   per-variant payload
 
@@ -40,6 +40,7 @@ use thiserror::Error;
 use super::deserialize::read_atom_row;
 use super::serialize::write_atom_row;
 use super::variants::{read_variant, write_variant};
+use super::RowLayout;
 use crate::chemistry::variant::VariantTag;
 use crate::entity::molecule::atom::AtomRef;
 use crate::entity::molecule::id::EntityIdAllocator;
@@ -51,9 +52,7 @@ use crate::ops::error::AdapterError;
 pub const DELTA_MAGIC: &[u8; 8] = b"DELTA\0\0\0";
 
 /// Wire format version written after [`DELTA_MAGIC`].
-pub const DELTA_VERSION: u8 = 1;
-
-const ATOM_ROW_BYTES: usize = 25;
+pub const DELTA_VERSION: u8 = 2;
 
 /// Byte offset where edits begin: 8-byte magic + 1-byte version + 4-byte
 /// edit count.
@@ -126,11 +125,11 @@ pub fn deserialize_edits(
         ));
     }
     let version = bytes[8];
-    if version != DELTA_VERSION {
-        return Err(AdapterError::InvalidFormat(format!(
+    let layout = RowLayout::from_version(version).ok_or_else(|| {
+        AdapterError::InvalidFormat(format!(
             "Unsupported delta wire version: {version}",
-        )));
-    }
+        ))
+    })?;
     let edit_count =
         u32::from_be_bytes(bytes[9..13].try_into().map_err(|_| {
             AdapterError::InvalidFormat("Invalid edit count".to_owned())
@@ -140,7 +139,7 @@ pub fn deserialize_edits(
     let mut edits = Vec::with_capacity(edit_count);
     let mut alloc = EntityIdAllocator::new();
     for _ in 0..edit_count {
-        let (edit, rest) = read_edit(cursor, &mut alloc)?;
+        let (edit, rest) = read_edit(cursor, &mut alloc, layout)?;
         cursor = rest;
         edits.push(edit);
     }
@@ -204,7 +203,13 @@ fn write_edit(
                 // redundant under MutateResidue (the receiver gets
                 // `new_name` + residue_idx separately), so we fill them
                 // with stable placeholders.
-                write_atom_row(AtomRef::from_atom(atom), *new_name, 0, buffer);
+                write_atom_row(
+                    AtomRef::from_atom(atom),
+                    *new_name,
+                    0,
+                    RowLayout::V2,
+                    buffer,
+                );
             }
             write_variant_list(new_variants, buffer);
         }
@@ -239,6 +244,7 @@ fn write_edit(
 fn read_edit<'b>(
     cursor: &'b [u8],
     alloc: &mut EntityIdAllocator,
+    layout: RowLayout,
 ) -> Result<(AssemblyEdit, &'b [u8]), AdapterError> {
     let (tag, rest) = split_first_u8(cursor)?;
     match tag {
@@ -271,7 +277,7 @@ fn read_edit<'b>(
             let mut new_atoms = Vec::with_capacity(atom_count as usize);
             let mut cur = rest;
             for _ in 0..atom_count {
-                if cur.len() < ATOM_ROW_BYTES {
+                if cur.len() < layout.bytes() {
                     return Err(AdapterError::InvalidFormat(
                         "Truncated atom row in delta MutateResidue".to_owned(),
                     ));
@@ -279,8 +285,8 @@ fn read_edit<'b>(
                 // res_name / res_num are placeholders under MutateResidue
                 // (the receiver gets new_name + residue_idx separately), so
                 // only the atom payload is kept.
-                let (atom, _res_name, _res_num) = read_atom_row(cur)?;
-                cur = &cur[ATOM_ROW_BYTES..];
+                let (atom, _res_name, _res_num) = read_atom_row(cur, layout)?;
+                cur = &cur[layout.bytes()..];
                 new_atoms.push(atom);
             }
             let (new_variants, cur) = read_variant_list(cur)?;

@@ -110,7 +110,8 @@ mod tests {
         let _ = alloc.allocate(); // 0
         let _ = alloc.allocate(); // 1
         let _ = alloc.allocate(); // 2
-                                  // from_raw with a lower value shouldn't regress the counter
+                                  // from_raw with a lower value shouldn't
+                                  // regress the counter
         let id = alloc.from_raw(1);
         assert_eq!(id.raw(), 1);
         assert_eq!(alloc.allocate().raw(), 3);

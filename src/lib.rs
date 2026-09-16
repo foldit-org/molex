@@ -87,6 +87,7 @@ fn molex(_py: Python, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_class::<python::PyExperimentalData>()?;
     // Scalar analysis free functions.
     m.add_function(wrap_pyfunction!(python::rmsd, m)?)?;
+    m.add_function(wrap_pyfunction!(python::gaussian_field, m)?)?;
 
     // Object graph: Assembly -> Entity -> Residue (the default Python
     // navigation surface).

@@ -7,7 +7,7 @@ name = "molex"
 version = "0.8.0"
 description = "Parse, analyze, and transform molecular structure data (PDB, mmCIF, BinaryCIF, MRC)"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [{ name = "Andreas Petrides" }]
 keywords = [

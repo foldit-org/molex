@@ -124,6 +124,7 @@ similar_names = "allow"
 items_after_statements = "allow"
 use_self = "allow"
 redundant_pub_crate = "allow"
+chunks_exact_to_as_chunks = "allow"
 
 [lints.rust]
 missing_docs = "deny"

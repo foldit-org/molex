@@ -1,9 +1,9 @@
 # Type stubs for the `molex` extension module.
 #
 # HAND-MAINTAINED. There is no auto-generation step: when the pyo3 surface in
-# `src/python/` (mod.rs, entity.rs, io.rs, atom_table.rs, views.rs) or the
-# module registration in `src/lib.rs` changes, update this file by hand to
-# match. The
+# `src/python/` (mod.rs, entity.rs, io.rs, atom_table.rs, views.rs,
+# volumetric.rs) or the module registration in `src/lib.rs` changes, update
+# this file by hand to match. The
 # registered surface is the `#[pyclass]` / `#[pymethods]` / `#[pyfunction]`
 # items wired in the `molex` `#[pymodule]` (`src/lib.rs`).
 #
@@ -496,6 +496,30 @@ def rmsd(a: Any, b: Any) -> float:
     `(x, y, z)` tuples. Superposes `a` onto `b` with the Kabsch algorithm and
     returns the scalar RMSD, invariant to any rigid motion of either set. Raises
     `ValueError` if the sets differ in length or have fewer than three points."""
+    ...
+
+def gaussian_field(
+    positions: Any,
+    radii: Any,
+    dims: tuple[int, int, int],
+    origin: tuple[float, float, float],
+    spacing: tuple[float, float, float],
+    *,
+    sigma_scale: float = 0.7,
+    amplitude: float | None = None,
+    quadratic_tail: bool = False,
+) -> Any:
+    """Rasterize atoms as summed Gaussian blobs onto an explicit voxel grid.
+    `positions` is an array-like of shape `(N, 3)` and `radii` an array-like
+    of `N` floats, both in Angstroms; the grid is `dims` voxels from
+    world-space `origin` at per-axis `spacing`. Returns a float32 numpy array
+    of shape `(nx, ny, nz)` in C order. `sigma_scale` sets the Gaussian width
+    as a fraction of each atom's radius, `amplitude` fixes the peak density
+    (`None` uses the atom's radius), and `quadratic_tail` replaces the
+    Gaussian beyond `2 * sigma` with a quadratic reaching zero at
+    `3 * sigma`. Raises `ValueError` for mismatched lengths, nonfinite inputs,
+    a nonpositive radius, width, or spacing, or unrepresentable grid
+    geometry."""
     ...
 
 # ---------------------------------------------------------------------------

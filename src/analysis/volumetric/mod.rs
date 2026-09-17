@@ -20,6 +20,8 @@
 //! - [`crate::analysis::volumetric::compute_gaussian_field`] ->
 //!   [`ScalarVoxelGrid`]: summed Gaussian blobs for smooth molecular surface
 //!   rendering.
+//! - [`crate::analysis::volumetric::compute_gaussian_field_on_grid`] ->
+//!   [`ScalarVoxelGrid`]: the same blobs on a caller-supplied grid spec.
 
 pub mod cavity;
 pub mod gaussian;
@@ -27,7 +29,10 @@ pub mod grid;
 pub mod ses;
 
 pub use cavity::{detect_cavities, DetectedCavity, VoxelBbox};
-pub use gaussian::compute_gaussian_field;
+pub use gaussian::{
+    compute_gaussian_field, compute_gaussian_field_on_grid, GaussianGridError,
+    GaussianOptions,
+};
 use glam::Vec3;
 pub use grid::binary_to_sdf;
 pub use ses::compute_ses_sdf;

@@ -13,6 +13,129 @@ use glam::Vec3;
 
 use super::{GridSpec, ScalarVoxelGrid};
 
+/// Width, amplitude, and optional smooth cutoff for each atom's density.
+#[derive(Debug, Clone, Copy)]
+pub struct GaussianOptions {
+    /// Gaussian standard deviation divided by the atom radius.
+    pub sigma_scale: f32,
+    /// Constant peak density; `None` uses each atom's radius.
+    pub amplitude: Option<f32>,
+    /// Join the Gaussian at `2*sigma` to a quadratic ending at `3*sigma`.
+    pub quadratic_tail: bool,
+}
+
+impl Default for GaussianOptions {
+    fn default() -> Self {
+        Self {
+            sigma_scale: 0.7,
+            amplitude: None,
+            quadratic_tail: false,
+        }
+    }
+}
+
+/// Failure to construct a Gaussian grid.
+#[derive(Debug, thiserror::Error)]
+pub enum GaussianGridError {
+    /// An input is invalid or cannot be represented by the FP32 rasterizer.
+    #[error("{0}")]
+    InvalidInput(&'static str),
+    /// The requested grid cannot be allocated.
+    #[error("cannot allocate Gaussian grid: {0}")]
+    Allocation(#[from] std::collections::TryReserveError),
+}
+
+/// Rasterize atoms onto an explicit grid, in x-major, y, z order.
+///
+/// # Errors
+/// Mismatched or nonfinite inputs, unrepresentable grid geometry, or
+/// allocation failure.
+pub fn compute_gaussian_field_on_grid(
+    positions: &[Vec3],
+    radii: &[f32],
+    spec: GridSpec,
+    options: GaussianOptions,
+) -> Result<ScalarVoxelGrid, GaussianGridError> {
+    use GaussianGridError::InvalidInput;
+
+    if positions.len() != radii.len() {
+        return Err(InvalidInput(
+            "positions and radii must have equal lengths",
+        ));
+    }
+    if !options.sigma_scale.is_finite()
+        || options.sigma_scale <= 0.0
+        || options.amplitude.is_some_and(|a| !a.is_finite())
+    {
+        return Err(InvalidInput(
+            "width must be finite and positive; amplitude must be finite",
+        ));
+    }
+    let count = checked_voxel_count(spec)?;
+    for (&pos, &radius) in positions.iter().zip(radii) {
+        let sigma = radius * options.sigma_scale;
+        let inv_2sigma2 = 1.0 / (2.0 * sigma * sigma);
+        let cutoff = 3.0 * sigma;
+        if !pos.is_finite()
+            || !radius.is_finite()
+            || radius <= 0.0
+            || !sigma.is_finite()
+            || sigma <= 0.0
+            || !inv_2sigma2.is_finite()
+            || inv_2sigma2 <= 0.0
+            || !(cutoff * cutoff).is_finite()
+        {
+            return Err(InvalidInput(
+                "positions must be finite and radii must produce a finite \
+                 positive width and kernel",
+            ));
+        }
+    }
+
+    let mut grid = Vec::new();
+    grid.try_reserve_exact(count)?;
+    grid.resize(count, 0.0);
+    for (&pos, &radius) in positions.iter().zip(radii) {
+        splat_gaussian(&mut grid, &spec, pos, radius, options);
+    }
+    Ok(ScalarVoxelGrid {
+        dims: spec.dims,
+        origin: spec.origin,
+        spacing: spec.spacing,
+        data: grid,
+    })
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn checked_voxel_count(spec: GridSpec) -> Result<usize, GaussianGridError> {
+    use GaussianGridError::InvalidInput;
+
+    let mut count = 1usize;
+    for axis in 0..3 {
+        let dim = spec.dims[axis];
+        let spacing = spec.spacing[axis];
+        let origin = spec.origin[axis];
+        if dim == 0
+            || dim > (1 << 24)
+            || !origin.is_finite()
+            || !spacing.is_finite()
+            || spacing <= 0.0
+        {
+            return Err(InvalidInput(
+                "grid dimensions must be in 1..=2^24; origin and positive \
+                 spacing must be finite",
+            ));
+        }
+        if !((dim - 1) as f32).mul_add(spacing, origin).is_finite() {
+            return Err(InvalidInput("grid endpoint must be finite"));
+        }
+        count = count
+            .checked_mul(dim)
+            .ok_or(InvalidInput("grid voxel count overflows"))?;
+    }
+    Ok(count)
+}
+
 /// Compute the Gaussian molecular surface scalar field.
 ///
 /// - `positions`: atom world-space positions (Angstroms)
@@ -61,7 +184,13 @@ pub fn compute_gaussian_field(
     let mut grid = vec![0.0f32; spec.voxel_count()];
 
     for (i, &pos) in positions.iter().enumerate() {
-        splat_gaussian(&mut grid, &spec, pos, radii[i]);
+        splat_gaussian(
+            &mut grid,
+            &spec,
+            pos,
+            radii[i],
+            GaussianOptions::default(),
+        );
     }
 
     ScalarVoxelGrid {
@@ -89,15 +218,18 @@ fn splat_gaussian(
     spec: &GridSpec,
     pos: Vec3,
     vdw_radius: f32,
+    options: GaussianOptions,
 ) {
     let [nx, ny, nz] = spec.dims;
     let origin = spec.origin;
     let spacing = spec.spacing;
-    let sigma = vdw_radius * 0.7;
+    let sigma = vdw_radius * options.sigma_scale;
     let inv_2sigma2 = 1.0 / (2.0 * sigma * sigma);
     let cutoff = 3.0 * sigma;
     let cutoff2 = cutoff * cutoff;
-    let amplitude = vdw_radius;
+    let amplitude = options.amplitude.unwrap_or(vdw_radius);
+    let join2 = (2.0 * sigma) * (2.0 * sigma);
+    let tail_scale = (-2.0f32).exp();
 
     let gx0 =
         ((pos.x - cutoff - origin[0]) / spacing[0]).floor().max(0.0) as usize;
@@ -123,12 +255,17 @@ fn splat_gaussian(
             for iz in gz0..=gz1 {
                 let dz = (iz as f32).mul_add(spacing[2], origin[2]) - pos.z;
                 let r2 = dz.mul_add(dz, dxy2);
-                if r2 <= cutoff2 {
-                    grid[spec.lin(ix, iy, iz)] = amplitude.mul_add(
-                        (-r2 * inv_2sigma2).exp(),
-                        grid[spec.lin(ix, iy, iz)],
-                    );
+                if r2 > cutoff2 || r2.is_nan() {
+                    continue;
                 }
+                let density = if options.quadratic_tail && r2 > join2 {
+                    let remaining = (3.0 - r2.sqrt() / sigma).max(0.0);
+                    tail_scale * remaining * remaining
+                } else {
+                    (-r2 * inv_2sigma2).exp()
+                };
+                grid[spec.lin(ix, iy, iz)] =
+                    amplitude.mul_add(density, grid[spec.lin(ix, iy, iz)]);
             }
         }
     }
@@ -152,5 +289,40 @@ mod tests {
         // Field should peak somewhere inside the grid.
         let max = g.data.iter().copied().fold(0.0f32, f32::max);
         assert!(max > 0.0, "gaussian field should have positive peak");
+    }
+
+    #[test]
+    fn quadratic_tail_matches_piecewise_formula(
+    ) -> Result<(), GaussianGridError> {
+        for (distance, quadratic_tail, expected) in [
+            (0.0, true, 1.0),
+            (2.0, true, (-2.0f32).exp()),
+            (2.5, true, 0.25 * (-2.0f32).exp()),
+            (2.5, false, (-3.125f32).exp()),
+            (3.0, true, 0.0),
+        ] {
+            let spec = GridSpec {
+                dims: [1; 3],
+                origin: [distance, 0.0, 0.0],
+                spacing: [1.0; 3],
+            };
+            let options = GaussianOptions {
+                sigma_scale: 0.5,
+                amplitude: Some(1.0),
+                quadratic_tail,
+            };
+            let grid = compute_gaussian_field_on_grid(
+                &[Vec3::ZERO],
+                &[2.0],
+                spec,
+                options,
+            )?;
+            assert!(
+                (grid.data[0] - expected).abs() <= 1e-7,
+                "d={distance} tail={quadratic_tail}: {} != {expected}",
+                grid.data[0]
+            );
+        }
+        Ok(())
     }
 }

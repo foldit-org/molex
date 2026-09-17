@@ -40,6 +40,7 @@ mod atom_table;
 mod entity;
 mod io;
 mod views;
+mod volumetric;
 mod walk;
 #[cfg(all(feature = "python", feature = "xtal"))]
 mod xtal;
@@ -54,6 +55,7 @@ pub use self::views::{
     PyMutateResidueView, PySetEntityCoordsView, PySetResidueCoordsView,
     PySetVariantsView,
 };
+pub use self::volumetric::gaussian_field;
 #[cfg(all(feature = "python", feature = "xtal"))]
 pub use self::xtal::PyExperimentalData;
 

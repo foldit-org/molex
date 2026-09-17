@@ -49,7 +49,7 @@ cbindgen = { version = "0.29", optional = true }
 
 [features]
 default = []
-python = ["dep:pyo3", "dep:numpy"]
+python = ["dep:pyo3", "dep:numpy", "pyo3/abi3-py39"]
 extension-module = ["pyo3/extension-module"]
 serde = ["dep:serde"]
 specta = ["dep:specta"]
@@ -124,6 +124,7 @@ similar_names = "allow"
 items_after_statements = "allow"
 use_self = "allow"
 redundant_pub_crate = "allow"
+chunks_exact_to_as_chunks = "allow"
 
 [lints.rust]
 missing_docs = "deny"

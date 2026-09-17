@@ -186,7 +186,7 @@ fn wrong_kind_is_value_error() {
     let err = list.set_entity_coords_at(0).err().expect("must error");
     pyo3::Python::attach(|py| {
         let bound = err.get_type(py).name().expect("read type name");
-        let name = bound.to_str().expect("utf-8 type name");
+        let name = bound.to_cow().expect("utf-8 type name");
         assert!(name.ends_with("ValueError"), "got {name}");
     });
 }
